@@ -21,6 +21,9 @@ type PromptRequest struct {
 func PromptWorkflow(ctx workflow.Context, req PromptRequest) (string, error) {
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: time.Hour,
+		// The activity streams Pi's progress via heartbeats; if it stops
+		// heartbeating for this long, Temporal treats it as failed.
+		HeartbeatTimeout: time.Minute,
 	})
 
 	var result string

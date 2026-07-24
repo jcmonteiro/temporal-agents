@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/worker"
 )
 
@@ -45,6 +47,9 @@ func main() {
 		startSchedule(pos[0], pos[1], save)
 	case "template":
 		templateCmd(os.Args[2:])
+	case "watch":
+		requireArgs(1, "watch <workflow-id>")
+		watchRun(os.Args[2])
 	case "list":
 		listRunning()
 	default:
@@ -64,6 +69,7 @@ COMMANDS
   schedule "<interval|cron>" "<prompt>" [--save <name>]
                                          Schedule a workflow (overlaps are skipped)
   template <subcommand>                  Manage and run saved templates
+  watch <workflow-id>                    Stream a workflow's live Pi progress
   list                                   List running workflows and schedules
 
 EXAMPLES
@@ -95,6 +101,8 @@ func wantsHelp(args []string) bool {
 	return false
 }
 
+// parseSave splits out an optional "--save <name>" / "--save=<name>" flag,
+// returning the remaining positional args and the template name ("" if absent).
 func parseSave(args []string) (positional []string, saveName string) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -300,7 +308,12 @@ func runWorker() {
 	c := dial()
 	defer c.Close()
 
-	w := worker.New(c, TaskQueue, worker.Options{})
+	// Flush heartbeats promptly so `watch` sees near-real-time Pi progress
+	// instead of the SDK's default ~30s throttle.
+	w := worker.New(c, TaskQueue, worker.Options{
+		MaxHeartbeatThrottleInterval:     time.Second,
+		DefaultHeartbeatThrottleInterval: time.Second,
+	})
 	w.RegisterWorkflow(PromptWorkflow)
 	w.RegisterActivity(RunPiAgent)
 
@@ -328,6 +341,7 @@ func startRun(prompt, saveName string) {
 	fmt.Printf("  id:      %s\n", we.GetID())
 	fmt.Printf("  prompt:  %s\n", truncate(prompt, 60))
 	fmt.Printf("  workdir: %s\n", cwd())
+	fmt.Printf("  watch:   temporal-agents watch %s\n", we.GetID())
 	maybeSave(saveName, Template{Name: saveName, Kind: "run", Prompt: prompt})
 }
 
@@ -387,7 +401,7 @@ func listRunning() {
 	type row struct{ kind, id string }
 	var rows []row
 
-	// Running workflows.
+	// Running workflows (excluding the schedule client's internal executions is not needed here).
 	var next []byte
 	for {
 		resp, err := c.ListWorkflow(ctx, &workflowservice.ListWorkflowExecutionsRequest{
@@ -432,6 +446,51 @@ func listRunning() {
 	}
 	tw.Flush()
 	fmt.Printf("\n%d active\n", len(rows))
+}
+
+// watchRun polls the workflow and prints Pi's live progress (from activity
+// heartbeat details), then prints the final result on completion.
+func watchRun(id string) {
+	c := dial()
+	defer c.Close()
+	ctx := context.Background()
+
+	fmt.Printf("Watching %s (Ctrl+C to stop)\n", id)
+	var last string
+	for {
+		desc, err := c.DescribeWorkflowExecution(ctx, id, "")
+		if err != nil {
+			fatalf("Could not describe workflow: %v", err)
+		}
+		for _, pa := range desc.GetPendingActivities() {
+			if d := decodeHeartbeat(pa.GetHeartbeatDetails()); d != "" && d != last {
+				fmt.Printf("  … %s\n", d)
+				last = d
+			}
+		}
+		if desc.GetWorkflowExecutionInfo().GetStatus() != enums.WORKFLOW_EXECUTION_STATUS_RUNNING {
+			break
+		}
+		time.Sleep(time.Second)
+	}
+
+	var out string
+	if err := c.GetWorkflow(ctx, id, "").Get(ctx, &out); err != nil {
+		fatalf("Workflow ended with error: %v", err)
+	}
+	fmt.Println("\n─── result ───")
+	fmt.Println(out)
+}
+
+func decodeHeartbeat(p *commonpb.Payloads) string {
+	if p == nil || len(p.GetPayloads()) == 0 {
+		return ""
+	}
+	var s string
+	if err := converter.GetDefaultDataConverter().FromPayloads(p, &s); err != nil {
+		return ""
+	}
+	return s
 }
 
 func truncate(s string, max int) string {
