@@ -1,6 +1,7 @@
 package codereview
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -59,6 +60,8 @@ func TestPilotWorkflow_HappyPath_AddressesResolvesAndRequestsReview(t *testing.T
 	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return(commits, nil)
 	env.OnActivity(a.ReplyAndResolve, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(a.RequestCopilotReview, mock.Anything, mock.Anything).Return(nil)
+	// The stash taken earlier is restored best-effort at the end.
+	env.OnActivity(a.RestoreStash, mock.Anything, mock.Anything).Return(nil)
 
 	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo"})
 
@@ -68,6 +71,30 @@ func TestPilotWorkflow_HappyPath_AddressesResolvesAndRequestsReview(t *testing.T
 	require.NoError(t, env.GetWorkflowResult(&out))
 	require.Contains(t, out, "PR #42")
 	env.AssertExpectations(t)
+}
+
+func TestPilotWorkflow_StashRestoreFailure_StillSucceeds(t *testing.T) {
+	env := newEnv(t)
+	pr := PullRequest{Number: 42}
+	threads := []ReviewThread{{ID: "t1", Body: "fix"}}
+
+	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
+	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
+		Return(LoadCommentsResult{Threads: threads}, nil)
+	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
+		Return(Checkpoint{HeadSHA: "base", Stashed: true}, nil)
+	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).Return("done", nil)
+	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnActivity(a.ReplyAndResolve, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.RequestCopilotReview, mock.Anything, mock.Anything).Return(nil)
+	// The stash pop conflicts, but the run has already succeeded.
+	env.OnActivity(a.RestoreStash, mock.Anything, mock.Anything).
+		Return(errors.New("CONFLICT: merge conflict"))
+
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
 }
 
 func TestPilotWorkflow_NoNewCommits_FailsAndStopsBeforeReplying(t *testing.T) {

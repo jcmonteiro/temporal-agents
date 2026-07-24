@@ -44,6 +44,12 @@ type ReplyAndResolveRequest struct {
 	CommitSHAs []string
 }
 
+// RestoreStashRequest is the input to RestoreStash.
+type RestoreStashRequest struct {
+	WorkDir string
+	Stashed bool
+}
+
 // DeterminePR finds the current branch and its single open PR, failing when
 // there is no open PR or more than one.
 func (a *Activities) DeterminePR(ctx context.Context, in PilotInput) (PullRequest, error) {
@@ -139,6 +145,21 @@ func (a *Activities) ReplyAndResolve(ctx context.Context, req ReplyAndResolveReq
 func (a *Activities) RequestCopilotReview(ctx context.Context, pr PullRequest) error {
 	if err := a.PRs.RequestCopilotReview(ctx, pr); err != nil {
 		return fmt.Errorf("request Copilot review: %w", err)
+	}
+	return nil
+}
+
+// RestoreStash pops changes stashed by MarkHeadAndStash. It is invoked as a
+// best-effort courtesy on the success path so the developer's pre-existing
+// local changes are put back; callers may ignore its error (e.g. a merge
+// conflict against the agent's new commits leaves the stash intact for manual
+// resolution).
+func (a *Activities) RestoreStash(ctx context.Context, req RestoreStashRequest) error {
+	if !req.Stashed {
+		return nil
+	}
+	if err := a.Git.StashPop(ctx, req.WorkDir); err != nil {
+		return fmt.Errorf("restore stash: %w", err)
 	}
 	return nil
 }

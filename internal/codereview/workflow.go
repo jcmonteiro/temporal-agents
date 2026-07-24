@@ -30,6 +30,12 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (string, error) {
 		HeartbeatTimeout:    time.Minute,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
 	})
+	// Best-effort steps run once: retrying a failed stash pop (e.g. a merge
+	// conflict) would only compound the mess.
+	bestEffort := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+	})
 
 	var a *Activities
 
@@ -70,6 +76,16 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (string, error) {
 
 	if err := workflow.ExecuteActivity(quick, a.RequestCopilotReview, pr).Get(quick, nil); err != nil {
 		return "", err
+	}
+
+	// Put the developer's pre-existing local changes back. This is best-effort:
+	// a conflict against the agent's new commits leaves the stash in place for
+	// manual resolution rather than failing the (already successful) run.
+	if cp.Stashed {
+		restoreReq := RestoreStashRequest{WorkDir: in.WorkDir, Stashed: true}
+		if err := workflow.ExecuteActivity(bestEffort, a.RestoreStash, restoreReq).Get(bestEffort, nil); err != nil {
+			workflow.GetLogger(ctx).Warn("could not restore stashed changes; they remain in the git stash", "error", err)
+		}
 	}
 
 	return fmt.Sprintf("Addressed %d comment(s) on PR #%d with %d commit(s); requested Copilot review.",
