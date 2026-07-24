@@ -456,16 +456,17 @@ func watchRun(id string) {
 	ctx := context.Background()
 
 	fmt.Printf("Watching %s (Ctrl+C to stop)\n", id)
-	var last string
+	// The heartbeat detail is the full transcript so far; print only the lines
+	// that are new since the previous poll so output reads as a live stream.
+	var printed []string
 	for {
 		desc, err := c.DescribeWorkflowExecution(ctx, id, "")
 		if err != nil {
 			fatalf("Could not describe workflow: %v", err)
 		}
 		for _, pa := range desc.GetPendingActivities() {
-			if d := decodeHeartbeat(pa.GetHeartbeatDetails()); d != "" && d != last {
-				fmt.Printf("  … %s\n", d)
-				last = d
+			if d := decodeHeartbeat(pa.GetHeartbeatDetails()); d != "" {
+				printed = printNewLines(printed, strings.Split(d, "\n"))
 			}
 		}
 		if desc.GetWorkflowExecutionInfo().GetStatus() != enums.WORKFLOW_EXECUTION_STATUS_RUNNING {
@@ -480,6 +481,22 @@ func watchRun(id string) {
 	}
 	fmt.Println("\n─── result ───")
 	fmt.Println(out)
+}
+
+// printNewLines prints lines from cur that differ from the already-printed
+// prefix and returns the new printed set. The last line of a transcript may
+// grow in place (streaming assistant text), so it is reprinted when it changes.
+func printNewLines(prev, cur []string) []string {
+	i := 0
+	for i < len(prev) && i < len(cur) && prev[i] == cur[i] {
+		i++
+	}
+	for _, line := range cur[i:] {
+		if line != "" {
+			fmt.Printf("  … %s\n", line)
+		}
+	}
+	return cur
 }
 
 func decodeHeartbeat(p *commonpb.Payloads) string {
