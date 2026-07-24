@@ -284,10 +284,15 @@ MANAGE
 `)
 }
 
+// DefaultHostPort is the Temporal frontend address the CLI connects to. It uses
+// a non-default port so the local dev server doesn't collide with other
+// projects on 7233. Override with the TEMPORAL_ADDRESS env var.
+const DefaultHostPort = "localhost:17233"
+
 func dial() client.Client {
 	hostPort := os.Getenv("TEMPORAL_ADDRESS")
 	if hostPort == "" {
-		hostPort = client.DefaultHostPort
+		hostPort = DefaultHostPort
 	}
 	c, err := client.Dial(client.Options{HostPort: hostPort, Logger: quietLogger{}})
 	if err != nil {

@@ -1,7 +1,8 @@
 services:
   # Local Temporal dev server (file-backed SQLite, no TLS/auth) for the v2 health check
-  # and future workflows. gRPC on 7233, web UI on http://localhost:8233.
-  # Matches the local TEMPORAL_* env in .mise/config.toml (auth disabled).
+  # and future workflows. Non-default host ports to avoid colliding with other
+  # projects: gRPC on 17233, web UI on http://localhost:18233.
+  # The CLI defaults to localhost:17233 (override with TEMPORAL_ADDRESS).
   temporal:
     image: temporalio/temporal:1.7.3@sha256:906f9765cde508333ef191aab908bc724657b5f736cb5ead13921d9a45b33622
     # The image runs as the non-root "temporal" user (uid 1000), but a fresh
@@ -19,8 +20,8 @@ services:
       - "--db-filename"
       - "/data/temporal.db"
     ports:
-      - "7233:7233"
-      - "8233:8233"
+      - "17233:7233"
+      - "18233:8233"
     volumes:
       - temporal-storage:/data
 
