@@ -1,14 +1,4 @@
 services:
-  postgres:
-    image: postgres:16.13-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: temporal_agents
-    ports: [5432:5432]
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-
   # Local Temporal dev server (file-backed SQLite, no TLS/auth) for the v2 health check
   # and future workflows. gRPC on 7233, web UI on http://localhost:8233.
   # Matches the local TEMPORAL_* env in .mise/config.toml (auth disabled).
@@ -30,5 +20,4 @@ services:
       - temporal-data:/data
 
 volumes:
-  postgres-data:
   temporal-data:
