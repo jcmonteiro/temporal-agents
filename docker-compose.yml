@@ -4,6 +4,11 @@ services:
   # Matches the local TEMPORAL_* env in .mise/config.toml (auth disabled).
   temporal:
     image: temporalio/temporal:1.7.3@sha256:906f9765cde508333ef191aab908bc724657b5f736cb5ead13921d9a45b33622
+    # The image runs as the non-root "temporal" user (uid 1000), but a fresh
+    # named volume is created owned by root, so uid 1000 can't create the
+    # SQLite DB in /data (SQLITE_CANTOPEN, shown as "out of memory (14)").
+    # Running as root lets the dev server write to the persistent volume.
+    user: root
     command:
       - "server"
       - "start-dev"
@@ -17,7 +22,7 @@ services:
       - "7233:7233"
       - "8233:8233"
     volumes:
-      - temporal-data:/data
+      - temporal-storage:/data
 
 volumes:
-  temporal-data:
+  temporal-storage:
