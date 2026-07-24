@@ -19,6 +19,8 @@ type Git interface {
 	// CommitsSince returns the SHAs of commits made after sha up to HEAD, in
 	// chronological (oldest-first) order.
 	CommitsSince(ctx context.Context, dir, sha string) ([]string, error)
+	// Push publishes HEAD to the named branch on the origin remote.
+	Push(ctx context.Context, dir, branch string) error
 }
 
 // PullRequests is the port for the GitHub operations the workflow needs.

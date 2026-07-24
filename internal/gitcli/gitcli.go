@@ -66,6 +66,12 @@ func (g Git) CommitsSince(ctx context.Context, dir, sha string) ([]string, error
 	return parseRevList(out), nil
 }
 
+// Push publishes HEAD to the named branch on origin.
+func (g Git) Push(ctx context.Context, dir, branch string) error {
+	_, err := run(ctx, dir, "push", "origin", "HEAD:"+branch)
+	return err
+}
+
 // parseRevList splits `git rev-list` output into SHAs, dropping blank lines.
 func parseRevList(out string) []string {
 	var shas []string

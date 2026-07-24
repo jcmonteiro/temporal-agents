@@ -98,6 +98,13 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, error) {
 		return "", err
 	}
 
+	// Publish the new commits to the PR branch before answering comments and
+	// requesting a fresh review, so both see the pushed work.
+	pushReq := PushBranchRequest{WorkDir: in.WorkDir, Branch: pr.HeadRef}
+	if err := workflow.ExecuteActivity(quick, a.PushBranch, pushReq).Get(quick, nil); err != nil {
+		return "", err
+	}
+
 	replyReq := ReplyAndResolveRequest{PR: pr, Threads: loaded.Threads, CommitSHAs: commits}
 	if err := workflow.ExecuteActivity(quick, a.ReplyAndResolve, replyReq).Get(quick, nil); err != nil {
 		return "", err

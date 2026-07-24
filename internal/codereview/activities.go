@@ -42,6 +42,12 @@ type EnsureHeadAdvancedRequest struct {
 	Checkpoint Checkpoint
 }
 
+// PushBranchRequest is the input to PushBranch.
+type PushBranchRequest struct {
+	WorkDir string
+	Branch  string
+}
+
 // ReplyAndResolveRequest is the input to ReplyAndResolve.
 type ReplyAndResolveRequest struct {
 	PR         PullRequest
@@ -150,6 +156,15 @@ func (a *Activities) EnsureHeadAdvanced(ctx context.Context, req EnsureHeadAdvan
 			"agent produced no new commits", errNoAdvance, nil)
 	}
 	return commits, nil
+}
+
+// PushBranch publishes the agent's new commits to the PR's feature branch so
+// the pull request and any subsequent review see them.
+func (a *Activities) PushBranch(ctx context.Context, req PushBranchRequest) error {
+	if err := a.Git.Push(ctx, req.WorkDir, req.Branch); err != nil {
+		return fmt.Errorf("push to %s: %w", req.Branch, err)
+	}
+	return nil
 }
 
 // ReplyAndResolve posts the concatenated commit hashes as a reply on every

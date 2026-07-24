@@ -84,6 +84,7 @@ func TestPilotWorkflow_HappyPath_AddressesResolvesAndRequestsReview(t *testing.T
 		Return(Checkpoint{HeadSHA: "base", Stashed: true}, nil)
 	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).Return("done", nil)
 	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return(commits, nil)
+	env.OnActivity(a.PushBranch, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(a.ReplyAndResolve, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(a.RequestCopilotReview, mock.Anything, mock.Anything).Return(nil)
 	// The stash taken earlier is restored best-effort at the end.
@@ -112,6 +113,7 @@ func TestPilotWorkflow_StashRestoreFailure_StillSucceeds(t *testing.T) {
 		Return(Checkpoint{HeadSHA: "base", Stashed: true}, nil)
 	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).Return("done", nil)
 	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnActivity(a.PushBranch, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(a.ReplyAndResolve, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(a.RequestCopilotReview, mock.Anything, mock.Anything).Return(nil)
 	// The stash pop conflicts, but the run has already succeeded.
@@ -143,7 +145,8 @@ func TestPilotWorkflow_NoNewCommits_FailsAndStopsBeforeReplying(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.Error(t, env.GetWorkflowError())
-	// The comments must not be answered or resolved when nothing changed.
+	// Nothing changed, so we must not push, answer, or resolve anything.
+	env.AssertNotCalled(t, "PushBranch", mock.Anything, mock.Anything)
 	env.AssertNotCalled(t, "ReplyAndResolve", mock.Anything, mock.Anything)
 	env.AssertNotCalled(t, "RequestCopilotReview", mock.Anything, mock.Anything)
 }
