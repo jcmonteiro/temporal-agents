@@ -68,7 +68,32 @@ func TestPilotWorkflow_WaitsForOngoingReview(t *testing.T) {
 	env.AssertExpectations(t)
 }
 
-func TestPilotWorkflow_Chain_ContinuesAsNew(t *testing.T) {
+func TestPilotWorkflow_Chain_ContinuesAsNewAfterAddressing(t *testing.T) {
+	env := newEnv(t)
+	pr := PullRequest{Number: 7}
+	threads := []ReviewThread{{ID: "t1", Body: "fix"}}
+
+	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
+	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
+		Return(LoadCommentsResult{Threads: threads}, nil)
+	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
+		Return(Checkpoint{HeadSHA: "base"}, nil)
+	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).Return("done", nil)
+	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnActivity(a.PushBranch, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.ReplyAndResolve, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.RequestCopilotReview, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Chain: true})
+
+	require.True(t, env.IsWorkflowCompleted())
+	// Having addressed comments, chaining loops by continuing as new.
+	var canErr *workflow.ContinueAsNewError
+	require.ErrorAs(t, env.GetWorkflowError(), &canErr)
+}
+
+func TestPilotWorkflow_Chain_StopsWhenNoUnresolvedComments(t *testing.T) {
 	env := newEnv(t)
 	pr := PullRequest{Number: 7}
 
@@ -80,9 +105,12 @@ func TestPilotWorkflow_Chain_ContinuesAsNew(t *testing.T) {
 	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Chain: true})
 
 	require.True(t, env.IsWorkflowCompleted())
-	// Chaining loops by continuing as new rather than returning a result.
-	var canErr *workflow.ContinueAsNewError
-	require.ErrorAs(t, env.GetWorkflowError(), &canErr)
+	// Nothing to address ends the chain: it completes normally instead of
+	// continuing as new.
+	require.NoError(t, env.GetWorkflowError())
+	var out string
+	require.NoError(t, env.GetWorkflowResult(&out))
+	require.Contains(t, out, "nothing to do")
 }
 
 func TestPilotWorkflow_HappyPath_AddressesResolvesAndRequestsReview(t *testing.T) {

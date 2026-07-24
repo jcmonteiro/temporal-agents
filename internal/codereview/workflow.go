@@ -21,17 +21,18 @@ const reviewPollInterval = time.Minute
 // PR's unresolved review comments, then replies to and resolves those comments
 // with the resulting commit hashes and requests a fresh Copilot review.
 //
-// When in.Chain is set, a successful pass waits chainDelay and then continues
-// as new, so the loop keeps folding in new feedback indefinitely. This mirrors
-// PromptWorkflow: workflow.Sleep is a durable Temporal timer (not an activity)
-// and continue-as-new restarts the run with a fresh, bounded event history
-// under the same workflow ID.
+// When in.Chain is set, a pass that addressed comments waits chainDelay and
+// then continues as new, so the loop keeps folding in new feedback. A pass that
+// found no unresolved comments ends the chain instead of looping forever. This
+// mirrors PromptWorkflow: workflow.Sleep is a durable Temporal timer (not an
+// activity) and continue-as-new restarts the run with a fresh, bounded event
+// history under the same workflow ID.
 func PilotWorkflow(ctx workflow.Context, in PilotInput) (string, error) {
-	summary, err := runPilotOnce(ctx, in)
+	summary, addressed, err := runPilotOnce(ctx, in)
 	if err != nil {
 		return "", err
 	}
-	if in.Chain {
+	if in.Chain && addressed {
 		if err := workflow.Sleep(ctx, chainDelay); err != nil {
 			return "", err
 		}
@@ -40,9 +41,10 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (string, error) {
 	return summary, nil
 }
 
-// runPilotOnce performs a single pass of the loop and returns a human-readable
-// summary of what it did.
-func runPilotOnce(ctx workflow.Context, in PilotInput) (string, error) {
+// runPilotOnce performs a single pass of the loop. It returns a human-readable
+// summary and whether it actually addressed any comments (false when the PR had
+// no unresolved comments), which the caller uses to decide whether to chain.
+func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, error) {
 	// Quick, deterministic git/GitHub steps. They are idempotent enough to
 	// retry, but should not run forever.
 	quick := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
@@ -66,7 +68,7 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, error) {
 
 	var pr PullRequest
 	if err := workflow.ExecuteActivity(quick, a.DeterminePR, in).Get(quick, &pr); err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	// Wait out any review still in progress so we act on a settled comment set.
@@ -75,55 +77,55 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, error) {
 	for {
 		var ongoing bool
 		if err := workflow.ExecuteActivity(quick, a.CheckOngoingReview, pr).Get(quick, &ongoing); err != nil {
-			return "", err
+			return "", false, err
 		}
 		if !ongoing {
 			break
 		}
 		if err := workflow.Sleep(ctx, reviewPollInterval); err != nil {
-			return "", err
+			return "", false, err
 		}
 	}
 
 	var loaded LoadCommentsResult
 	if err := workflow.ExecuteActivity(quick, a.LoadUnresolvedComments, pr).Get(quick, &loaded); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if len(loaded.Threads) == 0 {
-		return fmt.Sprintf("No unresolved comments on PR #%d; nothing to do.", pr.Number), nil
+		return fmt.Sprintf("No unresolved comments on PR #%d; nothing to do.", pr.Number), false, nil
 	}
 
 	var cp Checkpoint
 	if err := workflow.ExecuteActivity(quick, a.MarkHeadAndStash, in).Get(quick, &cp); err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	var agentResult string
 	agentReq := RunAgentRequest{Input: in, PR: pr, Threads: loaded.Threads}
 	if err := workflow.ExecuteActivity(agentCtx, a.RunAgent, agentReq).Get(agentCtx, &agentResult); err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	var commits []string
 	advReq := EnsureHeadAdvancedRequest{WorkDir: in.WorkDir, Checkpoint: cp}
 	if err := workflow.ExecuteActivity(quick, a.EnsureHeadAdvanced, advReq).Get(quick, &commits); err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	// Publish the new commits to the PR branch before answering comments and
 	// requesting a fresh review, so both see the pushed work.
 	pushReq := PushBranchRequest{WorkDir: in.WorkDir, Branch: pr.HeadRef}
 	if err := workflow.ExecuteActivity(quick, a.PushBranch, pushReq).Get(quick, nil); err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	replyReq := ReplyAndResolveRequest{PR: pr, Threads: loaded.Threads, CommitSHAs: commits}
 	if err := workflow.ExecuteActivity(quick, a.ReplyAndResolve, replyReq).Get(quick, nil); err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	if err := workflow.ExecuteActivity(quick, a.RequestCopilotReview, pr).Get(quick, nil); err != nil {
-		return "", err
+		return "", false, err
 	}
 
 	// Put the developer's pre-existing local changes back. This is best-effort:
@@ -137,5 +139,5 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, error) {
 	}
 
 	return fmt.Sprintf("Addressed %d comment(s) on PR #%d with %d commit(s); requested Copilot review.",
-		len(loaded.Threads), pr.Number, len(commits)), nil
+		len(loaded.Threads), pr.Number, len(commits)), true, nil
 }
