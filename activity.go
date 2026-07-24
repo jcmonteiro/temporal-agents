@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"go.temporal.io/sdk/activity"
@@ -103,8 +104,30 @@ func (p *progress) render() string {
 // progress transcript so far; the final assistant message is returned as the
 // activity result.
 func RunPiAgent(ctx context.Context, req PromptRequest) (string, error) {
-	cmd := exec.CommandContext(ctx, "pi", "-p", req.Prompt, "--mode", "json", "--no-session")
+	// Use the workflow RunID as a stable Pi session id. Pi creates the session
+	// on the first attempt and resumes it on later ones, so if this activity
+	// fails mid-run (e.g. the laptop hibernates and Pi disconnects, tripping the
+	// heartbeat timeout) Temporal's retry reloads the same session and continues
+	// from where Pi left off instead of starting from a fresh context.
+	//
+	// The RunID is constant across activity retries but changes on
+	// continue-as-new, so each chained (--chain) iteration still gets its own
+	// fresh session — matching the previous per-run semantics.
+	sessionID := activity.GetInfo(ctx).WorkflowExecution.RunID
+
+	// Always pass the original prompt, even on a retry. If the earlier attempt
+	// got far enough to record it, Pi resumes with full context and continues;
+	// if it died before the prompt reached the session (or before the session
+	// existed at all), the retry still has the task to work from. A bare
+	// "Continue" would break that second case.
+	cmd := exec.CommandContext(ctx, "pi", "-p", req.Prompt, "--mode", "json", "--session-id", sessionID)
 	cmd.Dir = req.WorkDir
+
+	// When the activity is cancelled (heartbeat timeout or worker shutdown),
+	// interrupt Pi rather than SIGKILLing it immediately, giving it a chance to
+	// flush its session file cleanly before the WaitDelay forces termination.
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGINT) }
+	cmd.WaitDelay = 10 * time.Second
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
