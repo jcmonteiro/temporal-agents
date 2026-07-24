@@ -8,10 +8,6 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-// chainDelay is how long a chained run waits before looping, giving reviewers
-// (and any freshly requested Copilot review) time to post feedback.
-const chainDelay = 3 * time.Minute
-
 // reviewPollInterval is how long the workflow sleeps between checks for a
 // still-pending Copilot review.
 const reviewPollInterval = time.Minute
@@ -21,21 +17,18 @@ const reviewPollInterval = time.Minute
 // PR's unresolved review comments, then replies to and resolves those comments
 // with the resulting commit hashes and requests a fresh Copilot review.
 //
-// When in.Chain is set, a pass that addressed comments waits chainDelay and
-// then continues as new, so the loop keeps folding in new feedback. A pass that
+// When in.Chain is set, a pass that addressed comments continues as new, so the
+// loop keeps folding in new feedback; the next pass's CheckOngoingReview wait
+// absorbs the delay while the freshly requested Copilot review runs. A pass that
 // found no unresolved comments ends the chain instead of looping forever. This
-// mirrors PromptWorkflow: workflow.Sleep is a durable Temporal timer (not an
-// activity) and continue-as-new restarts the run with a fresh, bounded event
-// history under the same workflow ID.
+// mirrors PromptWorkflow: continue-as-new restarts the run with a fresh,
+// bounded event history under the same workflow ID.
 func PilotWorkflow(ctx workflow.Context, in PilotInput) (string, error) {
 	summary, addressed, err := runPilotOnce(ctx, in)
 	if err != nil {
 		return "", err
 	}
 	if in.Chain && addressed {
-		if err := workflow.Sleep(ctx, chainDelay); err != nil {
-			return "", err
-		}
 		return "", workflow.NewContinueAsNewError(ctx, PilotWorkflow, in)
 	}
 	return summary, nil
