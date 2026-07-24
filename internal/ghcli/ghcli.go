@@ -54,11 +54,15 @@ func (h GitHub) baseRepo(ctx context.Context, dir string) (owner, repo string, e
 
 // ReviewOngoing reports whether a Copilot review is still pending on the PR,
 // i.e. Copilot is a requested reviewer that has not yet delivered its review.
+//
+// It reads requested_reviewers from the REST pulls endpoint rather than
+// `gh pr view --json reviewRequests`: the latter is GraphQL-backed and silently
+// omits Bot reviewers such as Copilot, so it would never report an ongoing
+// Copilot review.
 func (h GitHub) ReviewOngoing(ctx context.Context, pr codereview.PullRequest) (bool, error) {
 	out, err := run(ctx,
-		"pr", "view", strconv.Itoa(pr.Number),
-		"--repo", pr.Owner+"/"+pr.Repo,
-		"--json", "reviewRequests",
+		"api", fmt.Sprintf("repos/%s/%s/pulls/%d", pr.Owner, pr.Repo, pr.Number),
+		"--jq", ".requested_reviewers",
 	)
 	if err != nil {
 		return false, err

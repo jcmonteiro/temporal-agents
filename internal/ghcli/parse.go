@@ -70,25 +70,19 @@ func selectOpenPR(prs []codereview.PullRequest, branch string) (codereview.PullR
 }
 
 // parseReviewOngoing reports whether Copilot is among the PR's requested (not
-// yet delivered) reviewers, based on `gh pr view --json reviewRequests`. A
-// requested reviewer may be a user/bot (login) or a team (name/slug); any of
-// them mentioning "copilot" counts.
+// yet delivered) reviewers, given the JSON array from the REST pulls endpoint's
+// requested_reviewers field. Each entry has a login ("Copilot" for the bot when
+// requested); any login mentioning "copilot" counts.
 func parseReviewOngoing(data []byte) (bool, error) {
-	var v struct {
-		ReviewRequests []struct {
-			Login string `json:"login"`
-			Name  string `json:"name"`
-			Slug  string `json:"slug"`
-		} `json:"reviewRequests"`
+	var reviewers []struct {
+		Login string `json:"login"`
 	}
-	if err := json.Unmarshal(data, &v); err != nil {
-		return false, fmt.Errorf("parse review requests: %w", err)
+	if err := json.Unmarshal(data, &reviewers); err != nil {
+		return false, fmt.Errorf("parse requested reviewers: %w", err)
 	}
-	for _, r := range v.ReviewRequests {
-		for _, field := range []string{r.Login, r.Name, r.Slug} {
-			if strings.Contains(strings.ToLower(field), "copilot") {
-				return true, nil
-			}
+	for _, r := range reviewers {
+		if strings.Contains(strings.ToLower(r.Login), "copilot") {
+			return true, nil
 		}
 	}
 	return false, nil

@@ -97,10 +97,10 @@ func TestParseReviewOngoing(t *testing.T) {
 		in   string
 		want bool
 	}{
-		{"copilot bot pending", `{"reviewRequests":[{"login":"copilot-pull-request-reviewer"}]}`, true},
-		{"copilot by display name", `{"reviewRequests":[{"name":"Copilot"}]}`, true},
-		{"only a human reviewer", `{"reviewRequests":[{"login":"octocat"}]}`, false},
-		{"no requests", `{"reviewRequests":[]}`, false},
+		{"copilot bot pending", `[{"login":"Copilot","type":"Bot"}]`, true},
+		{"copilot alongside a human", `[{"login":"octocat","type":"User"},{"login":"Copilot","type":"Bot"}]`, true},
+		{"only a human reviewer", `[{"login":"octocat","type":"User"}]`, false},
+		{"no requests", `[]`, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
