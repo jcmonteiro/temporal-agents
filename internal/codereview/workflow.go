@@ -12,6 +12,10 @@ import (
 // (and any freshly requested Copilot review) time to post feedback.
 const chainDelay = 3 * time.Minute
 
+// reviewPollInterval is how long the workflow sleeps between checks for a
+// still-pending Copilot review.
+const reviewPollInterval = time.Minute
+
 // PilotWorkflow drives the "code pilot" loop: it finds the open PR for the
 // current branch, waits out any in-flight review, has the Pi agent address the
 // PR's unresolved review comments, then replies to and resolves those comments
@@ -45,12 +49,6 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, error) {
 		StartToCloseTimeout: 2 * time.Minute,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
 	})
-	// Waiting for an in-flight review can take a while; the activity heartbeats.
-	waitCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: time.Hour,
-		HeartbeatTimeout:    time.Minute,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
-	})
 	// The agent step is long-running and streams heartbeats.
 	agentCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: time.Hour,
@@ -72,8 +70,19 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, error) {
 	}
 
 	// Wait out any review still in progress so we act on a settled comment set.
-	if err := workflow.ExecuteActivity(waitCtx, a.WaitOngoingReview, pr).Get(waitCtx, nil); err != nil {
-		return "", err
+	// Polling lives in the workflow: a quick check activity plus a durable timer
+	// between attempts, rather than a long-running heartbeating activity.
+	for {
+		var ongoing bool
+		if err := workflow.ExecuteActivity(quick, a.CheckOngoingReview, pr).Get(quick, &ongoing); err != nil {
+			return "", err
+		}
+		if !ongoing {
+			break
+		}
+		if err := workflow.Sleep(ctx, reviewPollInterval); err != nil {
+			return "", err
+		}
 	}
 
 	var loaded LoadCommentsResult

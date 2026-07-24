@@ -3,7 +3,6 @@ package codereview
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
@@ -12,9 +11,6 @@ import (
 // errNoAdvance is the error type returned (non-retryable) when the agent
 // produced no new commits.
 const errNoAdvance = "NoCommits"
-
-// reviewPollInterval is how often WaitOngoingReview re-checks a pending review.
-const reviewPollInterval = 15 * time.Second
 
 // Activities bundles the driven adapters the workflow orchestrates. It is
 // registered with the Temporal worker; each exported method is an activity.
@@ -75,26 +71,16 @@ func (a *Activities) DeterminePR(ctx context.Context, in PilotInput) (PullReques
 	return pr, nil
 }
 
-// WaitOngoingReview blocks until a pending Copilot review has been delivered.
-// When no review is ongoing it returns immediately (skips), so the workflow
-// only ever acts on a settled set of comments. It heartbeats while waiting so
-// the activity can run well beyond the usual quick-step timeout.
-func (a *Activities) WaitOngoingReview(ctx context.Context, pr PullRequest) error {
-	for {
-		ongoing, err := a.PRs.ReviewOngoing(ctx, pr)
-		if err != nil {
-			return fmt.Errorf("check ongoing review: %w", err)
-		}
-		if !ongoing {
-			return nil
-		}
-		activity.RecordHeartbeat(ctx, "waiting for ongoing review to complete")
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(reviewPollInterval):
-		}
+// CheckOngoingReview reports whether a Copilot review is still pending on the
+// PR. It is a single, quick probe; the workflow polls it (sleeping between
+// checks) so the waiting lives in deterministic workflow state rather than in a
+// long-running, heartbeating activity.
+func (a *Activities) CheckOngoingReview(ctx context.Context, pr PullRequest) (bool, error) {
+	ongoing, err := a.PRs.ReviewOngoing(ctx, pr)
+	if err != nil {
+		return false, fmt.Errorf("check ongoing review: %w", err)
 	}
+	return ongoing, nil
 }
 
 // LoadUnresolvedComments returns the PR's unresolved review threads. An empty

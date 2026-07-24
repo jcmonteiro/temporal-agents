@@ -32,7 +32,7 @@ func TestPilotWorkflow_NoUnresolvedComments_ExitsEarly(t *testing.T) {
 	pr := PullRequest{Number: 7}
 
 	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
-	env.OnActivity(a.WaitOngoingReview, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
 	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
 		Return(LoadCommentsResult{Threads: nil}, nil)
 
@@ -48,12 +48,32 @@ func TestPilotWorkflow_NoUnresolvedComments_ExitsEarly(t *testing.T) {
 	env.AssertNotCalled(t, "ReplyAndResolve", mock.Anything, mock.Anything)
 }
 
+func TestPilotWorkflow_WaitsForOngoingReview(t *testing.T) {
+	env := newEnv(t)
+	pr := PullRequest{Number: 7}
+
+	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
+	// First probe: a review is still in flight; the workflow sleeps and checks
+	// again, and the second probe reports it has settled.
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(true, nil).Once()
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil).Once()
+	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
+		Return(LoadCommentsResult{Threads: nil}, nil)
+
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	// Both probes must have run: it did not act on the first, in-flight check.
+	env.AssertExpectations(t)
+}
+
 func TestPilotWorkflow_Chain_ContinuesAsNew(t *testing.T) {
 	env := newEnv(t)
 	pr := PullRequest{Number: 7}
 
 	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
-	env.OnActivity(a.WaitOngoingReview, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
 	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
 		Return(LoadCommentsResult{Threads: nil}, nil)
 
@@ -72,7 +92,7 @@ func TestPilotWorkflow_HappyPath_AddressesResolvesAndRequestsReview(t *testing.T
 	commits := []string{"sha1", "sha2"}
 
 	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
-	env.OnActivity(a.WaitOngoingReview, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
 	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
 		Return(LoadCommentsResult{Threads: threads}, nil)
 	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
@@ -101,7 +121,7 @@ func TestPilotWorkflow_StashRestoreFailure_StillSucceeds(t *testing.T) {
 	threads := []ReviewThread{{ID: "t1", Body: "fix"}}
 
 	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
-	env.OnActivity(a.WaitOngoingReview, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
 	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
 		Return(LoadCommentsResult{Threads: threads}, nil)
 	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
@@ -127,7 +147,7 @@ func TestPilotWorkflow_NoNewCommits_FailsAndStopsBeforeReplying(t *testing.T) {
 	threads := []ReviewThread{{ID: "t1", Body: "fix"}}
 
 	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
-	env.OnActivity(a.WaitOngoingReview, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
 	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
 		Return(LoadCommentsResult{Threads: threads}, nil)
 	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
