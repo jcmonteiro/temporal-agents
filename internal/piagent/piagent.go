@@ -124,13 +124,20 @@ func (Agent) Run(ctx context.Context, prompt, workDir string) (string, error) {
 func Run(ctx context.Context, prompt, workDir string) (string, error) {
 	sessionID := activity.GetInfo(ctx).WorkflowExecution.RunID
 
-	// Always pass the original prompt, even on a retry. If the earlier attempt
+	// Feed the prompt via stdin rather than as a positional argument. Pi's `-p`
+	// is a boolean flag and the prompt is a positional message, so a prompt that
+	// begins with "-" (e.g. a bullet list) is otherwise parsed as an unknown
+	// option and Pi exits with an error. Piped stdin is read as the initial
+	// message before argument parsing matters, so any prompt text is safe.
+	//
+	// Always send the original prompt, even on a retry. If the earlier attempt
 	// got far enough to record it, Pi resumes with full context and continues;
 	// if it died before the prompt reached the session (or before the session
 	// existed at all), the retry still has the task to work from. A bare
 	// "Continue" would break that second case.
-	cmd := exec.CommandContext(ctx, "pi", "-p", prompt, "--mode", "json", "--session-id", sessionID)
+	cmd := exec.CommandContext(ctx, "pi", "-p", "--mode", "json", "--session-id", sessionID)
 	cmd.Dir = workDir
+	cmd.Stdin = strings.NewReader(prompt)
 
 	// When the activity is cancelled (heartbeat timeout or worker shutdown),
 	// interrupt Pi rather than SIGKILLing it immediately, giving it a chance to
