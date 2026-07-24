@@ -13,8 +13,9 @@ import (
 	"temporal-agents/internal/codereview"
 )
 
-// copilotReviewer is the login GitHub uses for the Copilot code-review bot.
-const copilotReviewer = "copilot-pull-request-reviewer[bot]"
+// copilotReviewer is the handle `gh pr edit --add-reviewer` accepts for the
+// Copilot code-review bot.
+const copilotReviewer = "@copilot"
 
 // GitHub runs GitHub operations via the `gh` CLI.
 type GitHub struct{}
@@ -89,10 +90,10 @@ func (h GitHub) Resolve(ctx context.Context, _ codereview.PullRequest, threadID 
 
 // RequestCopilotReview requests a fresh Copilot review on the PR.
 func (h GitHub) RequestCopilotReview(ctx context.Context, pr codereview.PullRequest) error {
-	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/requested_reviewers", pr.Owner, pr.Repo, pr.Number)
 	_, err := run(ctx,
-		"api", "--method", "POST", endpoint,
-		"-f", "reviewers[]="+copilotReviewer,
+		"pr", "edit", strconv.Itoa(pr.Number),
+		"--repo", pr.Owner+"/"+pr.Repo,
+		"--add-reviewer", copilotReviewer,
 	)
 	return err
 }
