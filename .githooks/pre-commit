@@ -1,0 +1,16 @@
+#!/bin/sh
+# Format staged Go files with gofmt before committing.
+set -e
+
+# Collect staged Go files (added/copied/modified), skipping deletions.
+files=$(git diff --cached --name-only --diff-filter=ACM -- '*.go')
+[ -z "$files" ] && exit 0
+
+fmt=$(gofmt -l $files)
+if [ -n "$fmt" ]; then
+	echo "gofmt: formatting the following files:"
+	echo "$fmt" | sed 's/^/  /'
+	gofmt -w $fmt
+	# Re-stage the reformatted files so the commit includes the changes.
+	git add $fmt
+fi
