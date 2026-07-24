@@ -1,0 +1,146 @@
+// Package ghcli is a driven adapter over the `gh` command line. It implements
+// the codereview.PullRequests port.
+package ghcli
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os/exec"
+	"strconv"
+	"strings"
+
+	"temporal-agents/internal/codereview"
+)
+
+// copilotReviewer is the login GitHub uses for the Copilot code-review bot.
+const copilotReviewer = "copilot-pull-request-reviewer[bot]"
+
+// GitHub runs GitHub operations via the `gh` CLI.
+type GitHub struct{}
+
+// New returns a gh CLI adapter.
+func New() GitHub { return GitHub{} }
+
+// FindOpen locates the single open PR whose head is branch, failing when there
+// is no open PR or more than one.
+func (h GitHub) FindOpen(ctx context.Context, dir, branch string) (codereview.PullRequest, error) {
+	owner, repo, err := h.baseRepo(ctx, dir)
+	if err != nil {
+		return codereview.PullRequest{}, err
+	}
+	out, err := runDir(ctx, dir, "pr", "list",
+		"--head", branch, "--state", "open",
+		"--json", "number,url,headRefName")
+	if err != nil {
+		return codereview.PullRequest{}, err
+	}
+	prs, err := parsePRList([]byte(out), owner, repo)
+	if err != nil {
+		return codereview.PullRequest{}, err
+	}
+	return selectOpenPR(prs, branch)
+}
+
+// baseRepo returns the owner and name of the repository in dir.
+func (h GitHub) baseRepo(ctx context.Context, dir string) (owner, repo string, err error) {
+	out, err := runDir(ctx, dir, "repo", "view", "--json", "owner,name")
+	if err != nil {
+		return "", "", err
+	}
+	return parseRepo([]byte(out))
+}
+
+// UnresolvedThreads returns the PR's unresolved review threads.
+func (h GitHub) UnresolvedThreads(ctx context.Context, pr codereview.PullRequest) ([]codereview.ReviewThread, error) {
+	out, err := run(ctx,
+		"api", "graphql",
+		"-f", "query="+unresolvedThreadsQuery,
+		"-F", "owner="+pr.Owner,
+		"-F", "repo="+pr.Repo,
+		"-F", "number="+strconv.Itoa(pr.Number),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return parseReviewThreads([]byte(out))
+}
+
+// Reply posts body as a reply on the given review thread.
+func (h GitHub) Reply(ctx context.Context, _ codereview.PullRequest, threadID, body string) error {
+	_, err := run(ctx,
+		"api", "graphql",
+		"-f", "query="+replyMutation,
+		"-F", "threadId="+threadID,
+		"-F", "body="+body,
+	)
+	return err
+}
+
+// Resolve marks the given review thread as resolved.
+func (h GitHub) Resolve(ctx context.Context, _ codereview.PullRequest, threadID string) error {
+	_, err := run(ctx,
+		"api", "graphql",
+		"-f", "query="+resolveMutation,
+		"-F", "threadId="+threadID,
+	)
+	return err
+}
+
+// RequestCopilotReview requests a fresh Copilot review on the PR.
+func (h GitHub) RequestCopilotReview(ctx context.Context, pr codereview.PullRequest) error {
+	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/requested_reviewers", pr.Owner, pr.Repo, pr.Number)
+	_, err := run(ctx,
+		"api", "--method", "POST", endpoint,
+		"-f", "reviewers[]="+copilotReviewer,
+	)
+	return err
+}
+
+const unresolvedThreadsQuery = `query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    pullRequest(number:$number){
+      reviewThreads(first:100){
+        nodes{
+          id
+          isResolved
+          path
+          line
+          comments(first:100){ nodes{ body author{ login } } }
+        }
+      }
+    }
+  }
+}`
+
+const replyMutation = `mutation($threadId:ID!,$body:String!){
+  addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$threadId,body:$body}){
+    comment{ id }
+  }
+}`
+
+const resolveMutation = `mutation($threadId:ID!){
+  resolveReviewThread(input:{threadId:$threadId}){
+    thread{ isResolved }
+  }
+}`
+
+// run executes `gh <args...>` and returns stdout, wrapping failures with stderr.
+func run(ctx context.Context, args ...string) (string, error) {
+	return runDir(ctx, "", args...)
+}
+
+// runDir executes `gh <args...>` in dir (or the current directory when empty).
+func runDir(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "gh", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("gh %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return stdout.String(), nil
+}

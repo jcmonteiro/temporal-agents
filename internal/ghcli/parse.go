@@ -1,0 +1,125 @@
+package ghcli
+
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
+
+	"temporal-agents/internal/codereview"
+)
+
+// parseRepo extracts owner and name from `gh repo view --json owner,name`.
+func parseRepo(data []byte) (owner, repo string, err error) {
+	var v struct {
+		Owner struct {
+			Login string `json:"login"`
+		} `json:"owner"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return "", "", fmt.Errorf("parse repo: %w", err)
+	}
+	if v.Owner.Login == "" || v.Name == "" {
+		return "", "", fmt.Errorf("parse repo: missing owner or name in %q", strings.TrimSpace(string(data)))
+	}
+	return v.Owner.Login, v.Name, nil
+}
+
+// parsePRList decodes `gh pr list --json number,url,headRefName` into domain PRs,
+// attaching the base repo owner/name (which reply/resolve/review operate on).
+func parsePRList(data []byte, owner, repo string) ([]codereview.PullRequest, error) {
+	var raw []struct {
+		Number      int    `json:"number"`
+		URL         string `json:"url"`
+		HeadRefName string `json:"headRefName"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("parse PR list: %w", err)
+	}
+	prs := make([]codereview.PullRequest, 0, len(raw))
+	for _, r := range raw {
+		prs = append(prs, codereview.PullRequest{
+			Number:  r.Number,
+			URL:     r.URL,
+			Owner:   owner,
+			Repo:    repo,
+			HeadRef: r.HeadRefName,
+		})
+	}
+	return prs, nil
+}
+
+// selectOpenPR enforces exactly one open PR for the branch.
+func selectOpenPR(prs []codereview.PullRequest, branch string) (codereview.PullRequest, error) {
+	switch len(prs) {
+	case 0:
+		return codereview.PullRequest{}, fmt.Errorf("no open pull request found for branch %q", branch)
+	case 1:
+		return prs[0], nil
+	default:
+		nums := make([]string, len(prs))
+		for i, p := range prs {
+			nums[i] = "#" + strconv.Itoa(p.Number)
+		}
+		return codereview.PullRequest{}, fmt.Errorf("found %d open pull requests for branch %q (%s); expected exactly one",
+			len(prs), branch, strings.Join(nums, ", "))
+	}
+}
+
+// parseReviewThreads decodes the reviewThreads GraphQL response, keeping only
+// unresolved threads and combining each thread's comments into a single body.
+func parseReviewThreads(data []byte) ([]codereview.ReviewThread, error) {
+	var resp struct {
+		Data struct {
+			Repository struct {
+				PullRequest struct {
+					ReviewThreads struct {
+						Nodes []struct {
+							ID         string `json:"id"`
+							IsResolved bool   `json:"isResolved"`
+							Path       string `json:"path"`
+							Line       int    `json:"line"`
+							Comments   struct {
+								Nodes []struct {
+									Body   string `json:"body"`
+									Author struct {
+										Login string `json:"login"`
+									} `json:"author"`
+								} `json:"nodes"`
+							} `json:"comments"`
+						} `json:"nodes"`
+					} `json:"reviewThreads"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("parse review threads: %w", err)
+	}
+
+	var threads []codereview.ReviewThread
+	for _, n := range resp.Data.Repository.PullRequest.ReviewThreads.Nodes {
+		if n.IsResolved {
+			continue
+		}
+		author := ""
+		var bodies []string
+		for _, c := range n.Comments.Nodes {
+			if author == "" {
+				author = c.Author.Login
+			}
+			if b := strings.TrimSpace(c.Body); b != "" {
+				bodies = append(bodies, b)
+			}
+		}
+		threads = append(threads, codereview.ReviewThread{
+			ID:     n.ID,
+			Path:   n.Path,
+			Line:   n.Line,
+			Author: author,
+			Body:   strings.Join(bodies, "\n\n"),
+		})
+	}
+	return threads, nil
+}

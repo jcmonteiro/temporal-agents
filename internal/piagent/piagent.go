@@ -103,6 +103,15 @@ func (p *progress) render() string {
 	return strings.Join(lines, "\n")
 }
 
+// Agent adapts Run to an interface (e.g. codereview.Agent) so it can be
+// injected into workflows that need a coding agent.
+type Agent struct{}
+
+// Run runs the Pi agent for prompt in workDir. See the package-level Run.
+func (Agent) Run(ctx context.Context, prompt, workDir string) (string, error) {
+	return Run(ctx, prompt, workDir)
+}
+
 // Run runs the Pi agent for prompt in workDir, streaming Pi's JSON events as
 // Temporal heartbeat details. Each heartbeat carries the full progress
 // transcript so far; the final assistant message is returned as the result.
