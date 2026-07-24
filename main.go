@@ -15,6 +15,7 @@ import (
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/contrib/sysinfo"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/worker"
 )
@@ -325,9 +326,15 @@ func runWorker() {
 
 	// Flush heartbeats promptly so `watch` sees near-real-time Pi progress
 	// instead of the SDK's default ~30s throttle.
+	//
+	// SysInfoProvider surfaces CPU/memory usage in the worker heartbeats the SDK
+	// sends to Temporal, which populates the Worker Health / host resource
+	// reporting view in the Temporal UI. Without it, heartbeats report 0 for
+	// resource usage and the UI flags a missing dependency.
 	w := worker.New(c, TaskQueue, worker.Options{
 		MaxHeartbeatThrottleInterval:     time.Second,
 		DefaultHeartbeatThrottleInterval: time.Second,
+		SysInfoProvider:                  sysinfo.SysInfoProvider(),
 	})
 	w.RegisterWorkflow(PromptWorkflow)
 	w.RegisterActivity(RunPiAgent)
