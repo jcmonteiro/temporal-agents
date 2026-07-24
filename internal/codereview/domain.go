@@ -79,7 +79,8 @@ type Checkpoint struct {
 // intentionally not surfaced in the CLI help.
 const DefaultPrompt = `- For each comment below, read the referenced code for context, then fix it. Read the code and relevant in-repo documentation to decide on the solution.
 - Confirm lint/typecheck/build (and synth, if infra) pass first.
-- Commit all the fixes.`
+- Commit all the fixes.
+- Summarize your work once you are done explaining WHAT changed (not HOW)`
 
 // BuildPrompt combines the base prompt (default, appended, or replaced) with
 // the PR description (as context) and a formatted rendering of the unresolved
