@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -28,7 +29,14 @@ func main() {
 		requireArgs(1, `run "<prompt>"`)
 		startRun(os.Args[2])
 	case "schedule":
-		requireArgs(2, `schedule "<interval|cron>" "<prompt>"`)
+		if wantsHelp(os.Args[2:]) {
+			scheduleHelp(os.Stdout)
+			return
+		}
+		if len(os.Args) < 4 {
+			scheduleHelp(os.Stderr)
+			os.Exit(2)
+		}
 		startSchedule(os.Args[2], os.Args[3])
 	case "list":
 		listRunning()
@@ -54,6 +62,8 @@ EXAMPLES
   temporal-agents run "summarize the README"
   temporal-agents schedule "1h" "check for new issues"
   temporal-agents schedule "0 9 * * *" "post the daily digest"
+
+See "temporal-agents schedule --help" for how to configure the schedule.
 `)
 	os.Exit(2)
 }
@@ -63,6 +73,59 @@ func requireArgs(n int, form string) {
 		fmt.Fprintf(os.Stderr, "usage: temporal-agents %s\n", form)
 		os.Exit(2)
 	}
+}
+
+func wantsHelp(args []string) bool {
+	for _, a := range args {
+		if a == "-h" || a == "--help" || a == "help" {
+			return true
+		}
+	}
+	return false
+}
+
+func scheduleHelp(w io.Writer) {
+	fmt.Fprint(w, `temporal-agents schedule — run a workflow on a recurring schedule
+
+USAGE
+  temporal-agents schedule "<interval|cron>" "<prompt>"
+
+The first argument decides how often the workflow runs. It is read in two ways:
+
+  1. INTERVAL — a Go duration (any string time.ParseDuration accepts).
+     Runs repeatedly, spaced by that duration.
+
+       30s      every 30 seconds
+       5m       every 5 minutes
+       1h       every hour
+       1h30m    every 90 minutes
+       24h      every day
+
+  2. CRON — a standard 5-field cron expression (used when the value is
+     not a valid duration). Fields: minute hour day-of-month month day-of-week.
+
+       "* * * * *"       every minute
+       "0 * * * *"       at the top of every hour
+       "0 9 * * *"       every day at 09:00
+       "0 9 * * 1-5"     weekdays at 09:00
+       "*/15 * * * *"    every 15 minutes
+       "0 0 1 * *"       midnight on the 1st of each month
+
+     Cron runs in UTC by default. Prefix a timezone with CRON_TZ to change it:
+       "CRON_TZ=Europe/Copenhagen 0 9 * * *"
+
+OVERLAP
+  If a run is still going when the next one is due, the next run is SKIPPED
+  (never queued or run concurrently).
+
+EXAMPLES
+  temporal-agents schedule "1h" "check for new GitHub issues and summarize them"
+  temporal-agents schedule "0 9 * * 1-5" "post the daily standup digest"
+  temporal-agents schedule "*/15 * * * *" "poll the queue and report anomalies"
+
+MANAGE
+  temporal-agents list        show active schedules and running workflows
+`)
 }
 
 func dial() client.Client {
