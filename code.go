@@ -28,8 +28,8 @@ func codeCmd(args []string) {
 			pilotHelp(os.Stdout)
 			return
 		}
-		mode, text := parsePilotFlags(args[1:])
-		startPilot(mode, text)
+		mode, text, chain := parsePilotFlags(args[1:])
+		startPilot(mode, text, chain)
 	default:
 		fatalf("unknown code subcommand %q (try: pilot)", args[0])
 	}
@@ -38,9 +38,7 @@ func codeCmd(args []string) {
 // parsePilotFlags reads the optional, mutually exclusive --append/--replace
 // flags (each in "--flag value" or "--flag=value" form) and returns the prompt
 // mode plus its text.
-func parsePilotFlags(args []string) (codereview.PromptMode, string) {
-	var mode codereview.PromptMode
-	var text string
+func parsePilotFlags(args []string) (mode codereview.PromptMode, text string, chain bool) {
 	set := func(m codereview.PromptMode, v string) {
 		if mode != codereview.PromptDefault {
 			fatalf("--append and --replace are mutually exclusive")
@@ -54,6 +52,8 @@ func parsePilotFlags(args []string) (codereview.PromptMode, string) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
+		case a == "--chain":
+			chain = true
 		case a == "--append", a == "--replace":
 			if i+1 >= len(args) {
 				fatalf("%s requires a prompt", a)
@@ -68,11 +68,11 @@ func parsePilotFlags(args []string) (codereview.PromptMode, string) {
 			fatalf("unexpected argument %q", a)
 		}
 	}
-	return mode, text
+	return mode, text, chain
 }
 
 // startPilot launches the PilotWorkflow for the current repository.
-func startPilot(mode codereview.PromptMode, text string) {
+func startPilot(mode codereview.PromptMode, text string, chain bool) {
 	c := dial()
 	defer c.Close()
 
@@ -84,6 +84,7 @@ func startPilot(mode codereview.PromptMode, text string) {
 		WorkDir:    cwd(),
 		PromptMode: mode,
 		PromptText: text,
+		Chain:      chain,
 	})
 	if err != nil {
 		fatalf("Could not start workflow: %v", err)
@@ -94,6 +95,9 @@ func startPilot(mode codereview.PromptMode, text string) {
 	fmt.Printf("  workdir: %s\n", cwd())
 	if mode != codereview.PromptDefault {
 		fmt.Printf("  prompt:  %s (%s)\n", mode, truncate(text, 50))
+	}
+	if chain {
+		fmt.Printf("  chain:   on (spawns a delayed child run after each success)\n")
 	}
 	fmt.Printf("  watch:   temporal-agents watch %s\n", we.GetID())
 }
@@ -128,13 +132,16 @@ USAGE
 FLAGS
   --append <prompt>   Append extra instructions to the default prompt
   --replace <prompt>  Replace the default prompt entirely
+  --chain             After a successful pass, spawn a child run that starts
+                      3 minutes later, looping to fold in new feedback
 
-The two flags are mutually exclusive. The unresolved comments are always
-appended to whichever prompt is used.
+The --append and --replace flags are mutually exclusive. The unresolved
+comments are always appended to whichever prompt is used.
 
 EXAMPLES
   temporal-agents code pilot
   temporal-agents code pilot --append "prefer table-driven tests"
   temporal-agents code pilot --replace "only fix the comments about naming"
+  temporal-agents code pilot --chain
 `)
 }

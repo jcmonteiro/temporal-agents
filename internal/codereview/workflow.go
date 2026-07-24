@@ -4,24 +4,48 @@ import (
 	"fmt"
 	"time"
 
+	enums "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
+// chainDelay is how long a chained run waits before its child begins, giving
+// reviewers (and any freshly requested Copilot review) time to post feedback.
+const chainDelay = 3 * time.Minute
+
 // PilotWorkflow drives the "code pilot" loop: it finds the open PR for the
-// current branch, has the Pi agent address the PR's unresolved review comments,
-// then replies to and resolves those comments with the resulting commit hashes
-// and requests a fresh Copilot review.
+// current branch, waits out any in-flight review, has the Pi agent address the
+// PR's unresolved review comments, then replies to and resolves those comments
+// with the resulting commit hashes and requests a fresh Copilot review.
 //
-// The activities are executed in the fixed order described by the feature spec.
-// When there are no unresolved comments the workflow returns early with a
-// success message. When the agent produces no new commits the EnsureHeadAdvanced
-// activity restores any stash and fails non-retryably.
+// When in.Chain is set, a successful pass spawns a child run that starts after
+// chainDelay, so the loop keeps folding in new feedback indefinitely.
 func PilotWorkflow(ctx workflow.Context, in PilotInput) (string, error) {
+	summary, err := runPilotOnce(ctx, in)
+	if err != nil {
+		return "", err
+	}
+	if in.Chain {
+		if err := spawnDelayedChild(ctx, in); err != nil {
+			return "", err
+		}
+	}
+	return summary, nil
+}
+
+// runPilotOnce performs a single pass of the loop and returns a human-readable
+// summary of what it did.
+func runPilotOnce(ctx workflow.Context, in PilotInput) (string, error) {
 	// Quick, deterministic git/GitHub steps. They are idempotent enough to
 	// retry, but should not run forever.
 	quick := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 2 * time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
+	})
+	// Waiting for an in-flight review can take a while; the activity heartbeats.
+	waitCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: time.Hour,
+		HeartbeatTimeout:    time.Minute,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
 	})
 	// The agent step is long-running and streams heartbeats.
@@ -41,6 +65,11 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (string, error) {
 
 	var pr PullRequest
 	if err := workflow.ExecuteActivity(quick, a.DeterminePR, in).Get(quick, &pr); err != nil {
+		return "", err
+	}
+
+	// Wait out any review still in progress so we act on a settled comment set.
+	if err := workflow.ExecuteActivity(waitCtx, a.WaitOngoingReview, pr).Get(waitCtx, nil); err != nil {
 		return "", err
 	}
 
@@ -90,4 +119,22 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (string, error) {
 
 	return fmt.Sprintf("Addressed %d comment(s) on PR #%d with %d commit(s); requested Copilot review.",
 		len(loaded.Threads), pr.Number, len(commits)), nil
+}
+
+// spawnDelayedChild waits chainDelay, then starts a detached child PilotWorkflow
+// with the same input. The child is abandoned (ParentClosePolicy) so it outlives
+// this run and continues the chain on its own.
+func spawnDelayedChild(ctx workflow.Context, in PilotInput) error {
+	if err := workflow.Sleep(ctx, chainDelay); err != nil {
+		return err
+	}
+	cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON,
+	})
+	child := workflow.ExecuteChildWorkflow(cctx, PilotWorkflow, in)
+	// Ensure the child has actually started before this run completes; with an
+	// abandon policy the parent otherwise finishes without guaranteeing the
+	// child was scheduled.
+	var childWE workflow.Execution
+	return child.GetChildWorkflowExecution().Get(ctx, &childWE)
 }

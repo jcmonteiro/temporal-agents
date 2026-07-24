@@ -80,3 +80,27 @@ func TestParseReviewThreads_KeepsUnresolvedAndCombinesBodies(t *testing.T) {
 		t.Fatalf("location not parsed: %+v", th)
 	}
 }
+
+func TestParseReviewOngoing(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"copilot bot pending", `{"reviewRequests":[{"login":"copilot-pull-request-reviewer"}]}`, true},
+		{"copilot by display name", `{"reviewRequests":[{"name":"Copilot"}]}`, true},
+		{"only a human reviewer", `{"reviewRequests":[{"login":"octocat"}]}`, false},
+		{"no requests", `{"reviewRequests":[]}`, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseReviewOngoing([]byte(tc.in))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("parseReviewOngoing(%s) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}

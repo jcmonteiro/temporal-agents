@@ -36,6 +36,9 @@ type PilotInput struct {
 	PromptMode PromptMode
 	// PromptText is the caller-supplied prompt text for append/replace modes.
 	PromptText string
+	// Chain, when true, spawns a delayed child run after a successful pass so
+	// the loop keeps addressing new review feedback indefinitely.
+	Chain bool
 }
 
 // PullRequest identifies the open PR the loop operates on.

@@ -67,6 +67,31 @@ func selectOpenPR(prs []codereview.PullRequest, branch string) (codereview.PullR
 	}
 }
 
+// parseReviewOngoing reports whether Copilot is among the PR's requested (not
+// yet delivered) reviewers, based on `gh pr view --json reviewRequests`. A
+// requested reviewer may be a user/bot (login) or a team (name/slug); any of
+// them mentioning "copilot" counts.
+func parseReviewOngoing(data []byte) (bool, error) {
+	var v struct {
+		ReviewRequests []struct {
+			Login string `json:"login"`
+			Name  string `json:"name"`
+			Slug  string `json:"slug"`
+		} `json:"reviewRequests"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return false, fmt.Errorf("parse review requests: %w", err)
+	}
+	for _, r := range v.ReviewRequests {
+		for _, field := range []string{r.Login, r.Name, r.Slug} {
+			if strings.Contains(strings.ToLower(field), "copilot") {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 // parseReviewThreads decodes the reviewThreads GraphQL response, keeping only
 // unresolved threads and combining each thread's comments into a single body.
 func parseReviewThreads(data []byte) ([]codereview.ReviewThread, error) {

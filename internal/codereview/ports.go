@@ -27,6 +27,9 @@ type PullRequests interface {
 	// FindOpen locates the single open PR whose head is branch in the repo at
 	// dir. It returns an error when there is no open PR or more than one.
 	FindOpen(ctx context.Context, dir, branch string) (PullRequest, error)
+	// ReviewOngoing reports whether a requested Copilot review is still pending
+	// (i.e. requested but not yet delivered).
+	ReviewOngoing(ctx context.Context, pr PullRequest) (bool, error)
 	// UnresolvedThreads returns the PR's unresolved review threads.
 	UnresolvedThreads(ctx context.Context, pr PullRequest) ([]ReviewThread, error)
 	// Reply posts body as a reply on the given review thread.

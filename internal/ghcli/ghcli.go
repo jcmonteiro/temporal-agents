@@ -52,6 +52,20 @@ func (h GitHub) baseRepo(ctx context.Context, dir string) (owner, repo string, e
 	return parseRepo([]byte(out))
 }
 
+// ReviewOngoing reports whether a Copilot review is still pending on the PR,
+// i.e. Copilot is a requested reviewer that has not yet delivered its review.
+func (h GitHub) ReviewOngoing(ctx context.Context, pr codereview.PullRequest) (bool, error) {
+	out, err := run(ctx,
+		"pr", "view", strconv.Itoa(pr.Number),
+		"--repo", pr.Owner+"/"+pr.Repo,
+		"--json", "reviewRequests",
+	)
+	if err != nil {
+		return false, err
+	}
+	return parseReviewOngoing([]byte(out))
+}
+
 // UnresolvedThreads returns the PR's unresolved review threads.
 func (h GitHub) UnresolvedThreads(ctx context.Context, pr codereview.PullRequest) ([]codereview.ReviewThread, error) {
 	out, err := run(ctx,
