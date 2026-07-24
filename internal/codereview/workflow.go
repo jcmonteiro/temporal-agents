@@ -4,13 +4,12 @@ import (
 	"fmt"
 	"time"
 
-	enums "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
-// chainDelay is how long a chained run waits before its child begins, giving
-// reviewers (and any freshly requested Copilot review) time to post feedback.
+// chainDelay is how long a chained run waits before looping, giving reviewers
+// (and any freshly requested Copilot review) time to post feedback.
 const chainDelay = 3 * time.Minute
 
 // PilotWorkflow drives the "code pilot" loop: it finds the open PR for the
@@ -18,17 +17,21 @@ const chainDelay = 3 * time.Minute
 // PR's unresolved review comments, then replies to and resolves those comments
 // with the resulting commit hashes and requests a fresh Copilot review.
 //
-// When in.Chain is set, a successful pass spawns a child run that starts after
-// chainDelay, so the loop keeps folding in new feedback indefinitely.
+// When in.Chain is set, a successful pass waits chainDelay and then continues
+// as new, so the loop keeps folding in new feedback indefinitely. This mirrors
+// PromptWorkflow: workflow.Sleep is a durable Temporal timer (not an activity)
+// and continue-as-new restarts the run with a fresh, bounded event history
+// under the same workflow ID.
 func PilotWorkflow(ctx workflow.Context, in PilotInput) (string, error) {
 	summary, err := runPilotOnce(ctx, in)
 	if err != nil {
 		return "", err
 	}
 	if in.Chain {
-		if err := spawnDelayedChild(ctx, in); err != nil {
+		if err := workflow.Sleep(ctx, chainDelay); err != nil {
 			return "", err
 		}
+		return "", workflow.NewContinueAsNewError(ctx, PilotWorkflow, in)
 	}
 	return summary, nil
 }
@@ -126,22 +129,4 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, error) {
 
 	return fmt.Sprintf("Addressed %d comment(s) on PR #%d with %d commit(s); requested Copilot review.",
 		len(loaded.Threads), pr.Number, len(commits)), nil
-}
-
-// spawnDelayedChild waits chainDelay, then starts a detached child PilotWorkflow
-// with the same input. The child is abandoned (ParentClosePolicy) so it outlives
-// this run and continues the chain on its own.
-func spawnDelayedChild(ctx workflow.Context, in PilotInput) error {
-	if err := workflow.Sleep(ctx, chainDelay); err != nil {
-		return err
-	}
-	cctx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
-		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON,
-	})
-	child := workflow.ExecuteChildWorkflow(cctx, PilotWorkflow, in)
-	// Ensure the child has actually started before this run completes; with an
-	// abandon policy the parent otherwise finishes without guaranteeing the
-	// child was scheduled.
-	var childWE workflow.Execution
-	return child.GetChildWorkflowExecution().Get(ctx, &childWE)
 }

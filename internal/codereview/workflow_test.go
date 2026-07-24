@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/workflow"
 )
 
 // The workflow tests exercise observable behavior — which activities run and
@@ -47,7 +48,7 @@ func TestPilotWorkflow_NoUnresolvedComments_ExitsEarly(t *testing.T) {
 	env.AssertNotCalled(t, "ReplyAndResolve", mock.Anything, mock.Anything)
 }
 
-func TestPilotWorkflow_Chain_SpawnsDelayedChild(t *testing.T) {
+func TestPilotWorkflow_Chain_ContinuesAsNew(t *testing.T) {
 	env := newEnv(t)
 	pr := PullRequest{Number: 7}
 
@@ -56,18 +57,12 @@ func TestPilotWorkflow_Chain_SpawnsDelayedChild(t *testing.T) {
 	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
 		Return(LoadCommentsResult{Threads: nil}, nil)
 
-	// Stub the chained child so the test does not recurse forever, and record
-	// that it was spawned.
-	childStarted := false
-	env.OnWorkflow(PilotWorkflow, mock.Anything, mock.Anything).
-		Run(func(mock.Arguments) { childStarted = true }).
-		Return("child done", nil)
-
 	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Chain: true})
 
 	require.True(t, env.IsWorkflowCompleted())
-	require.NoError(t, env.GetWorkflowError())
-	require.True(t, childStarted, "expected --chain to spawn a child run")
+	// Chaining loops by continuing as new rather than returning a result.
+	var canErr *workflow.ContinueAsNewError
+	require.ErrorAs(t, env.GetWorkflowError(), &canErr)
 }
 
 func TestPilotWorkflow_HappyPath_AddressesResolvesAndRequestsReview(t *testing.T) {
