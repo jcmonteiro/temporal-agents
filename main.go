@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -24,10 +25,10 @@ func main() {
 	case "worker":
 		runWorker()
 	case "run":
-		requireArgs(1, "run \"<prompt>\"")
+		requireArgs(1, `run "<prompt>"`)
 		startRun(os.Args[2])
 	case "schedule":
-		requireArgs(2, "schedule \"<interval|cron>\" \"<prompt>\"")
+		requireArgs(2, `schedule "<interval|cron>" "<prompt>"`)
 		startSchedule(os.Args[2], os.Args[3])
 	case "list":
 		listRunning()
@@ -37,13 +38,23 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `temporal-agents - thin Temporal worker running a Pi agent
+	fmt.Fprint(os.Stderr, `temporal-agents — a thin Temporal worker that runs a Pi agent
 
-Usage:
-  temporal-agents worker                                 Start the Temporal worker
-  temporal-agents run "<prompt>"                         Start a workflow (does not wait)
-  temporal-agents schedule "<interval|cron>" "<prompt>"  Schedule a workflow (skips overlaps)
-  temporal-agents list                                   List running workflows and schedules`)
+USAGE
+  temporal-agents <command> [arguments]
+
+COMMANDS
+  worker                                 Start the Temporal worker
+  run "<prompt>"                         Start a workflow (returns immediately)
+  schedule "<interval|cron>" "<prompt>"  Schedule a workflow (overlaps are skipped)
+  list                                   List running workflows and schedules
+
+EXAMPLES
+  temporal-agents worker
+  temporal-agents run "summarize the README"
+  temporal-agents schedule "1h" "check for new issues"
+  temporal-agents schedule "0 9 * * *" "post the daily digest"
+`)
 	os.Exit(2)
 }
 
@@ -59,11 +70,19 @@ func dial() client.Client {
 	if hostPort == "" {
 		hostPort = client.DefaultHostPort
 	}
-	c, err := client.Dial(client.Options{HostPort: hostPort})
+	c, err := client.Dial(client.Options{HostPort: hostPort, Logger: quietLogger{}})
 	if err != nil {
-		log.Fatalf("dial temporal: %v", err)
+		fatalf("Could not connect to Temporal at %s: %v", hostPort, err)
 	}
 	return c
+}
+
+func cwd() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		fatalf("Could not determine working directory: %v", err)
+	}
+	return dir
 }
 
 func runWorker() {
@@ -74,10 +93,11 @@ func runWorker() {
 	w.RegisterWorkflow(PromptWorkflow)
 	w.RegisterActivity(RunPiAgent)
 
-	log.Printf("worker started on task queue %q", TaskQueue)
+	fmt.Printf("Worker ready · task queue %q · press Ctrl+C to stop\n", TaskQueue)
 	if err := w.Run(worker.InterruptCh()); err != nil {
-		log.Fatalf("worker: %v", err)
+		fatalf("Worker stopped with error: %v", err)
 	}
+	fmt.Println("Worker stopped.")
 }
 
 func startRun(prompt string) {
@@ -88,11 +108,15 @@ func startRun(prompt string) {
 	we, err := c.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{
 		ID:        id,
 		TaskQueue: TaskQueue,
-	}, PromptWorkflow, prompt)
+	}, PromptWorkflow, PromptRequest{Prompt: prompt, WorkDir: cwd()})
 	if err != nil {
-		log.Fatalf("start workflow: %v", err)
+		fatalf("Could not start workflow: %v", err)
 	}
-	fmt.Printf("run %s\n", we.GetID())
+
+	fmt.Println("Workflow started.")
+	fmt.Printf("  id:      %s\n", we.GetID())
+	fmt.Printf("  prompt:  %s\n", truncate(prompt, 60))
+	fmt.Printf("  workdir: %s\n", cwd())
 }
 
 func startSchedule(spec, prompt string) {
@@ -107,14 +131,19 @@ func startSchedule(spec, prompt string) {
 		Action: &client.ScheduleWorkflowAction{
 			ID:        id + "-wf",
 			Workflow:  PromptWorkflow,
-			Args:      []any{prompt},
+			Args:      []any{PromptRequest{Prompt: prompt, WorkDir: cwd()}},
 			TaskQueue: TaskQueue,
 		},
 	})
 	if err != nil {
-		log.Fatalf("create schedule: %v", err)
+		fatalf("Could not create schedule: %v", err)
 	}
-	fmt.Printf("schedule %s\n", id)
+
+	fmt.Println("Schedule created.")
+	fmt.Printf("  id:      %s\n", id)
+	fmt.Printf("  when:    %s\n", spec)
+	fmt.Printf("  prompt:  %s\n", truncate(prompt, 60))
+	fmt.Printf("  workdir: %s\n", cwd())
 }
 
 // parseSpec treats the arg as a Go duration interval when possible, otherwise a cron expression.
@@ -130,8 +159,8 @@ func listRunning() {
 	defer c.Close()
 	ctx := context.Background()
 
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "TYPE\tID")
+	type row struct{ kind, id string }
+	var rows []row
 
 	// Running workflows.
 	var next []byte
@@ -141,10 +170,10 @@ func listRunning() {
 			NextPageToken: next,
 		})
 		if err != nil {
-			log.Fatalf("list workflows: %v", err)
+			fatalf("Could not list workflows: %v", err)
 		}
 		for _, e := range resp.Executions {
-			fmt.Fprintf(tw, "run\t%s\n", e.Execution.WorkflowId)
+			rows = append(rows, row{"run", e.Execution.WorkflowId})
 		}
 		next = resp.NextPageToken
 		if len(next) == 0 {
@@ -155,15 +184,52 @@ func listRunning() {
 	// Schedules.
 	iter, err := c.ScheduleClient().List(ctx, client.ScheduleListOptions{})
 	if err != nil {
-		log.Fatalf("list schedules: %v", err)
+		fatalf("Could not list schedules: %v", err)
 	}
 	for iter.HasNext() {
 		s, err := iter.Next()
 		if err != nil {
-			log.Fatalf("list schedules: %v", err)
+			fatalf("Could not list schedules: %v", err)
 		}
-		fmt.Fprintf(tw, "schedule\t%s\n", s.ID)
+		rows = append(rows, row{"schedule", s.ID})
 	}
 
+	if len(rows) == 0 {
+		fmt.Println("Nothing running.")
+		return
+	}
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(tw, "TYPE\tID")
+	fmt.Fprintln(tw, "────\t──")
+	for _, r := range rows {
+		fmt.Fprintf(tw, "%s\t%s\n", r.kind, r.id)
+	}
 	tw.Flush()
+	fmt.Printf("\n%d active\n", len(rows))
+}
+
+func truncate(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-1] + "…"
+}
+
+func fatalf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "error: "+format+"\n", args...)
+	os.Exit(1)
+}
+
+// quietLogger suppresses the SDK's info/debug chatter so CLI output stays clean.
+type quietLogger struct{}
+
+func (quietLogger) Debug(string, ...any) {}
+func (quietLogger) Info(string, ...any)  {}
+func (quietLogger) Warn(msg string, kv ...any) {
+	log.Printf("warn: %s", msg)
+}
+func (quietLogger) Error(msg string, kv ...any) {
+	log.Printf("error: %s", msg)
 }
