@@ -15,15 +15,14 @@ import (
 
 // codeCmd dispatches the "code" subcommands.
 func codeCmd(args []string) {
-	if len(args) == 0 || wantsHelp(args) {
-		codeHelp(os.Stdout)
-		if len(args) == 0 {
-			os.Exit(2)
-		}
-		return
+	if len(args) == 0 {
+		codeHelp(os.Stderr)
+		os.Exit(2)
 	}
 
 	switch args[0] {
+	case "-h", "--help", "help":
+		codeHelp(os.Stdout)
 	case "pilot":
 		if wantsHelp(args[1:]) {
 			pilotHelp(os.Stdout)
