@@ -14,6 +14,7 @@ type Template struct {
 	Kind   string `json:"kind"`           // "run" or "schedule"
 	Spec   string `json:"spec,omitempty"` // interval/cron, only for "schedule"
 	Prompt string `json:"prompt"`
+	Chain  bool   `json:"chain,omitempty"` // re-trigger the workflow on success
 }
 
 // Config is the on-disk template store.

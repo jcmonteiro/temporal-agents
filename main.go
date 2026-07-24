@@ -28,23 +28,23 @@ func main() {
 	case "worker":
 		runWorker()
 	case "run":
-		pos, save := parseSave(os.Args[2:])
+		pos, save, chain := parseFlags(os.Args[2:])
 		if len(pos) < 1 {
-			fmt.Fprintln(os.Stderr, `usage: temporal-agents run "<prompt>" [--save <name>]`)
+			fmt.Fprintln(os.Stderr, `usage: temporal-agents run "<prompt>" [--save <name>] [--chain]`)
 			os.Exit(2)
 		}
-		startRun(pos[0], save)
+		startRun(pos[0], save, chain)
 	case "schedule":
 		if wantsHelp(os.Args[2:]) {
 			scheduleHelp(os.Stdout)
 			return
 		}
-		pos, save := parseSave(os.Args[2:])
+		pos, save, chain := parseFlags(os.Args[2:])
 		if len(pos) < 2 {
 			scheduleHelp(os.Stderr)
 			os.Exit(2)
 		}
-		startSchedule(pos[0], pos[1], save)
+		startSchedule(pos[0], pos[1], save, chain)
 	case "template":
 		templateCmd(os.Args[2:])
 	case "watch":
@@ -65,8 +65,9 @@ USAGE
 
 COMMANDS
   worker                                 Start the Temporal worker
-  run "<prompt>" [--save <name>]         Start a workflow (returns immediately)
-  schedule "<interval|cron>" "<prompt>" [--save <name>]
+  run "<prompt>" [--save <name>] [--chain]
+                                         Start a workflow (returns immediately)
+  schedule "<interval|cron>" "<prompt>" [--save <name>] [--chain]
                                          Schedule a workflow (overlaps are skipped)
   template <subcommand>                  Manage and run saved templates
   watch <workflow-id>                    Stream a workflow's live Pi progress
@@ -76,9 +77,14 @@ EXAMPLES
   temporal-agents worker
   temporal-agents run "summarize the README"
   temporal-agents run "nightly triage" --save triage
+  temporal-agents run "watch the queue forever" --chain
   temporal-agents schedule "0 9 * * *" "post the daily digest" --save digest
   temporal-agents template list
   temporal-agents template run triage
+
+FLAGS
+  --save <name>  Save the invocation as a reusable template (see 'template')
+  --chain        Re-trigger the same workflow on each successful completion
 
 See "temporal-agents schedule --help" and "temporal-agents template --help".
 `)
@@ -101,12 +107,15 @@ func wantsHelp(args []string) bool {
 	return false
 }
 
-// parseSave splits out an optional "--save <name>" / "--save=<name>" flag,
-// returning the remaining positional args and the template name ("" if absent).
-func parseSave(args []string) (positional []string, saveName string) {
+// parseFlags splits out the optional "--save <name>" / "--save=<name>" and
+// "--chain" flags, returning the remaining positional args, the template name
+// ("" if absent), and whether chaining was requested.
+func parseFlags(args []string) (positional []string, saveName string, chain bool) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
+		case a == "--chain":
+			chain = true
 		case a == "--save":
 			if i+1 >= len(args) {
 				fatalf("--save requires a template name")
@@ -122,7 +131,7 @@ func parseSave(args []string) (positional []string, saveName string) {
 			positional = append(positional, a)
 		}
 	}
-	return positional, saveName
+	return positional, saveName, chain
 }
 
 func templateCmd(args []string) {
@@ -194,6 +203,7 @@ func templateShow(name string) {
 	if t.Kind == "schedule" {
 		fmt.Printf("when:   %s\n", t.Spec)
 	}
+	fmt.Printf("chain:  %t\n", t.Chain)
 	fmt.Printf("prompt: %s\n", t.Prompt)
 }
 
@@ -212,9 +222,9 @@ func templateRun(name string) {
 	}
 	switch t.Kind {
 	case "run":
-		startRun(t.Prompt, "")
+		startRun(t.Prompt, "", t.Chain)
 	case "schedule":
-		startSchedule(t.Spec, t.Prompt, "")
+		startSchedule(t.Spec, t.Prompt, "", t.Chain)
 	default:
 		fatalf("template %q has unknown kind %q", name, t.Kind)
 	}
@@ -329,7 +339,7 @@ func runWorker() {
 	fmt.Println("Worker stopped.")
 }
 
-func startRun(prompt, saveName string) {
+func startRun(prompt, saveName string, chain bool) {
 	c := dial()
 	defer c.Close()
 
@@ -337,7 +347,7 @@ func startRun(prompt, saveName string) {
 	we, err := c.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{
 		ID:        id,
 		TaskQueue: TaskQueue,
-	}, PromptWorkflow, PromptRequest{Prompt: prompt, WorkDir: cwd()})
+	}, PromptWorkflow, PromptRequest{Prompt: prompt, WorkDir: cwd(), Chain: chain})
 	if err != nil {
 		fatalf("Could not start workflow: %v", err)
 	}
@@ -346,11 +356,14 @@ func startRun(prompt, saveName string) {
 	fmt.Printf("  id:      %s\n", we.GetID())
 	fmt.Printf("  prompt:  %s\n", truncate(prompt, 60))
 	fmt.Printf("  workdir: %s\n", cwd())
+	if chain {
+		fmt.Printf("  chain:   on (re-triggers on each success)\n")
+	}
 	fmt.Printf("  watch:   temporal-agents watch %s\n", we.GetID())
-	maybeSave(saveName, Template{Name: saveName, Kind: "run", Prompt: prompt})
+	maybeSave(saveName, Template{Name: saveName, Kind: "run", Prompt: prompt, Chain: chain})
 }
 
-func startSchedule(spec, prompt, saveName string) {
+func startSchedule(spec, prompt, saveName string, chain bool) {
 	c := dial()
 	defer c.Close()
 
@@ -362,7 +375,7 @@ func startSchedule(spec, prompt, saveName string) {
 		Action: &client.ScheduleWorkflowAction{
 			ID:        id + "-wf",
 			Workflow:  PromptWorkflow,
-			Args:      []any{PromptRequest{Prompt: prompt, WorkDir: cwd()}},
+			Args:      []any{PromptRequest{Prompt: prompt, WorkDir: cwd(), Chain: chain}},
 			TaskQueue: TaskQueue,
 		},
 	})
@@ -375,7 +388,10 @@ func startSchedule(spec, prompt, saveName string) {
 	fmt.Printf("  when:    %s\n", spec)
 	fmt.Printf("  prompt:  %s\n", truncate(prompt, 60))
 	fmt.Printf("  workdir: %s\n", cwd())
-	maybeSave(saveName, Template{Name: saveName, Kind: "schedule", Spec: spec, Prompt: prompt})
+	if chain {
+		fmt.Printf("  chain:   on (each fired run re-triggers on success)\n")
+	}
+	maybeSave(saveName, Template{Name: saveName, Kind: "schedule", Spec: spec, Prompt: prompt, Chain: chain})
 }
 
 // maybeSave persists a template when --save was provided.
