@@ -26,18 +26,25 @@ func main() {
 	case "worker":
 		runWorker()
 	case "run":
-		requireArgs(1, `run "<prompt>"`)
-		startRun(os.Args[2])
+		pos, save := parseSave(os.Args[2:])
+		if len(pos) < 1 {
+			fmt.Fprintln(os.Stderr, `usage: temporal-agents run "<prompt>" [--save <name>]`)
+			os.Exit(2)
+		}
+		startRun(pos[0], save)
 	case "schedule":
 		if wantsHelp(os.Args[2:]) {
 			scheduleHelp(os.Stdout)
 			return
 		}
-		if len(os.Args) < 4 {
+		pos, save := parseSave(os.Args[2:])
+		if len(pos) < 2 {
 			scheduleHelp(os.Stderr)
 			os.Exit(2)
 		}
-		startSchedule(os.Args[2], os.Args[3])
+		startSchedule(pos[0], pos[1], save)
+	case "template":
+		templateCmd(os.Args[2:])
 	case "list":
 		listRunning()
 	default:
@@ -53,17 +60,21 @@ USAGE
 
 COMMANDS
   worker                                 Start the Temporal worker
-  run "<prompt>"                         Start a workflow (returns immediately)
-  schedule "<interval|cron>" "<prompt>"  Schedule a workflow (overlaps are skipped)
+  run "<prompt>" [--save <name>]         Start a workflow (returns immediately)
+  schedule "<interval|cron>" "<prompt>" [--save <name>]
+                                         Schedule a workflow (overlaps are skipped)
+  template <subcommand>                  Manage and run saved templates
   list                                   List running workflows and schedules
 
 EXAMPLES
   temporal-agents worker
   temporal-agents run "summarize the README"
-  temporal-agents schedule "1h" "check for new issues"
-  temporal-agents schedule "0 9 * * *" "post the daily digest"
+  temporal-agents run "nightly triage" --save triage
+  temporal-agents schedule "0 9 * * *" "post the daily digest" --save digest
+  temporal-agents template list
+  temporal-agents template run triage
 
-See "temporal-agents schedule --help" for how to configure the schedule.
+See "temporal-agents schedule --help" and "temporal-agents template --help".
 `)
 	os.Exit(2)
 }
@@ -82,6 +93,143 @@ func wantsHelp(args []string) bool {
 		}
 	}
 	return false
+}
+
+func parseSave(args []string) (positional []string, saveName string) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--save":
+			if i+1 >= len(args) {
+				fatalf("--save requires a template name")
+			}
+			saveName = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--save="):
+			saveName = strings.TrimPrefix(a, "--save=")
+			if saveName == "" {
+				fatalf("--save requires a template name")
+			}
+		default:
+			positional = append(positional, a)
+		}
+	}
+	return positional, saveName
+}
+
+func templateCmd(args []string) {
+	if len(args) == 0 || wantsHelp(args) {
+		templateHelp(os.Stdout)
+		if len(args) == 0 {
+			os.Exit(2)
+		}
+		return
+	}
+
+	sub := args[0]
+	rest := args[1:]
+	switch sub {
+	case "list":
+		templateList()
+	case "show":
+		if len(rest) < 1 {
+			fatalf("usage: temporal-agents template show <name>")
+		}
+		templateShow(rest[0])
+	case "delete", "rm":
+		if len(rest) < 1 {
+			fatalf("usage: temporal-agents template delete <name>")
+		}
+		templateDelete(rest[0])
+	case "run", "exec":
+		if len(rest) < 1 {
+			fatalf("usage: temporal-agents template run <name>")
+		}
+		templateRun(rest[0])
+	default:
+		fatalf("unknown template subcommand %q (try: list, show, run, delete)", sub)
+	}
+}
+
+func templateList() {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		fatalf("Could not read templates: %v", err)
+	}
+	if len(cfg.Templates) == 0 {
+		fmt.Printf("No templates saved yet (%s).\n", path)
+		fmt.Println(`Create one with:  temporal-agents run "<prompt>" --save <name>`)
+		return
+	}
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(tw, "NAME\tKIND\tWHEN\tPROMPT")
+	fmt.Fprintln(tw, "────\t────\t────\t──────")
+	for _, t := range cfg.Templates {
+		when := "-"
+		if t.Kind == "schedule" {
+			when = t.Spec
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", t.Name, t.Kind, when, truncate(t.Prompt, 50))
+	}
+	tw.Flush()
+	fmt.Printf("\n%d template(s) · %s\n", len(cfg.Templates), path)
+}
+
+func templateShow(name string) {
+	t, err := getTemplate(name)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	fmt.Printf("name:   %s\n", t.Name)
+	fmt.Printf("kind:   %s\n", t.Kind)
+	if t.Kind == "schedule" {
+		fmt.Printf("when:   %s\n", t.Spec)
+	}
+	fmt.Printf("prompt: %s\n", t.Prompt)
+}
+
+func templateDelete(name string) {
+	path, err := deleteTemplate(name)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	fmt.Printf("Deleted template %q (%s).\n", name, path)
+}
+
+func templateRun(name string) {
+	t, err := getTemplate(name)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	switch t.Kind {
+	case "run":
+		startRun(t.Prompt, "")
+	case "schedule":
+		startSchedule(t.Spec, t.Prompt, "")
+	default:
+		fatalf("template %q has unknown kind %q", name, t.Kind)
+	}
+}
+
+func templateHelp(w io.Writer) {
+	fmt.Fprint(w, `temporal-agents template — manage and run saved templates
+
+Templates are saved with the --save flag on "run" or "schedule" and stored in
+your user config directory. They remember the prompt (and schedule spec), but
+not the working directory: a template always runs in the current directory.
+
+USAGE
+  temporal-agents template list             List all saved templates
+  temporal-agents template show <name>      Show one template's details
+  temporal-agents template run <name>       Execute a template (run or schedule)
+  temporal-agents template delete <name>    Delete a template
+
+EXAMPLES
+  temporal-agents run "nightly triage" --save triage
+  temporal-agents template run triage
+  temporal-agents template delete triage
+`)
 }
 
 func scheduleHelp(w io.Writer) {
@@ -163,7 +311,7 @@ func runWorker() {
 	fmt.Println("Worker stopped.")
 }
 
-func startRun(prompt string) {
+func startRun(prompt, saveName string) {
 	c := dial()
 	defer c.Close()
 
@@ -180,9 +328,10 @@ func startRun(prompt string) {
 	fmt.Printf("  id:      %s\n", we.GetID())
 	fmt.Printf("  prompt:  %s\n", truncate(prompt, 60))
 	fmt.Printf("  workdir: %s\n", cwd())
+	maybeSave(saveName, Template{Name: saveName, Kind: "run", Prompt: prompt})
 }
 
-func startSchedule(spec, prompt string) {
+func startSchedule(spec, prompt, saveName string) {
 	c := dial()
 	defer c.Close()
 
@@ -207,6 +356,19 @@ func startSchedule(spec, prompt string) {
 	fmt.Printf("  when:    %s\n", spec)
 	fmt.Printf("  prompt:  %s\n", truncate(prompt, 60))
 	fmt.Printf("  workdir: %s\n", cwd())
+	maybeSave(saveName, Template{Name: saveName, Kind: "schedule", Spec: spec, Prompt: prompt})
+}
+
+// maybeSave persists a template when --save was provided.
+func maybeSave(saveName string, t Template) {
+	if saveName == "" {
+		return
+	}
+	path, err := saveTemplate(t)
+	if err != nil {
+		fatalf("Could not save template: %v", err)
+	}
+	fmt.Printf("  saved:   template %q → %s\n", saveName, path)
 }
 
 // parseSpec treats the arg as a Go duration interval when possible, otherwise a cron expression.
