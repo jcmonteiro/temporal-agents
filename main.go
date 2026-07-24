@@ -12,12 +12,17 @@ import (
 
 	"github.com/google/uuid"
 	commonpb "go.temporal.io/api/common/v1"
+
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/contrib/sysinfo"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/worker"
+	"temporal-agents/internal/codereview"
+	"temporal-agents/internal/ghcli"
+	"temporal-agents/internal/gitcli"
+	"temporal-agents/internal/piagent"
 )
 
 func main() {
@@ -48,6 +53,8 @@ func main() {
 		startSchedule(pos[0], pos[1], save, chain)
 	case "template":
 		templateCmd(os.Args[2:])
+	case "code":
+		codeCmd(os.Args[2:])
 	case "watch":
 		requireArgs(1, "watch <workflow-id>")
 		watchRun(os.Args[2])
@@ -66,6 +73,7 @@ USAGE
 
 COMMANDS
   worker                                 Start the Temporal worker
+  code <subcommand>                      Agent workflows for the current repo
   run "<prompt>" [--save <name>] [--chain]
                                          Start a workflow (returns immediately)
   schedule "<interval|cron>" "<prompt>" [--save <name>] [--chain]
@@ -338,6 +346,14 @@ func runWorker() {
 	})
 	w.RegisterWorkflow(PromptWorkflow)
 	w.RegisterActivity(RunPiAgent)
+
+	// The "code pilot" workflow and its port-backed activities.
+	w.RegisterWorkflow(codereview.PilotWorkflow)
+	w.RegisterActivity(&codereview.Activities{
+		Git:   gitcli.New(),
+		PRs:   ghcli.New(),
+		Agent: piagent.Agent{},
+	})
 
 	fmt.Printf("Worker ready · task queue %q · press Ctrl+C to stop\n", TaskQueue)
 	if err := w.Run(worker.InterruptCh()); err != nil {
