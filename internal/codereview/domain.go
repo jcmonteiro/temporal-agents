@@ -48,6 +48,8 @@ type PullRequest struct {
 	Owner   string
 	Repo    string
 	HeadRef string
+	// Body is the PR description, given to the agent as context.
+	Body string
 }
 
 // ReviewThread is one unresolved review conversation on the PR. ID is the
@@ -75,21 +77,14 @@ type Checkpoint struct {
 
 // DefaultPrompt is the built-in instruction handed to the Pi agent. It is
 // intentionally not surfaced in the CLI help.
-const DefaultPrompt = `You are addressing reviewer feedback on an open pull request.
+const DefaultPrompt = `- For each comment below, read the referenced code for context, then fix it. Read the code and relevant in-repo documentation to decide on the solution.
+- Confirm lint/typecheck/build (and synth, if infra) pass first.
+- Commit all the fixes.`
 
-For each unresolved review comment below:
-  - Understand what the reviewer is asking for.
-  - Make the necessary code changes in the current repository.
-  - Keep changes focused and minimal; do not address anything not raised.
-
-When you are done, commit your work with clear, conventional commit messages.
-Make at least one commit if you changed anything. Do not push.
-
-The unresolved review comments follow.`
-
-// BuildPrompt combines the base prompt (default, appended, or replaced) with a
-// formatted rendering of the unresolved review threads.
-func BuildPrompt(mode PromptMode, text string, threads []ReviewThread) string {
+// BuildPrompt combines the base prompt (default, appended, or replaced) with
+// the PR description (as context) and a formatted rendering of the unresolved
+// review threads.
+func BuildPrompt(mode PromptMode, text, prDescription string, threads []ReviewThread) string {
 	var base string
 	switch mode {
 	case PromptReplace:
@@ -106,6 +101,11 @@ func BuildPrompt(mode PromptMode, text string, threads []ReviewThread) string {
 	var b strings.Builder
 	b.WriteString(base)
 	b.WriteString("\n")
+	if d := strings.TrimSpace(prDescription); d != "" {
+		b.WriteString("\n--- Pull request description ---\n")
+		b.WriteString(d)
+		b.WriteString("\n")
+	}
 	for i, t := range threads {
 		b.WriteString("\n")
 		b.WriteString(formatThread(i+1, t))

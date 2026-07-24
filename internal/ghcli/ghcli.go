@@ -32,7 +32,7 @@ func (h GitHub) FindOpen(ctx context.Context, dir, branch string) (codereview.Pu
 	}
 	out, err := runDir(ctx, dir, "pr", "list",
 		"--head", branch, "--state", "open",
-		"--json", "number,url,headRefName")
+		"--json", "number,url,headRefName,body")
 	if err != nil {
 		return codereview.PullRequest{}, err
 	}

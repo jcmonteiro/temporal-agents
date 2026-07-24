@@ -5,14 +5,17 @@ import (
 	"testing"
 )
 
-func TestBuildPrompt_DefaultIncludesBuiltInPromptAndComments(t *testing.T) {
+func TestBuildPrompt_DefaultIncludesBuiltInPromptDescriptionAndComments(t *testing.T) {
 	threads := []ReviewThread{{Path: "main.go", Line: 12, Author: "octocat", Body: "rename this"}}
 
-	got := BuildPrompt(PromptDefault, "ignored when mode is default? no", threads)
+	got := BuildPrompt(PromptDefault, "ignored when mode is default", "Adds the widget feature", threads)
 
 	// Default mode ignores caller text and uses the built-in prompt.
 	if !strings.Contains(got, DefaultPrompt) {
 		t.Fatalf("default prompt not present:\n%s", got)
+	}
+	if !strings.Contains(got, "Adds the widget feature") {
+		t.Fatalf("PR description not present:\n%s", got)
 	}
 	if !strings.Contains(got, "rename this") {
 		t.Fatalf("comment body not present:\n%s", got)
@@ -25,8 +28,15 @@ func TestBuildPrompt_DefaultIncludesBuiltInPromptAndComments(t *testing.T) {
 	}
 }
 
+func TestBuildPrompt_OmitsDescriptionSectionWhenEmpty(t *testing.T) {
+	got := BuildPrompt(PromptDefault, "", "  ", nil)
+	if strings.Contains(got, "Pull request description") {
+		t.Fatalf("empty description should not add a section:\n%s", got)
+	}
+}
+
 func TestBuildPrompt_AppendKeepsDefaultAndAddsText(t *testing.T) {
-	got := BuildPrompt(PromptAppend, "prefer table-driven tests", nil)
+	got := BuildPrompt(PromptAppend, "prefer table-driven tests", "", nil)
 
 	if !strings.Contains(got, DefaultPrompt) {
 		t.Fatalf("append should keep the default prompt:\n%s", got)
@@ -37,7 +47,7 @@ func TestBuildPrompt_AppendKeepsDefaultAndAddsText(t *testing.T) {
 }
 
 func TestBuildPrompt_ReplaceDropsDefault(t *testing.T) {
-	got := BuildPrompt(PromptReplace, "only fix naming", nil)
+	got := BuildPrompt(PromptReplace, "only fix naming", "", nil)
 
 	if strings.Contains(got, DefaultPrompt) {
 		t.Fatalf("replace should not include the default prompt:\n%s", got)

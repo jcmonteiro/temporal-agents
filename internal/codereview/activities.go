@@ -32,6 +32,7 @@ type LoadCommentsResult struct {
 // RunAgentRequest is the input to RunAgent.
 type RunAgentRequest struct {
 	Input   PilotInput
+	PR      PullRequest
 	Threads []ReviewThread
 }
 
@@ -125,7 +126,7 @@ func (a *Activities) MarkHeadAndStash(ctx context.Context, in PilotInput) (Check
 // from the (default/append/replace) instruction plus the unresolved comments
 // and hands it to the agent, which is expected to commit its work.
 func (a *Activities) RunAgent(ctx context.Context, req RunAgentRequest) (string, error) {
-	prompt := BuildPrompt(req.Input.PromptMode, req.Input.PromptText, req.Threads)
+	prompt := BuildPrompt(req.Input.PromptMode, req.Input.PromptText, req.PR.Body, req.Threads)
 	return a.Agent.Run(ctx, prompt, req.Input.WorkDir)
 }
 

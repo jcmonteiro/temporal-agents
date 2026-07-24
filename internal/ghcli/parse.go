@@ -33,6 +33,7 @@ func parsePRList(data []byte, owner, repo string) ([]codereview.PullRequest, err
 		Number      int    `json:"number"`
 		URL         string `json:"url"`
 		HeadRefName string `json:"headRefName"`
+		Body        string `json:"body"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parse PR list: %w", err)
@@ -45,6 +46,7 @@ func parsePRList(data []byte, owner, repo string) ([]codereview.PullRequest, err
 			Owner:   owner,
 			Repo:    repo,
 			HeadRef: r.HeadRefName,
+			Body:    r.Body,
 		})
 	}
 	return prs, nil

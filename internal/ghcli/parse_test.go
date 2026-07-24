@@ -48,6 +48,16 @@ func TestSelectOpenPR(t *testing.T) {
 	})
 }
 
+func TestParsePRList_LoadsBody(t *testing.T) {
+	prs, err := parsePRList([]byte(`[{"number":7,"url":"u","headRefName":"feat","body":"Adds the widget"}]`), "acme", "widgets")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if prs[0].Body != "Adds the widget" {
+		t.Fatalf("PR body not parsed: %q", prs[0].Body)
+	}
+}
+
 func TestParseReviewThreads_KeepsUnresolvedAndCombinesBodies(t *testing.T) {
 	data := []byte(`{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
 		{"id":"t1","isResolved":false,"path":"a.go","line":10,"comments":{"nodes":[

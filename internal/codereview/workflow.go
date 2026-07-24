@@ -87,7 +87,7 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, error) {
 	}
 
 	var agentResult string
-	agentReq := RunAgentRequest{Input: in, Threads: loaded.Threads}
+	agentReq := RunAgentRequest{Input: in, PR: pr, Threads: loaded.Threads}
 	if err := workflow.ExecuteActivity(agentCtx, a.RunAgent, agentReq).Get(agentCtx, &agentResult); err != nil {
 		return "", err
 	}
