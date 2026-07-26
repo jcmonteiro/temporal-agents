@@ -2,6 +2,9 @@ package codereview
 
 import (
 	"errors"
+	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -27,6 +30,20 @@ func newEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 
 var a *Activities // used only to reference method names for OnActivity
 
+// activityName returns the Temporal-registered activity name for a *Activities
+// method value. Negative assertions (AssertNotCalled) take a method-name
+// string, and testify passes for any name it does not find — so a typo would
+// silently defeat the assertion. Deriving the name from the method symbol makes
+// a typo a compile error instead.
+func activityName(method any) string {
+	full := runtime.FuncForPC(reflect.ValueOf(method).Pointer()).Name()
+	full = strings.TrimSuffix(full, "-fm")
+	if i := strings.LastIndex(full, "."); i >= 0 {
+		full = full[i+1:]
+	}
+	return full
+}
+
 func TestPilotWorkflow_NoUnresolvedComments_ExitsEarly(t *testing.T) {
 	env := newEnv(t)
 	pr := PullRequest{Number: 7}
@@ -44,8 +61,8 @@ func TestPilotWorkflow_NoUnresolvedComments_ExitsEarly(t *testing.T) {
 	require.NoError(t, env.GetWorkflowResult(&out))
 	require.Contains(t, out, "nothing to do")
 	// The agent and mutating steps must not run when there is nothing to fix.
-	env.AssertNotCalled(t, "RunAgent", mock.Anything, mock.Anything)
-	env.AssertNotCalled(t, "ReplyAndResolve", mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, activityName(a.RunAgent), mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, activityName(a.ReplyAndResolve), mock.Anything, mock.Anything)
 }
 
 func TestPilotWorkflow_WaitsForOngoingReview(t *testing.T) {
@@ -189,7 +206,7 @@ func TestPilotWorkflow_NoNewCommits_FailsAndStopsBeforeReplying(t *testing.T) {
 	require.True(t, env.IsWorkflowCompleted())
 	require.Error(t, env.GetWorkflowError())
 	// Nothing changed, so we must not push, answer, or resolve anything.
-	env.AssertNotCalled(t, "PushBranch", mock.Anything, mock.Anything)
-	env.AssertNotCalled(t, "ReplyAndResolve", mock.Anything, mock.Anything)
-	env.AssertNotCalled(t, "RequestCopilotReview", mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, activityName(a.PushBranch), mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, activityName(a.ReplyAndResolve), mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, activityName(a.RequestCopilotReview), mock.Anything, mock.Anything)
 }

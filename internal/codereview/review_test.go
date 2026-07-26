@@ -38,9 +38,9 @@ func TestReviewWorkflow_NoPayload_JustReviewsAndStopsWhenClean(t *testing.T) {
 	require.NoError(t, env.GetWorkflowResult(&out))
 	require.Contains(t, out, "no actionable items")
 	// Without a payload it must not implement or touch the git HEAD.
-	env.AssertNotCalled(t, "MarkHeadAndStash", mock.Anything, mock.Anything)
-	env.AssertNotCalled(t, "RunImplementAgent", mock.Anything, mock.Anything)
-	env.AssertNotCalled(t, "EnsureHeadAdvanced", mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, activityName(a.MarkHeadAndStash), mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, activityName(a.RunImplementAgent), mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, activityName(a.EnsureHeadAdvanced), mock.Anything, mock.Anything)
 }
 
 func TestReviewWorkflow_NoPayload_ActionableItems_ContinuesAsNewWithPayload(t *testing.T) {
@@ -159,7 +159,7 @@ func TestReviewWorkflow_WithPayload_NoNewCommits_Fails(t *testing.T) {
 	require.True(t, env.IsWorkflowCompleted())
 	require.Error(t, env.GetWorkflowError())
 	// A failed implement must stop before reviewing again.
-	env.AssertNotCalled(t, "RunReviewAgent", mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, activityName(a.RunReviewAgent), mock.Anything, mock.Anything)
 }
 
 func TestReviewWorkflow_InvalidStructuredJSON_Fails(t *testing.T) {
