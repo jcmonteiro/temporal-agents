@@ -215,6 +215,41 @@ func ParseReviewPayload(s string) (ReviewPayload, error) {
 	return p, nil
 }
 
+// FilterActionable drops review items the implement pass could not act on. An
+// item is actionable only when it carries at least one non-empty string field:
+// empty objects and items whose values are all blank are noise that would
+// otherwise force another implement pass (which then fails with NoCommits when
+// there is nothing to change). Filtering here keeps "actionable" from meaning
+// merely "non-empty array".
+func FilterActionable(p ReviewPayload) ReviewPayload {
+	out := ReviewPayload{Review: make([]map[string]any, 0, len(p.Review))}
+	for _, item := range p.Review {
+		if itemIsActionable(item) {
+			out.Review = append(out.Review, item)
+		}
+	}
+	return out
+}
+
+// itemIsActionable reports whether a review item carries any non-blank string
+// content the agent could act on. Non-string values (numbers, bools, nested
+// objects) also count as content, since they signal a populated item.
+func itemIsActionable(item map[string]any) bool {
+	for _, v := range item {
+		switch val := v.(type) {
+		case string:
+			if strings.TrimSpace(val) != "" {
+				return true
+			}
+		case nil:
+			// blank
+		default:
+			return true
+		}
+	}
+	return false
+}
+
 // extractJSONObject returns the substring spanning the first "{" through the
 // last "}", or "" when no such span exists. This is enough to peel a JSON
 // object out of an agent reply that may wrap it in explanation or code fences.

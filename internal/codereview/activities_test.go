@@ -30,6 +30,24 @@ func TestValidateReviewJSON_CanonicalizesAndCountsItems(t *testing.T) {
 	require.Equal(t, `{"review":[{"itemName":"rename foo"}]}`, got.Payload)
 }
 
+func TestValidateReviewJSON_FiltersNonActionableItems(t *testing.T) {
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestActivityEnvironment()
+	act := &Activities{}
+	env.RegisterActivity(act)
+
+	// One real item plus noise: an empty object and an all-blank item. Only the
+	// actionable item survives, so the loop is not forced into a doomed pass.
+	in := `{"review":[{"itemName":"rename foo"},{},{"itemName":"   "}]}`
+	val, err := env.ExecuteActivity(act.ValidateReviewJSON, ValidateReviewRequest{Payload: in})
+	require.NoError(t, err)
+
+	var got ValidateReviewResult
+	require.NoError(t, val.Get(&got))
+	require.Equal(t, 1, got.ItemCount)
+	require.Equal(t, `{"review":[{"itemName":"rename foo"}]}`, got.Payload)
+}
+
 func TestValidateReviewJSON_RejectsInvalidWithNonRetryableError(t *testing.T) {
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestActivityEnvironment()

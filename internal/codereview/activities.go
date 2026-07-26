@@ -83,8 +83,8 @@ type ValidateReviewRequest struct {
 }
 
 // ValidateReviewResult is the output of ValidateReviewJSON. Payload is the
-// canonical, re-serialized JSON; ItemCount is how many actionable review items
-// it carries.
+// canonical, re-serialized JSON after non-actionable items are filtered out;
+// ItemCount is how many actionable review items remain.
 type ValidateReviewResult struct {
 	Payload   string
 	ItemCount int
@@ -236,6 +236,9 @@ func (a *Activities) ValidateReviewJSON(ctx context.Context, req ValidateReviewR
 		return ValidateReviewResult{}, temporal.NewNonRetryableApplicationError(
 			"invalid review JSON", errInvalidReviewJSON, err)
 	}
+	// Keep only items the implement pass can actually action, so a noise item
+	// does not force (and then fail) another pass.
+	p = FilterActionable(p)
 	norm, err := json.Marshal(p)
 	if err != nil {
 		return ValidateReviewResult{}, fmt.Errorf("re-serialize review JSON: %w", err)
