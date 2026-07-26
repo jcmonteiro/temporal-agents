@@ -30,9 +30,42 @@ func codeCmd(args []string) {
 		}
 		mode, text, chain := parsePilotFlags(args[1:])
 		startPilot(mode, text, chain)
+	case "review":
+		if wantsHelp(args[1:]) {
+			reviewHelp(os.Stdout)
+			return
+		}
+		if len(args) > 1 {
+			fatalf("unexpected argument %q", args[1])
+		}
+		startReview()
 	default:
-		fatalf("unknown code subcommand %q (try: pilot)", args[0])
+		fatalf("unknown code subcommand %q (try: pilot, review)", args[0])
 	}
+}
+
+// startReview launches the ReviewWorkflow for the current repository. It starts
+// with no payload, so the first pass only reviews; actionable items drive
+// subsequent implement-then-review passes via continue-as-new.
+func startReview() {
+	c := dial()
+	defer c.Close()
+
+	id := "review-" + uuid.NewString()
+	we, err := c.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{
+		ID:        id,
+		TaskQueue: TaskQueue,
+	}, codereview.ReviewWorkflow, codereview.ReviewInput{
+		WorkDir: cwd(),
+	})
+	if err != nil {
+		fatalf("Could not start workflow: %v", err)
+	}
+
+	fmt.Println("Review started.")
+	fmt.Printf("  id:      %s\n", we.GetID())
+	fmt.Printf("  workdir: %s\n", cwd())
+	fmt.Printf("  watch:   temporal-agents watch %s\n", we.GetID())
 }
 
 // parsePilotFlags reads the optional, mutually exclusive --append/--replace
@@ -110,8 +143,34 @@ USAGE
 
 SUBCOMMANDS
   pilot   Address the unresolved review comments on the current branch's PR
+  review  Review the current branch locally, then implement + re-review in a loop
 
-See "temporal-agents code pilot --help".
+See "temporal-agents code pilot --help" and "temporal-agents code review --help".
+`)
+}
+
+func reviewHelp(w io.Writer) {
+	fmt.Fprint(w, `temporal-agents code review — review the current branch locally in a loop
+
+Runs a Pi agent to review the current branch on this machine (no GitHub or
+Copilot involved). The review's output is structured into JSON and validated,
+then:
+
+  - If it lists actionable items, the workflow continues as new with that
+    payload: the next pass has a Pi agent implement the actions (checking the
+    git HEAD before and after to confirm the change landed) and then reviews
+    again.
+  - If it lists nothing actionable, the workflow finishes successfully.
+
+In other words: with a payload it implements + reviews; without one it just
+reviews.
+
+USAGE
+  temporal-agents code review
+
+EXAMPLES
+  temporal-agents code review
+  temporal-agents watch <workflow-id>
 `)
 }
 
