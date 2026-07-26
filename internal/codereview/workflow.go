@@ -2,6 +2,7 @@ package codereview
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"go.temporal.io/sdk/temporal"
@@ -133,4 +134,100 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, error) {
 
 	return fmt.Sprintf("Addressed %d comment(s) on PR #%d with %d commit(s); requested Copilot review.",
 		len(loaded.Threads), pr.Number, len(commits)), true, nil
+}
+
+// ReviewWorkflow drives the "code review" loop entirely on the host machine.
+// Each pass:
+//
+//   - When it carries a structured review payload, it first implements those
+//     actions with the Pi agent, checking HEAD before (MarkHeadAndStash) and
+//     after (EnsureHeadAdvanced) to confirm the change landed—reusing the same
+//     activities as the Copilot pilot flow. Any changes stashed before the
+//     agent ran are restored best-effort at the end of the pass. With no
+//     payload it skips this and just reviews.
+//   - It then runs the Pi agent to review the current branch. Because the
+//     review activity blocks until it completes, no waiting/polling is needed.
+//   - It structures the review's last output into JSON (hardening the flow) and
+//     deterministically validates that JSON against the expected schema.
+//   - If the validated payload has actionable items, it continues as new with
+//     that payload, so the next pass implements them and reviews again. If it
+//     has none, the chain ends successfully.
+func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (string, error) {
+	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
+	// should not run forever.
+	quick := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 2 * time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
+	})
+	// The agent steps are long-running and stream heartbeats.
+	agentCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: time.Hour,
+		HeartbeatTimeout:    time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
+	})
+	// Best-effort steps run once: retrying a failed stash pop (e.g. a merge
+	// conflict) would only compound the mess.
+	bestEffort := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+	})
+
+	var a *Activities
+
+	// With a payload: implement the review actions, verifying HEAD advanced.
+	var cp Checkpoint
+	if strings.TrimSpace(in.Payload) != "" {
+		if err := workflow.ExecuteActivity(quick, a.MarkHeadAndStash, PilotInput{WorkDir: in.WorkDir}).Get(quick, &cp); err != nil {
+			return "", err
+		}
+
+		implReq := RunImplementRequest{WorkDir: in.WorkDir, Payload: in.Payload}
+		if err := workflow.ExecuteActivity(agentCtx, a.RunImplementAgent, implReq).Get(agentCtx, nil); err != nil {
+			return "", err
+		}
+
+		var commits []string
+		advReq := EnsureHeadAdvancedRequest{WorkDir: in.WorkDir, Checkpoint: cp}
+		if err := workflow.ExecuteActivity(quick, a.EnsureHeadAdvanced, advReq).Get(quick, &commits); err != nil {
+			return "", err
+		}
+	}
+
+	// Review the current branch. This blocks until the review completes.
+	var reviewOutput string
+	if err := workflow.ExecuteActivity(agentCtx, a.RunReviewAgent, ReviewInput{WorkDir: in.WorkDir}).Get(agentCtx, &reviewOutput); err != nil {
+		return "", err
+	}
+
+	// Structure the review's last output into JSON.
+	var structured string
+	structReq := StructureReviewRequest{WorkDir: in.WorkDir, LastOutput: reviewOutput}
+	if err := workflow.ExecuteActivity(agentCtx, a.StructureReview, structReq).Get(agentCtx, &structured); err != nil {
+		return "", err
+	}
+
+	// Deterministically validate the structured JSON.
+	var validated ValidateReviewResult
+	valReq := ValidateReviewRequest{Payload: structured}
+	if err := workflow.ExecuteActivity(quick, a.ValidateReviewJSON, valReq).Get(quick, &validated); err != nil {
+		return "", err
+	}
+
+	// Put the developer's pre-existing local changes back before ending the
+	// pass. This is best-effort: a conflict against the implement commits leaves
+	// the stash in place for manual resolution rather than failing the run.
+	if cp.Stashed {
+		restoreReq := RestoreStashRequest{WorkDir: in.WorkDir, Stashed: true}
+		if err := workflow.ExecuteActivity(bestEffort, a.RestoreStash, restoreReq).Get(bestEffort, nil); err != nil {
+			workflow.GetLogger(ctx).Warn("could not restore stashed changes; they remain in the git stash", "error", err)
+		}
+	}
+
+	// Actionable items: implement them next pass by continuing as new with the
+	// structured payload. Otherwise the chain ends.
+	if validated.ItemCount > 0 {
+		return "", workflow.NewContinueAsNewError(ctx, ReviewWorkflow,
+			ReviewInput{WorkDir: in.WorkDir, Payload: validated.Payload})
+	}
+	return "Review complete; no actionable items.", nil
 }
