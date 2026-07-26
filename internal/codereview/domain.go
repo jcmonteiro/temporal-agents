@@ -11,6 +11,9 @@
 package codereview
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -142,4 +145,71 @@ func formatThread(n int, t ReviewThread) string {
 // commits.
 func FormatReplyBody(commitSHAs []string) string {
 	return strings.Join(commitSHAs, " + ")
+}
+
+// ReviewInput is the input to ReviewWorkflow.
+type ReviewInput struct {
+	// WorkDir is the repository directory the CLI was invoked from.
+	WorkDir string
+	// Payload is the structured JSON review actions carried over from the
+	// previous pass. It is empty on the first run: with no payload the workflow
+	// only reviews; with a payload it first implements the actions—checking
+	// HEAD before and after—then reviews again.
+	Payload string
+}
+
+// ReviewPrompt is the instruction handed to the Pi agent to review the current
+// branch. It is deliberately terse; the agent decides how to review.
+const ReviewPrompt = "Perform a thorough code review of the current branch"
+
+// ReviewPayload is the structured output of the review-structuring step. Each
+// review item is an arbitrary object of name/value pairs, matching the shape
+// requested from the agent: {"review": [{"itemName": "itemValue"}, ...]}.
+type ReviewPayload struct {
+	Review []map[string]any `json:"review"`
+}
+
+// BuildStructurePrompt renders the structuring instruction around a review's
+// last output. This hardens the flow by forcing the free-form review text into
+// the JSON shape the rest of the workflow expects.
+func BuildStructurePrompt(lastOutput string) string {
+	return `Structure in JSON format {"review": [{"itemName": "itemValue"}, {"itemName", "itemValue"}]} the actions from the code review described below (DO NOT PERFORM A CODE REVIEW): ` + lastOutput
+}
+
+// BuildImplementPrompt renders the instruction that has the Pi agent implement
+// the actions carried in a structured review payload. It asks the agent to
+// commit its work so the workflow's HEAD-advanced check can confirm the change
+// actually landed.
+func BuildImplementPrompt(payload string) string {
+	return `Implement the actions from the structured code review below. For each item, read the referenced code for context and make the change. Confirm lint/typecheck/build (and synth, if infra) pass, then commit all your work.
+
+` + payload
+}
+
+// ParseReviewPayload extracts and validates the structured review JSON produced
+// by the structuring step. It tolerates surrounding prose or Markdown code
+// fences by parsing the outermost JSON object, and fails when no object is
+// present or it does not decode into the expected schema.
+func ParseReviewPayload(s string) (ReviewPayload, error) {
+	js := extractJSONObject(s)
+	if js == "" {
+		return ReviewPayload{}, errors.New("no JSON object found in review output")
+	}
+	var p ReviewPayload
+	if err := json.Unmarshal([]byte(js), &p); err != nil {
+		return ReviewPayload{}, fmt.Errorf("parse review JSON: %w", err)
+	}
+	return p, nil
+}
+
+// extractJSONObject returns the substring spanning the first "{" through the
+// last "}", or "" when no such span exists. This is enough to peel a JSON
+// object out of an agent reply that may wrap it in explanation or code fences.
+func extractJSONObject(s string) string {
+	start := strings.Index(s, "{")
+	end := strings.LastIndex(s, "}")
+	if start < 0 || end < 0 || end < start {
+		return ""
+	}
+	return s[start : end+1]
 }
