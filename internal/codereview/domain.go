@@ -1,7 +1,14 @@
-// Package codereview implements the "code review-loop" feature: a Temporal
-// workflow that lets the Pi agent address the unresolved review comments on the
-// open pull request for the current branch, then replies to and resolves those
-// comments and requests a fresh Copilot review.
+// Package codereview implements two related review-loop features that share the
+// same activities and domain logic:
+//
+//   - The Copilot pilot loop (PilotWorkflow): a Temporal workflow that lets the
+//     Pi agent address the unresolved review comments on the open pull request
+//     for the current branch, then replies to and resolves those comments and
+//     requests a fresh Copilot review.
+//   - The local review loop (ReviewWorkflow): a workflow that runs entirely on
+//     the host machine, alternating a Pi-agent code review of the current
+//     branch with a Pi-agent implement pass, converging over a bounded number
+//     of passes.
 //
 // It is organized around hexagonal architecture: this package holds the
 // application core (the workflow orchestration, domain types, and pure logic)

@@ -128,6 +128,12 @@ func (a *Activities) LoadUnresolvedComments(ctx context.Context, pr PullRequest)
 
 // MarkHeadAndStash records the current HEAD and stashes local changes if any,
 // returning a checkpoint the later steps compare against.
+//
+// Note: each review-loop pass calls this before running the agent and pops via
+// RestoreStash at the end. A pop that conflicts leaves the stash in place, so a
+// later pass would stash again on top of it. This is bounded by MaxReviewPasses
+// (the loop cannot run forever), but a leftover stash still needs manual
+// reconciliation (git stash list / git stash pop) once the loop ends.
 func (a *Activities) MarkHeadAndStash(ctx context.Context, in PilotInput) (Checkpoint, error) {
 	head, err := a.Git.Head(ctx, in.WorkDir)
 	if err != nil {
