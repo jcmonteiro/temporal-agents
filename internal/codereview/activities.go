@@ -2,7 +2,6 @@ package codereview
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"go.temporal.io/sdk/activity"
@@ -12,10 +11,6 @@ import (
 // errNoAdvance is the error type returned (non-retryable) when the agent
 // produced no new commits.
 const errNoAdvance = "NoCommits"
-
-// errInvalidReviewJSON is the error type returned (non-retryable) when the
-// structured review output does not validate against the expected schema.
-const errInvalidReviewJSON = "InvalidReviewJSON"
 
 // Activities bundles the driven adapters the workflow orchestrates. It is
 // registered with the Temporal worker; each exported method is an activity.
@@ -62,32 +57,12 @@ type RestoreStashRequest struct {
 	Stashed bool
 }
 
-// StructureReviewRequest is the input to StructureReview.
-type StructureReviewRequest struct {
-	WorkDir string
-	// LastOutput is the review agent's final message, structured into JSON.
-	LastOutput string
-}
-
 // RunImplementRequest is the input to RunImplementAgent.
 type RunImplementRequest struct {
 	WorkDir string
-	// Payload is the structured review JSON whose actions are implemented.
+	// Payload is the previous pass's raw review output whose changes are
+	// implemented.
 	Payload string
-}
-
-// ValidateReviewRequest is the input to ValidateReviewJSON.
-type ValidateReviewRequest struct {
-	// Payload is the (possibly prose-wrapped) structured review output.
-	Payload string
-}
-
-// ValidateReviewResult is the output of ValidateReviewJSON. Payload is the
-// canonical, re-serialized JSON after non-actionable items are filtered out;
-// ItemCount is how many actionable review items remain.
-type ValidateReviewResult struct {
-	Payload   string
-	ItemCount int
 }
 
 // DeterminePR finds the current branch and its single open PR, failing when
@@ -223,38 +198,10 @@ func (a *Activities) RunReviewAgent(ctx context.Context, in ReviewInput) (string
 	return a.Agent.Run(ctx, ReviewPrompt, in.WorkDir)
 }
 
-// StructureReview drives the Pi agent to reshape a review's free-form output
-// into the structured JSON the workflow expects. It hardens the flow: the next
-// steps can rely on a known schema rather than parsing prose.
-func (a *Activities) StructureReview(ctx context.Context, req StructureReviewRequest) (string, error) {
-	prompt := BuildStructurePrompt(req.LastOutput)
-	return a.Agent.Run(ctx, prompt, req.WorkDir)
-}
-
-// ValidateReviewJSON deterministically validates the structured review output
-// against the expected schema and reports how many actionable items it holds.
-// It returns the canonical, re-serialized JSON so continuations carry clean
-// input. Invalid output is a non-retryable failure: re-running the same
-// deterministic check on the same bytes cannot succeed.
-func (a *Activities) ValidateReviewJSON(ctx context.Context, req ValidateReviewRequest) (ValidateReviewResult, error) {
-	p, err := ParseReviewPayload(req.Payload)
-	if err != nil {
-		return ValidateReviewResult{}, temporal.NewNonRetryableApplicationError(
-			"invalid review JSON", errInvalidReviewJSON, err)
-	}
-	// Keep only items the implement pass can actually action, so a noise item
-	// does not force (and then fail) another pass.
-	p = FilterActionable(p)
-	norm, err := json.Marshal(p)
-	if err != nil {
-		return ValidateReviewResult{}, fmt.Errorf("re-serialize review JSON: %w", err)
-	}
-	return ValidateReviewResult{Payload: string(norm), ItemCount: len(p.Review)}, nil
-}
-
-// RunImplementAgent drives the Pi agent to implement the actions carried in a
-// structured review payload, committing its work so the workflow's
-// HEAD-advanced check can confirm the change landed.
+// RunImplementAgent drives the Pi agent to implement the changes called for by
+// the previous pass's raw review output, committing its work so the workflow's
+// HEAD-advanced check can confirm the change landed (or detect that there was
+// nothing to change).
 func (a *Activities) RunImplementAgent(ctx context.Context, req RunImplementRequest) (string, error) {
 	prompt := BuildImplementPrompt(req.Payload)
 	return a.Agent.Run(ctx, prompt, req.WorkDir)

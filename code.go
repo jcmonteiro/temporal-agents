@@ -153,14 +153,13 @@ func reviewHelp(w io.Writer) {
 	fmt.Fprint(w, `temporal-agents code review — review the current branch locally in a loop
 
 Runs a Pi agent to review the current branch on this machine (no GitHub or
-Copilot involved). The review's output is structured into JSON and validated,
-then:
+Copilot involved). The review's raw output is carried into the next pass, where:
 
-  - If it lists actionable items, the workflow continues as new with that
-    payload: the next pass has a Pi agent implement the actions (checking the
-    git HEAD before and after to confirm the change landed) and then reviews
-    again.
-  - If it lists nothing actionable, the workflow finishes successfully.
+  - A Pi agent implements that feedback (checking the git HEAD before and after
+    to confirm the change landed) and then reviews the branch again.
+  - When an implement pass makes no commits, there was nothing left to change
+    and the workflow finishes successfully. It also stops after a bounded number
+    of passes.
 
 In other words: with a payload it implements + reviews; without one it just
 reviews.

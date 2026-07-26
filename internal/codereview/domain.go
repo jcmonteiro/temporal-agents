@@ -7,8 +7,9 @@
 //     requests a fresh Copilot review.
 //   - The local review loop (ReviewWorkflow): a workflow that runs entirely on
 //     the host machine, alternating a Pi-agent code review of the current
-//     branch with a Pi-agent implement pass, converging over a bounded number
-//     of passes.
+//     branch with a Pi-agent implement pass that acts on the review's raw
+//     output, converging when a pass has nothing left to commit (bounded by a
+//     maximum number of passes).
 //
 // It is organized around hexagonal architecture: this package holds the
 // application core (the workflow orchestration, domain types, and pure logic)
@@ -18,9 +19,6 @@
 package codereview
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 )
@@ -165,10 +163,10 @@ const MaxReviewPasses = 5
 type ReviewInput struct {
 	// WorkDir is the repository directory the CLI was invoked from.
 	WorkDir string
-	// Payload is the structured JSON review actions carried over from the
-	// previous pass. It is empty on the first run: with no payload the workflow
-	// only reviews; with a payload it first implements the actions—checking
-	// HEAD before and after—then reviews again.
+	// Payload is the previous pass's raw review output, carried over verbatim.
+	// It is empty on the first run: with no payload the workflow only reviews;
+	// with a payload it first implements that feedback—checking HEAD before and
+	// after—then reviews again.
 	Payload string
 	// Pass counts how many implement-then-review passes have run so far. The
 	// first (review-only) run is pass 0; each continue-as-new increments it. The
@@ -180,91 +178,12 @@ type ReviewInput struct {
 // branch. It is deliberately terse; the agent decides how to review.
 const ReviewPrompt = "Perform a thorough code review of the current branch"
 
-// ReviewPayload is the structured output of the review-structuring step. Each
-// review item is an arbitrary object of name/value pairs, matching the shape
-// requested from the agent: {"review": [{"itemName": "itemValue"}, ...]}.
-type ReviewPayload struct {
-	Review []map[string]any `json:"review"`
-}
+// BuildImplementPrompt renders the instruction that has the Pi agent act on a
+// code review's raw output. It asks the agent to commit its work so the
+// workflow's HEAD-advanced check can confirm the change landed, and to make no
+// commit when nothing needs changing so the loop can recognize convergence.
+func BuildImplementPrompt(review string) string {
+	return `Implement the actionable changes called for by the code review below. Read the referenced code for context and make the changes. Confirm lint/typecheck/build (and synth, if infra) pass, then commit all your work. If nothing in the review requires a code change, do not commit anything.
 
-// BuildStructurePrompt renders the structuring instruction around a review's
-// last output. This hardens the flow by forcing the free-form review text into
-// the JSON shape the rest of the workflow expects. It asks for only blocking,
-// actionable items so the loop converges instead of chasing every nitpick the
-// review surfaced.
-func BuildStructurePrompt(lastOutput string) string {
-	return `Structure in JSON format {"review": [{"itemName": "itemValue"}, {"itemName": "itemValue"}]} the actions from the code review described below (DO NOT PERFORM A CODE REVIEW). Include ONLY blocking, actionable items that require a concrete code change; omit nitpicks, praise, and anything that cannot be actioned. If nothing is blocking, return {"review": []}: ` + lastOutput
-}
-
-// BuildImplementPrompt renders the instruction that has the Pi agent implement
-// the actions carried in a structured review payload. It asks the agent to
-// commit its work so the workflow's HEAD-advanced check can confirm the change
-// actually landed.
-func BuildImplementPrompt(payload string) string {
-	return `Implement the actions from the structured code review below. For each item, read the referenced code for context and make the change. Confirm lint/typecheck/build (and synth, if infra) pass, then commit all your work.
-
-` + payload
-}
-
-// ParseReviewPayload extracts and validates the structured review JSON produced
-// by the structuring step. It tolerates surrounding prose or Markdown code
-// fences by parsing the outermost JSON object, and fails when no object is
-// present or it does not decode into the expected schema.
-func ParseReviewPayload(s string) (ReviewPayload, error) {
-	js := extractJSONObject(s)
-	if js == "" {
-		return ReviewPayload{}, errors.New("no JSON object found in review output")
-	}
-	var p ReviewPayload
-	if err := json.Unmarshal([]byte(js), &p); err != nil {
-		return ReviewPayload{}, fmt.Errorf("parse review JSON: %w", err)
-	}
-	return p, nil
-}
-
-// FilterActionable drops review items the implement pass could not act on. An
-// item is actionable only when it carries at least one non-empty string field:
-// empty objects and items whose values are all blank are noise that would
-// otherwise force another implement pass (which then fails with NoCommits when
-// there is nothing to change). Filtering here keeps "actionable" from meaning
-// merely "non-empty array".
-func FilterActionable(p ReviewPayload) ReviewPayload {
-	out := ReviewPayload{Review: make([]map[string]any, 0, len(p.Review))}
-	for _, item := range p.Review {
-		if itemIsActionable(item) {
-			out.Review = append(out.Review, item)
-		}
-	}
-	return out
-}
-
-// itemIsActionable reports whether a review item carries any non-blank string
-// content the agent could act on. Non-string values (numbers, bools, nested
-// objects) also count as content, since they signal a populated item.
-func itemIsActionable(item map[string]any) bool {
-	for _, v := range item {
-		switch val := v.(type) {
-		case string:
-			if strings.TrimSpace(val) != "" {
-				return true
-			}
-		case nil:
-			// blank
-		default:
-			return true
-		}
-	}
-	return false
-}
-
-// extractJSONObject returns the substring spanning the first "{" through the
-// last "}", or "" when no such span exists. This is enough to peel a JSON
-// object out of an agent reply that may wrap it in explanation or code fences.
-func extractJSONObject(s string) string {
-	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
-	if start < 0 || end < 0 || end < start {
-		return ""
-	}
-	return s[start : end+1]
+` + review
 }
