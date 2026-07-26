@@ -69,6 +69,18 @@ func TestBuildStructurePrompt_EmbedsLastOutputAndForbidsReviewing(t *testing.T) 
 	if !strings.Contains(got, "rename X and add tests for Y") {
 		t.Fatalf("structure prompt should embed the last output:\n%s", got)
 	}
+	// The example shape must be valid JSON (colon, not comma) so it does not bias
+	// the agent toward malformed output.
+	if strings.Contains(got, `{"itemName", "itemValue"}`) {
+		t.Fatalf("structure prompt example must use a colon, not a comma:\n%s", got)
+	}
+	if !strings.Contains(got, `{"itemName": "itemValue"}`) {
+		t.Fatalf("structure prompt should show a valid JSON example:\n%s", got)
+	}
+	// It must ask for only blocking, actionable items so the loop converges.
+	if !strings.Contains(got, "blocking") {
+		t.Fatalf("structure prompt should constrain to blocking items:\n%s", got)
+	}
 }
 
 func TestBuildImplementPrompt_EmbedsPayloadAndAsksToCommit(t *testing.T) {

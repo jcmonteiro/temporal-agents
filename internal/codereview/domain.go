@@ -171,9 +171,11 @@ type ReviewPayload struct {
 
 // BuildStructurePrompt renders the structuring instruction around a review's
 // last output. This hardens the flow by forcing the free-form review text into
-// the JSON shape the rest of the workflow expects.
+// the JSON shape the rest of the workflow expects. It asks for only blocking,
+// actionable items so the loop converges instead of chasing every nitpick the
+// review surfaced.
 func BuildStructurePrompt(lastOutput string) string {
-	return `Structure in JSON format {"review": [{"itemName": "itemValue"}, {"itemName", "itemValue"}]} the actions from the code review described below (DO NOT PERFORM A CODE REVIEW): ` + lastOutput
+	return `Structure in JSON format {"review": [{"itemName": "itemValue"}, {"itemName": "itemValue"}]} the actions from the code review described below (DO NOT PERFORM A CODE REVIEW). Include ONLY blocking, actionable items that require a concrete code change; omit nitpicks, praise, and anything that cannot be actioned. If nothing is blocking, return {"review": []}: ` + lastOutput
 }
 
 // BuildImplementPrompt renders the instruction that has the Pi agent implement
