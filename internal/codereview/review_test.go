@@ -59,7 +59,27 @@ func TestReviewWorkflow_NoPayload_ActionableItems_ContinuesAsNewWithPayload(t *t
 	var canErr *workflow.ContinueAsNewError
 	require.ErrorAs(t, env.GetWorkflowError(), &canErr)
 	// The first pass has no payload, so it must only review.
-	env.AssertNotCalled(t, "RunImplementAgent", mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, activityName(a.RunImplementAgent), mock.Anything, mock.Anything)
+}
+
+func TestReviewWorkflow_ActionableItems_AtPassCap_StopsInsteadOfLooping(t *testing.T) {
+	env := newReviewEnv(t)
+	structured := `{"review":[{"itemName":"still something"}]}`
+
+	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return("still something", nil)
+	env.OnActivity(a.StructureReview, mock.Anything, mock.Anything).Return(structured, nil)
+	env.OnActivity(a.ValidateReviewJSON, mock.Anything, mock.Anything).
+		Return(ValidateReviewResult{Payload: structured, ItemCount: 1}, nil)
+
+	// The next pass would be MaxReviewPasses, so the loop must stop rather than
+	// continue as new, even though actionable items remain.
+	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo", Pass: MaxReviewPasses - 1})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	var out string
+	require.NoError(t, env.GetWorkflowResult(&out))
+	require.Contains(t, out, "stopped after")
 }
 
 func TestReviewWorkflow_WithPayload_ImplementsCheckingHeadThenReviews(t *testing.T) {

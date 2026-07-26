@@ -152,6 +152,9 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, error) {
 //   - If the validated payload has actionable items, it continues as new with
 //     that payload, so the next pass implements them and reviews again. If it
 //     has none, the chain ends successfully.
+//
+// The loop is bounded: it stops after MaxReviewPasses passes even when the
+// review agent keeps surfacing items, so it cannot run (and commit) forever.
 func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (string, error) {
 	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
 	// should not run forever.
@@ -224,10 +227,17 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (string, error) {
 	}
 
 	// Actionable items: implement them next pass by continuing as new with the
-	// structured payload. Otherwise the chain ends.
+	// structured payload, unless the pass cap is reached. Otherwise the chain
+	// ends.
 	if validated.ItemCount > 0 {
+		nextPass := in.Pass + 1
+		if nextPass >= MaxReviewPasses {
+			return fmt.Sprintf(
+				"Review stopped after %d pass(es); %d actionable item(s) still remain.",
+				MaxReviewPasses, validated.ItemCount), nil
+		}
 		return "", workflow.NewContinueAsNewError(ctx, ReviewWorkflow,
-			ReviewInput{WorkDir: in.WorkDir, Payload: validated.Payload})
+			ReviewInput{WorkDir: in.WorkDir, Payload: validated.Payload, Pass: nextPass})
 	}
 	return "Review complete; no actionable items.", nil
 }

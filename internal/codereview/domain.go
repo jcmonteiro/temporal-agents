@@ -147,6 +147,13 @@ func FormatReplyBody(commitSHAs []string) string {
 	return strings.Join(commitSHAs, " + ")
 }
 
+// MaxReviewPasses caps how many implement-then-review passes the review loop
+// runs before stopping, even if the review agent keeps surfacing items. Without
+// a cap the loop can run indefinitely, each pass committing code and consuming a
+// full agent run; the review agent is prompted to be thorough and will almost
+// always find something.
+const MaxReviewPasses = 5
+
 // ReviewInput is the input to ReviewWorkflow.
 type ReviewInput struct {
 	// WorkDir is the repository directory the CLI was invoked from.
@@ -156,6 +163,10 @@ type ReviewInput struct {
 	// only reviews; with a payload it first implements the actions—checking
 	// HEAD before and after—then reviews again.
 	Payload string
+	// Pass counts how many implement-then-review passes have run so far. The
+	// first (review-only) run is pass 0; each continue-as-new increments it. The
+	// loop stops once it reaches MaxReviewPasses so it cannot run forever.
+	Pass int
 }
 
 // ReviewPrompt is the instruction handed to the Pi agent to review the current
