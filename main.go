@@ -431,6 +431,7 @@ func runWorker(opts notifyOptions) {
 	// activities (both share the same Activities bundle).
 	w.RegisterWorkflow(codereview.PilotWorkflow)
 	w.RegisterWorkflow(codereview.ReviewWorkflow)
+	w.RegisterWorkflow(codereview.DevelopWorkflow)
 	w.RegisterActivity(&codereview.Activities{
 		Git:   gitcli.New(),
 		PRs:   ghcli.New(),
