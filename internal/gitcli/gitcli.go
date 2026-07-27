@@ -25,6 +25,12 @@ func (g Git) CurrentBranch(ctx context.Context, dir string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+// CreateBranch creates and checks out a new branch at the current HEAD in dir.
+func (g Git) CreateBranch(ctx context.Context, dir, branch string) error {
+	_, err := run(ctx, dir, "checkout", "-b", branch)
+	return err
+}
+
 // Head returns the commit SHA that HEAD points at in dir.
 func (g Git) Head(ctx context.Context, dir string) (string, error) {
 	out, err := run(ctx, dir, "rev-parse", "HEAD")
