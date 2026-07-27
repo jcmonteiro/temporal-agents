@@ -57,6 +57,23 @@ func TestBuildPrompt_ReplaceDropsDefault(t *testing.T) {
 	}
 }
 
+func TestBuildImplementPrompt_EmbedsReviewAndAsksToCommit(t *testing.T) {
+	review := "Rename X for clarity and add tests for Y."
+	got := BuildImplementPrompt(review)
+
+	if !strings.Contains(got, review) {
+		t.Fatalf("implement prompt should embed the review output:\n%s", got)
+	}
+	if !strings.Contains(got, "commit") {
+		t.Fatalf("implement prompt should ask the agent to commit:\n%s", got)
+	}
+	// It must tell the agent not to commit when nothing needs changing, so the
+	// workflow's no-commits success exit is reachable.
+	if !strings.Contains(got, "do not commit anything") {
+		t.Fatalf("implement prompt should permit making no commit when nothing changes:\n%s", got)
+	}
+}
+
 func TestFormatReplyBody(t *testing.T) {
 	tests := []struct {
 		name string

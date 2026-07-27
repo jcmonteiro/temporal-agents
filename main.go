@@ -347,8 +347,10 @@ func runWorker() {
 	w.RegisterWorkflow(PromptWorkflow)
 	w.RegisterActivity(RunPiAgent)
 
-	// The "code pilot" workflow and its port-backed activities.
+	// The "code pilot" and "code review" workflows and their port-backed
+	// activities (both share the same Activities bundle).
 	w.RegisterWorkflow(codereview.PilotWorkflow)
+	w.RegisterWorkflow(codereview.ReviewWorkflow)
 	w.RegisterActivity(&codereview.Activities{
 		Git:   gitcli.New(),
 		PRs:   ghcli.New(),

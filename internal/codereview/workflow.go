@@ -1,7 +1,9 @@
 package codereview
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.temporal.io/sdk/temporal"
@@ -133,4 +135,98 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, error) {
 
 	return fmt.Sprintf("Addressed %d comment(s) on PR #%d with %d commit(s); requested Copilot review.",
 		len(loaded.Threads), pr.Number, len(commits)), true, nil
+}
+
+// ReviewWorkflow drives the "code review" loop entirely on the host machine.
+// Each pass:
+//
+//   - When it carries a payload (the previous pass's raw review output), it
+//     first implements that feedback with the Pi agent, checking HEAD before
+//     (MarkHeadAndStash) and after (EnsureHeadAdvanced) to confirm the change
+//     landed—reusing the same activities as the Copilot pilot flow. If the
+//     implement pass makes no commits, the agent found nothing left to change,
+//     so the loop ends successfully. Any changes stashed before the agent ran
+//     are restored best-effort at the end of the pass. With no payload it skips
+//     this and just reviews.
+//   - It then runs the Pi agent to review the current branch. Because the
+//     review activity blocks until it completes, no waiting/polling is needed.
+//   - It continues as new with that raw review output as the next pass's
+//     payload, so the next pass implements it and reviews again.
+//
+// The loop is also bounded: it stops after MaxReviewPasses passes even when the
+// implement pass keeps making commits, so it cannot run forever.
+func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (string, error) {
+	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
+	// should not run forever.
+	quick := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 2 * time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
+	})
+	// The agent steps are long-running and stream heartbeats.
+	agentCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: time.Hour,
+		HeartbeatTimeout:    time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
+	})
+	// Best-effort steps run once: retrying a failed stash pop (e.g. a merge
+	// conflict) would only compound the mess.
+	bestEffort := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+	})
+
+	var a *Activities
+
+	// With a payload: implement the previous pass's review feedback, verifying
+	// HEAD advanced. No new commits means the agent found nothing left to change,
+	// so the branch has converged and the loop ends successfully.
+	var cp Checkpoint
+	if strings.TrimSpace(in.Payload) != "" {
+		if err := workflow.ExecuteActivity(quick, a.MarkHeadAndStash, PilotInput{WorkDir: in.WorkDir}).Get(quick, &cp); err != nil {
+			return "", err
+		}
+
+		implReq := RunImplementRequest{WorkDir: in.WorkDir, Payload: in.Payload}
+		if err := workflow.ExecuteActivity(agentCtx, a.RunImplementAgent, implReq).Get(agentCtx, nil); err != nil {
+			return "", err
+		}
+
+		var commits []string
+		advReq := EnsureHeadAdvancedRequest{WorkDir: in.WorkDir, Checkpoint: cp}
+		if err := workflow.ExecuteActivity(quick, a.EnsureHeadAdvanced, advReq).Get(quick, &commits); err != nil {
+			// A NoCommits result is the success exit: the implement pass had nothing
+			// to change. EnsureHeadAdvanced already restored any stash on this path,
+			// so return without further cleanup.
+			var appErr *temporal.ApplicationError
+			if errors.As(err, &appErr) && appErr.Type() == errNoAdvance {
+				return "Review complete; the implement pass found nothing to commit.", nil
+			}
+			return "", err
+		}
+	}
+
+	// Review the current branch. This blocks until the review completes.
+	var reviewOutput string
+	if err := workflow.ExecuteActivity(agentCtx, a.RunReviewAgent, ReviewInput{WorkDir: in.WorkDir}).Get(agentCtx, &reviewOutput); err != nil {
+		return "", err
+	}
+
+	// Put the developer's pre-existing local changes back before ending the
+	// pass. This is best-effort: a conflict against the implement commits leaves
+	// the stash in place for manual resolution rather than failing the run.
+	if cp.Stashed {
+		restoreReq := RestoreStashRequest{WorkDir: in.WorkDir, Stashed: true}
+		if err := workflow.ExecuteActivity(bestEffort, a.RestoreStash, restoreReq).Get(bestEffort, nil); err != nil {
+			workflow.GetLogger(ctx).Warn("could not restore stashed changes; they remain in the git stash", "error", err)
+		}
+	}
+
+	// Hand the raw review output to the next pass to implement, bounded by the
+	// pass cap so the loop cannot run forever.
+	nextPass := in.Pass + 1
+	if nextPass >= MaxReviewPasses {
+		return fmt.Sprintf("Review stopped after %d pass(es).", MaxReviewPasses), nil
+	}
+	return "", workflow.NewContinueAsNewError(ctx, ReviewWorkflow,
+		ReviewInput{WorkDir: in.WorkDir, Payload: reviewOutput, Pass: nextPass})
 }

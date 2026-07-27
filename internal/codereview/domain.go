@@ -1,7 +1,15 @@
-// Package codereview implements the "code review-loop" feature: a Temporal
-// workflow that lets the Pi agent address the unresolved review comments on the
-// open pull request for the current branch, then replies to and resolves those
-// comments and requests a fresh Copilot review.
+// Package codereview implements two related review-loop features that share the
+// same activities and domain logic:
+//
+//   - The Copilot pilot loop (PilotWorkflow): a Temporal workflow that lets the
+//     Pi agent address the unresolved review comments on the open pull request
+//     for the current branch, then replies to and resolves those comments and
+//     requests a fresh Copilot review.
+//   - The local review loop (ReviewWorkflow): a workflow that runs entirely on
+//     the host machine, alternating a Pi-agent code review of the current
+//     branch with a Pi-agent implement pass that acts on the review's raw
+//     output, converging when a pass has nothing left to commit (bounded by a
+//     maximum number of passes).
 //
 // It is organized around hexagonal architecture: this package holds the
 // application core (the workflow orchestration, domain types, and pure logic)
@@ -142,4 +150,40 @@ func formatThread(n int, t ReviewThread) string {
 // commits.
 func FormatReplyBody(commitSHAs []string) string {
 	return strings.Join(commitSHAs, " + ")
+}
+
+// MaxReviewPasses caps how many implement-then-review passes the review loop
+// runs before stopping, even if the review agent keeps surfacing items. Without
+// a cap the loop can run indefinitely, each pass committing code and consuming a
+// full agent run; the review agent is prompted to be thorough and will almost
+// always find something.
+const MaxReviewPasses = 5
+
+// ReviewInput is the input to ReviewWorkflow.
+type ReviewInput struct {
+	// WorkDir is the repository directory the CLI was invoked from.
+	WorkDir string
+	// Payload is the previous pass's raw review output, carried over verbatim.
+	// It is empty on the first run: with no payload the workflow only reviews;
+	// with a payload it first implements that feedback—checking HEAD before and
+	// after—then reviews again.
+	Payload string
+	// Pass counts how many implement-then-review passes have run so far. The
+	// first (review-only) run is pass 0; each continue-as-new increments it. The
+	// loop stops once it reaches MaxReviewPasses so it cannot run forever.
+	Pass int
+}
+
+// ReviewPrompt is the instruction handed to the Pi agent to review the current
+// branch. It is deliberately terse; the agent decides how to review.
+const ReviewPrompt = "Perform a thorough code review of the current branch"
+
+// BuildImplementPrompt renders the instruction that has the Pi agent act on a
+// code review's raw output. It asks the agent to commit its work so the
+// workflow's HEAD-advanced check can confirm the change landed, and to make no
+// commit when nothing needs changing so the loop can recognize convergence.
+func BuildImplementPrompt(review string) string {
+	return `Implement the actionable changes called for by the code review below. Read the referenced code for context and make the changes. Confirm lint/typecheck/build (and synth, if infra) pass, then commit all your work. If nothing in the review requires a code change, do not commit anything.
+
+` + review
 }

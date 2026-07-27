@@ -57,6 +57,14 @@ type RestoreStashRequest struct {
 	Stashed bool
 }
 
+// RunImplementRequest is the input to RunImplementAgent.
+type RunImplementRequest struct {
+	WorkDir string
+	// Payload is the previous pass's raw review output whose changes are
+	// implemented.
+	Payload string
+}
+
 // DeterminePR finds the current branch and its single open PR, failing when
 // there is no open PR or more than one.
 func (a *Activities) DeterminePR(ctx context.Context, in PilotInput) (PullRequest, error) {
@@ -95,6 +103,12 @@ func (a *Activities) LoadUnresolvedComments(ctx context.Context, pr PullRequest)
 
 // MarkHeadAndStash records the current HEAD and stashes local changes if any,
 // returning a checkpoint the later steps compare against.
+//
+// Note: each review-loop pass calls this before running the agent and pops via
+// RestoreStash at the end. A pop that conflicts leaves the stash in place, so a
+// later pass would stash again on top of it. This is bounded by MaxReviewPasses
+// (the loop cannot run forever), but a leftover stash still needs manual
+// reconciliation (git stash list / git stash pop) once the loop ends.
 func (a *Activities) MarkHeadAndStash(ctx context.Context, in PilotInput) (Checkpoint, error) {
 	head, err := a.Git.Head(ctx, in.WorkDir)
 	if err != nil {
@@ -175,6 +189,22 @@ func (a *Activities) RequestCopilotReview(ctx context.Context, pr PullRequest) e
 		return fmt.Errorf("request Copilot review: %w", err)
 	}
 	return nil
+}
+
+// RunReviewAgent drives the Pi agent to review the current branch and returns
+// its final message. Unlike the Copilot flow, the review runs on the host and
+// blocks until it completes, so no waiting/polling is needed afterwards.
+func (a *Activities) RunReviewAgent(ctx context.Context, in ReviewInput) (string, error) {
+	return a.Agent.Run(ctx, ReviewPrompt, in.WorkDir)
+}
+
+// RunImplementAgent drives the Pi agent to implement the changes called for by
+// the previous pass's raw review output, committing its work so the workflow's
+// HEAD-advanced check can confirm the change landed (or detect that there was
+// nothing to change).
+func (a *Activities) RunImplementAgent(ctx context.Context, req RunImplementRequest) (string, error) {
+	prompt := BuildImplementPrompt(req.Payload)
+	return a.Agent.Run(ctx, prompt, req.WorkDir)
 }
 
 // RestoreStash pops changes stashed by MarkHeadAndStash. It is invoked as a
