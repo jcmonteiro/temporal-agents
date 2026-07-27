@@ -14,6 +14,22 @@ import (
 // still-pending Copilot review.
 const reviewPollInterval = time.Minute
 
+// notifyChainComplete sends a best-effort completion notification at a chain's
+// terminal step. Failures are logged and swallowed so a notification problem
+// never fails an otherwise successful workflow. It must be called before the
+// workflow returns (never on a continue-as-new path), since continue-as-new
+// cancels any in-flight activity.
+func notifyChainComplete(ctx workflow.Context, title, body string) {
+	opts := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 30 * time.Second,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
+	})
+	var a *Activities
+	if err := workflow.ExecuteActivity(opts, a.Notify, Notification{Title: title, Body: body}).Get(opts, nil); err != nil {
+		workflow.GetLogger(ctx).Warn("could not send completion notification", "error", err)
+	}
+}
+
 // PilotWorkflow drives the "code pilot" loop: it finds the open PR for the
 // current branch, waits out any in-flight review, has the Pi agent address the
 // PR's unresolved review comments, then replies to and resolves those comments
@@ -33,6 +49,7 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (string, error) {
 	if in.Chain && addressed {
 		return "", workflow.NewContinueAsNewError(ctx, PilotWorkflow, in)
 	}
+	notifyChainComplete(ctx, "Copilot review chain complete", summary)
 	return summary, nil
 }
 
@@ -199,7 +216,9 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (string, error) {
 			// so return without further cleanup.
 			var appErr *temporal.ApplicationError
 			if errors.As(err, &appErr) && appErr.Type() == errNoAdvance {
-				return "Review complete; the implement pass found nothing to commit.", nil
+				summary := "Review complete; the implement pass found nothing to commit."
+				notifyChainComplete(ctx, "Local review chain complete", summary)
+				return summary, nil
 			}
 			return "", err
 		}
@@ -225,7 +244,9 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (string, error) {
 	// pass cap so the loop cannot run forever.
 	nextPass := in.Pass + 1
 	if nextPass >= MaxReviewPasses {
-		return fmt.Sprintf("Review stopped after %d pass(es).", MaxReviewPasses), nil
+		summary := fmt.Sprintf("Review stopped after %d pass(es).", MaxReviewPasses)
+		notifyChainComplete(ctx, "Local review chain complete", summary)
+		return summary, nil
 	}
 	return "", workflow.NewContinueAsNewError(ctx, ReviewWorkflow,
 		ReviewInput{WorkDir: in.WorkDir, Payload: reviewOutput, Pass: nextPass})

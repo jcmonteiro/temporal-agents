@@ -152,3 +152,25 @@ func TestReviewWorkflow_WithPayload_ImplementAgentError_Fails(t *testing.T) {
 	// A failed implement must stop before reviewing again.
 	env.AssertNotCalled(t, activityName(a.RunReviewAgent), mock.Anything, mock.Anything)
 }
+
+func TestReviewWorkflow_Complete_SendsLocalChainNotification(t *testing.T) {
+	env := newReviewEnv(t)
+
+	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
+		Return(Checkpoint{HeadSHA: "base"}, nil)
+	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return("nothing to change", nil)
+	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).
+		Return(nil, temporal.NewNonRetryableApplicationError("no commits", errNoAdvance, nil))
+	var got Notification
+	env.OnActivity(a.Notify, mock.Anything, mock.MatchedBy(func(n Notification) bool {
+		got = n
+		return true
+	})).Return(nil)
+
+	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo", Payload: "prior review"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	// Converging the local review loop notifies that its chain is done.
+	require.Equal(t, "Local review chain complete", got.Title)
+}

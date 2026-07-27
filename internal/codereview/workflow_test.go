@@ -210,3 +210,26 @@ func TestPilotWorkflow_NoNewCommits_FailsAndStopsBeforeReplying(t *testing.T) {
 	env.AssertNotCalled(t, activityName(a.ReplyAndResolve), mock.Anything, mock.Anything)
 	env.AssertNotCalled(t, activityName(a.RequestCopilotReview), mock.Anything, mock.Anything)
 }
+
+func TestPilotWorkflow_Complete_SendsCopilotChainNotification(t *testing.T) {
+	env := newEnv(t)
+	pr := PullRequest{Number: 7}
+
+	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
+	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
+		Return(LoadCommentsResult{Threads: nil}, nil)
+	var got Notification
+	env.OnActivity(a.Notify, mock.Anything, mock.MatchedBy(func(n Notification) bool {
+		got = n
+		return true
+	})).Return(nil)
+
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	// Finishing the pilot loop notifies that the Copilot review chain is done.
+	require.Equal(t, "Copilot review chain complete", got.Title)
+	require.Contains(t, got.Body, "nothing to do")
+}
