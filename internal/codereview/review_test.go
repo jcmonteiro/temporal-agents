@@ -9,6 +9,8 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
+
+	"temporal-agents/internal/notification"
 )
 
 // The review workflow tests exercise observable behavior — which activities run
@@ -18,6 +20,7 @@ func newReviewEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestWorkflowEnvironment()
 	env.RegisterActivity(&Activities{})
+	env.RegisterActivity(&notification.Activity{})
 	env.RegisterWorkflow(ReviewWorkflow)
 	return env
 }
@@ -161,8 +164,8 @@ func TestReviewWorkflow_Complete_SendsLocalChainNotification(t *testing.T) {
 	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return("nothing to change", nil)
 	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).
 		Return(nil, temporal.NewNonRetryableApplicationError("no commits", errNoAdvance, nil))
-	var got Notification
-	env.OnActivity(a.Notify, mock.Anything, mock.MatchedBy(func(n Notification) bool {
+	var got notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
 		got = n
 		return true
 	})).Return(nil)

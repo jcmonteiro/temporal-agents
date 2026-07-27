@@ -18,9 +18,6 @@ type Activities struct {
 	Git   Git
 	PRs   PullRequests
 	Agent Agent
-	// Notif sends completion notifications. It may be nil when no notifier is
-	// configured, in which case Notify is a no-op.
-	Notif Notifier
 }
 
 // LoadCommentsResult is the output of LoadUnresolvedComments.
@@ -208,19 +205,6 @@ func (a *Activities) RunReviewAgent(ctx context.Context, in ReviewInput) (string
 func (a *Activities) RunImplementAgent(ctx context.Context, req RunImplementRequest) (string, error) {
 	prompt := BuildImplementPrompt(req.Payload)
 	return a.Agent.Run(ctx, prompt, req.WorkDir)
-}
-
-// Notify delivers a completion notification via the configured Notifier. It is
-// invoked best-effort at a chain's terminal step; when no notifier is
-// configured it does nothing.
-func (a *Activities) Notify(ctx context.Context, n Notification) error {
-	if a.Notif == nil {
-		return nil
-	}
-	if err := a.Notif.Notify(ctx, n); err != nil {
-		return fmt.Errorf("send notification: %w", err)
-	}
-	return nil
 }
 
 // RestoreStash pops changes stashed by MarkHeadAndStash. It is invoked as a

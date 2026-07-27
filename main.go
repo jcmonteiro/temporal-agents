@@ -22,6 +22,7 @@ import (
 	"temporal-agents/internal/codereview"
 	"temporal-agents/internal/ghcli"
 	"temporal-agents/internal/gitcli"
+	"temporal-agents/internal/notification"
 	"temporal-agents/internal/notify"
 	"temporal-agents/internal/piagent"
 )
@@ -396,7 +397,7 @@ func parseWorkerFlags(args []string) notifyOptions {
 
 // buildNotifier assembles the fan-out notifier from the enabled adapters. When
 // none are enabled the returned Multi is empty and Notify is a no-op.
-func buildNotifier(opts notifyOptions) codereview.Notifier {
+func buildNotifier(opts notifyOptions) notification.Notifier {
 	var notifiers notify.Multi
 	if opts.desktop {
 		notifiers = append(notifiers, notify.NewDesktop())
@@ -434,8 +435,10 @@ func runWorker(opts notifyOptions) {
 		Git:   gitcli.New(),
 		PRs:   ghcli.New(),
 		Agent: piagent.Agent{},
-		Notif: buildNotifier(opts),
 	})
+
+	// A single notification activity, shared by every workflow that notifies.
+	w.RegisterActivity(&notification.Activity{Notifier: buildNotifier(opts)})
 
 	fmt.Printf("Worker ready · task queue %q", TaskQueue)
 	fmt.Printf(" · desktop notifications %s", onOff(opts.desktop))

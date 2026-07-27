@@ -8,6 +8,8 @@ import (
 
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
+
+	"temporal-agents/internal/notification"
 )
 
 // reviewPollInterval is how long the workflow sleeps between checks for a
@@ -24,8 +26,8 @@ func notifyChainComplete(ctx workflow.Context, title, body string) {
 		StartToCloseTimeout: 30 * time.Second,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
 	})
-	var a *Activities
-	if err := workflow.ExecuteActivity(opts, a.Notify, Notification{Title: title, Body: body}).Get(opts, nil); err != nil {
+	var na *notification.Activity
+	if err := workflow.ExecuteActivity(opts, na.Notify, notification.Notification{Title: title, Body: body}).Get(opts, nil); err != nil {
 		workflow.GetLogger(ctx).Warn("could not send completion notification", "error", err)
 	}
 }

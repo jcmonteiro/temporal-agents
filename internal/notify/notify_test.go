@@ -5,23 +5,23 @@ import (
 	"errors"
 	"testing"
 
-	"temporal-agents/internal/codereview"
+	"temporal-agents/internal/notification"
 )
 
 // fakeNotifier records the notifications it receives and optionally fails.
 type fakeNotifier struct {
-	got []codereview.Notification
+	got []notification.Notification
 	err error
 }
 
-func (f *fakeNotifier) Notify(_ context.Context, n codereview.Notification) error {
+func (f *fakeNotifier) Notify(_ context.Context, n notification.Notification) error {
 	f.got = append(f.got, n)
 	return f.err
 }
 
 func TestMultiDeliversToEveryNotifier(t *testing.T) {
 	a, b := &fakeNotifier{}, &fakeNotifier{}
-	n := codereview.Notification{Title: "done", Body: "all good"}
+	n := notification.Notification{Title: "done", Body: "all good"}
 
 	if err := (Multi{a, b}).Notify(context.Background(), n); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -39,7 +39,7 @@ func TestMultiDeliversToAllEvenWhenOneFails(t *testing.T) {
 	failing := &fakeNotifier{err: boom}
 	ok := &fakeNotifier{}
 
-	err := (Multi{failing, ok}).Notify(context.Background(), codereview.Notification{Title: "t"})
+	err := (Multi{failing, ok}).Notify(context.Background(), notification.Notification{Title: "t"})
 
 	if !errors.Is(err, boom) {
 		t.Errorf("error = %v, want it to wrap %v", err, boom)
@@ -50,7 +50,7 @@ func TestMultiDeliversToAllEvenWhenOneFails(t *testing.T) {
 }
 
 func TestMultiEmptyIsNoOp(t *testing.T) {
-	if err := (Multi{}).Notify(context.Background(), codereview.Notification{}); err != nil {
+	if err := (Multi{}).Notify(context.Background(), notification.Notification{}); err != nil {
 		t.Fatalf("empty Multi should be a no-op, got %v", err)
 	}
 }

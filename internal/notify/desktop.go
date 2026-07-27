@@ -6,11 +6,11 @@ import (
 	"os/exec"
 	"strings"
 
-	"temporal-agents/internal/codereview"
+	"temporal-agents/internal/notification"
 )
 
 // Desktop is a driven adapter that posts a macOS desktop notification via the
-// built-in `osascript` interpreter. It implements codereview.Notifier.
+// built-in `osascript` interpreter. It implements notification.Notifier.
 type Desktop struct{}
 
 // NewDesktop returns a macOS desktop notifier.
@@ -18,7 +18,7 @@ func NewDesktop() Desktop { return Desktop{} }
 
 // Notify shows a desktop notification with the given title and body. It shells
 // out to osascript's `display notification` command.
-func (d Desktop) Notify(ctx context.Context, n codereview.Notification) error {
+func (d Desktop) Notify(ctx context.Context, n notification.Notification) error {
 	script := fmt.Sprintf(
 		"display notification %s with title %s",
 		quoteAppleScript(n.Body), quoteAppleScript(n.Title),

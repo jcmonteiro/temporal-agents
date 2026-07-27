@@ -9,11 +9,11 @@ import (
 	"net/http"
 	"time"
 
-	"temporal-agents/internal/codereview"
+	"temporal-agents/internal/notification"
 )
 
 // Webhook is a driven adapter that POSTs a notification as JSON to a configured
-// URL. It implements codereview.Notifier.
+// URL. It implements notification.Notifier.
 type Webhook struct {
 	url    string
 	client *http.Client
@@ -32,7 +32,7 @@ type webhookPayload struct {
 
 // Notify POSTs n to the webhook URL as JSON and treats any non-2xx response as
 // a failure.
-func (w Webhook) Notify(ctx context.Context, n codereview.Notification) error {
+func (w Webhook) Notify(ctx context.Context, n notification.Notification) error {
 	body, err := json.Marshal(webhookPayload{Title: n.Title, Body: n.Body})
 	if err != nil {
 		return fmt.Errorf("encode webhook payload: %w", err)

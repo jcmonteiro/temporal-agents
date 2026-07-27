@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"temporal-agents/internal/codereview"
+	"temporal-agents/internal/notification"
 )
 
 func TestWebhookPostsNotificationAsJSON(t *testing.T) {
@@ -23,7 +23,7 @@ func TestWebhookPostsNotificationAsJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := codereview.Notification{Title: "chain done", Body: "3 commits"}
+	n := notification.Notification{Title: "chain done", Body: "3 commits"}
 	if err := NewWebhook(srv.URL).Notify(context.Background(), n); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestWebhookFailsOnNon2xx(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := NewWebhook(srv.URL).Notify(context.Background(), codereview.Notification{}); err == nil {
+	if err := NewWebhook(srv.URL).Notify(context.Background(), notification.Notification{}); err == nil {
 		t.Fatal("expected an error for a 500 response, got nil")
 	}
 }
