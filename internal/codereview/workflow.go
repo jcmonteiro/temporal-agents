@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
@@ -154,6 +155,67 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, error) {
 
 	return fmt.Sprintf("Addressed %d comment(s) on PR #%d with %d commit(s); requested Copilot review.",
 		len(loaded.Threads), pr.Number, len(commits)), true, nil
+}
+
+// DevelopWorkflow drives the "code develop" flow. In sequence it:
+//
+//   - Creates the requested branch off a clean working tree (CreateBranch fails
+//     when there are uncommitted local changes) and records the starting HEAD.
+//   - Has the Pi agent implement the caller's prompt on that branch.
+//   - Confirms the agent advanced HEAD and left a clean working tree
+//     (EnsureDeveloped fails when nothing was committed or changes remain).
+//   - Triggers the local review loop (ReviewWorkflow) on the new branch as an
+//     abandoned child, so it keeps running—and notifies on completion—after
+//     this workflow returns, exactly like a standalone "code review" run.
+//
+// It returns once the review has been started, reporting the review workflow's
+// ID so the caller can watch it.
+func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (string, error) {
+	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
+	// should not run forever.
+	quick := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 2 * time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
+	})
+	// The agent step is long-running and streams heartbeats.
+	agentCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: time.Hour,
+		HeartbeatTimeout:    time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
+	})
+
+	var a *Activities
+
+	var base string
+	if err := workflow.ExecuteActivity(quick, a.CreateBranch,
+		CreateBranchRequest{WorkDir: in.WorkDir, Branch: in.Branch}).Get(quick, &base); err != nil {
+		return "", err
+	}
+
+	if err := workflow.ExecuteActivity(agentCtx, a.RunDevelopAgent,
+		RunDevelopRequest{WorkDir: in.WorkDir, Prompt: in.Prompt}).Get(agentCtx, nil); err != nil {
+		return "", err
+	}
+
+	var commits []string
+	if err := workflow.ExecuteActivity(quick, a.EnsureDeveloped,
+		EnsureDevelopedRequest{WorkDir: in.WorkDir, BaseSHA: base}).Get(quick, &commits); err != nil {
+		return "", err
+	}
+
+	// Trigger the review loop as an abandoned child so it outlives this workflow.
+	reviewID := "review-" + workflow.GetInfo(ctx).WorkflowExecution.ID
+	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		WorkflowID:        reviewID,
+		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON,
+	})
+	child := workflow.ExecuteChildWorkflow(childCtx, ReviewWorkflow, ReviewInput{WorkDir: in.WorkDir})
+	if err := child.GetChildWorkflowExecution().Get(ctx, nil); err != nil {
+		return "", fmt.Errorf("start review workflow: %w", err)
+	}
+
+	return fmt.Sprintf("Developed branch %s with %d commit(s); started review %s.",
+		in.Branch, len(commits), reviewID), nil
 }
 
 // ReviewWorkflow drives the "code review" loop entirely on the host machine.
