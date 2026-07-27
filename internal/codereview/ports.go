@@ -49,3 +49,13 @@ type Agent interface {
 	// message.
 	Run(ctx context.Context, prompt, workDir string) (string, error)
 }
+
+// Notifier is the port for sending a completion notification to the outside
+// world. Implementations are driven adapters (e.g. a macOS desktop notifier or
+// an HTTP webhook). Sending is best-effort: a failure never fails the workflow.
+type Notifier interface {
+	// Notify delivers n. It may be called more than once for the same logical
+	// event (Temporal retries activities), so implementations should tolerate
+	// duplicate deliveries.
+	Notify(ctx context.Context, n Notification) error
+}

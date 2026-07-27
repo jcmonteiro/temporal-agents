@@ -23,6 +23,15 @@ import (
 	"strings"
 )
 
+// Notification is a completion message handed to the Notifier port when a
+// review or pilot chain finishes.
+type Notification struct {
+	// Title is the short headline (e.g. the notification's bold first line).
+	Title string
+	// Body is the human-readable detail, typically the workflow's summary.
+	Body string
+}
+
 // PromptMode selects how the caller-provided prompt text combines with the
 // hard-coded default prompt.
 type PromptMode string
