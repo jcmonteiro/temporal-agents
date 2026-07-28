@@ -245,9 +245,11 @@ SUBCOMMANDS
   review   Review the current branch locally, then implement + re-review in a loop
   develop  Create a branch, implement a prompt, then start a local review loop
 
-All subcommands accept --summary, which runs a final Pi step before returning
-(on success or failure) that summarizes the last Pi execution and sends that
-summary as the webhook notification's body (only the webhook).
+All subcommands accept --summary, which summarizes a Pi execution and sends
+that summary as the webhook notification's body (only the webhook). For review
+and develop this runs once before returning (on success or failure). For pilot
+it summarizes each addressing pass, so a multi-pass loop sends one summary per
+pass that addresses comments, not a single summary at the end.
 
 See "temporal-agents code pilot --help", "temporal-agents code review --help",
 and "temporal-agents code develop --help".
