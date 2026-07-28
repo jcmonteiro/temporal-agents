@@ -43,6 +43,26 @@ func TestWebhookPostsNotificationAsJSON(t *testing.T) {
 	}
 }
 
+func TestWebhookUsesWebhookBodyOverrideWhenSet(t *testing.T) {
+	var gotBody webhookPayload
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	n := notification.Notification{Title: "chain done", Body: "3 commits", WebhookBody: "the agent's summary"}
+	if err := NewWebhook(srv.URL).Notify(context.Background(), n); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The webhook-only override replaces the plain body in the payload.
+	if gotBody.Body != n.WebhookBody {
+		t.Errorf("payload body = %q, want %q", gotBody.Body, n.WebhookBody)
+	}
+}
+
 func TestWebhookFailsOnNon2xx(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
