@@ -169,6 +169,16 @@ func withTokenTotal(summary string, total int) string {
 	return summary + "\n\n" + FormatTokenTotal(total)
 }
 
+// withDevelopStepTokens appends a develop-step-scoped token-usage line to a
+// summary. It is used by the supervised `develop --with-remote` terminal summary,
+// where the review and pilot children run in their own sessions and report their
+// own totals separately; no single figure the parent holds covers all sessions,
+// so "across all sessions" wording would over-claim.
+func withDevelopStepTokens(summary string, total int) string {
+	return summary + "\n\nDevelop step token usage: " + groupThousands(total) +
+		" tokens. The review and pilot stages report their own token totals separately."
+}
+
 // groupThousands formats n with comma thousands separators (1234567 ->
 // "1,234,567").
 func groupThousands(n int) string {

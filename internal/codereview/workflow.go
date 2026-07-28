@@ -447,7 +447,11 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 		return "", fmt.Errorf("pilot workflow: %w", err)
 	}
 
-	summary := withTokenTotal(fmt.Sprintf(
+	// Report only the develop step's own token usage: the review and pilot children
+	// run in their own sessions (their results are discarded via .Get(ctx, nil)) and
+	// emit their own totals, so a "across all sessions" figure computed from develop
+	// tokens alone would under-report and mislead.
+	summary := withDevelopStepTokens(fmt.Sprintf(
 		"Developed branch %s with %d commit(s); ran the review loop, opened the PR, and completed the Copilot pilot loop.",
 		in.Branch, len(commits)), tokens)
 	// The terminal pipeline notification carries no summary body: the develop

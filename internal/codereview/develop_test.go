@@ -228,7 +228,11 @@ func TestDevelopWorkflow_WithRemote_SeedsReviewTokensAndPropagatesSummary(t *tes
 	require.NoError(t, env.GetWorkflowError())
 	var out string
 	require.NoError(t, env.GetWorkflowResult(&out))
-	require.Contains(t, out, "Total token usage across all sessions: 4,200 tokens.")
+	// The supervised terminal summary reports only the develop step's own usage;
+	// the review and pilot children report their totals separately, so it does not
+	// claim an "across all sessions" figure it cannot compute here.
+	require.Contains(t, out, "Develop step token usage: 4,200 tokens.")
+	require.NotContains(t, out, "across all sessions")
 	// The develop session's summary is delivered on the up-front develop-completion
 	// notification, matched to the step it describes. The terminal pipeline
 	// notification carries no (stale) summary body.
