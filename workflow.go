@@ -1,10 +1,8 @@
 package main
 
 import (
-	"errors"
 	"time"
 
-	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
 	"temporal-agents/internal/notification"
@@ -34,8 +32,8 @@ type PromptRequest struct {
 // same input, chaining the workflow indefinitely.
 func PromptWorkflow(ctx workflow.Context, req PromptRequest) (out string, err error) {
 	// Notify best-effort when the run fails. Continue-as-new is a control signal
-	// (chained runs), not a failure, so notifyFailure excludes it.
-	defer func() { notifyFailure(ctx, "Run failed", err) }()
+	// (chained runs), not a failure, so NotifyFailureBestEffort excludes it.
+	defer func() { notification.NotifyFailureBestEffort(ctx, "Run failed", err) }()
 
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: time.Hour,
@@ -65,44 +63,6 @@ func PromptWorkflow(ctx workflow.Context, req PromptRequest) (out string, err er
 	// usage to the result and notify best-effort. This runs only here (never
 	// before continue-as-new, which would cancel the in-flight activity).
 	result := res.Output + "\n\n" + piagent.FormatTokenTotal(total)
-	notifyPromptComplete(ctx, result)
+	notification.NotifyBestEffort(ctx, notification.Notification{Title: "Run complete", Body: result})
 	return result, nil
-}
-
-// notifyPromptComplete sends a best-effort completion notification for a
-// finished run. Failures are logged and swallowed so a notification problem
-// never fails an otherwise successful workflow.
-func notifyPromptComplete(ctx workflow.Context, result string) {
-	opts := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: 30 * time.Second,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
-	})
-	var na *notification.Activity
-	n := notification.Notification{Title: "Run complete", Body: result}
-	if err := workflow.ExecuteActivity(opts, na.Notify, n).Get(opts, nil); err != nil {
-		workflow.GetLogger(ctx).Warn("could not send completion notification", "error", err)
-	}
-}
-
-// notifyFailure sends a best-effort notification when a workflow fails. It is a
-// no-op on success (nil err) and on continue-as-new, which is a control signal
-// used to chain runs rather than a failure. Delivery failures are logged and
-// swallowed so a notification problem never masks the original error.
-func notifyFailure(ctx workflow.Context, title string, err error) {
-	if err == nil {
-		return
-	}
-	var canErr *workflow.ContinueAsNewError
-	if errors.As(err, &canErr) {
-		return
-	}
-	opts := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: 30 * time.Second,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
-	})
-	var na *notification.Activity
-	n := notification.Notification{Title: title, Body: err.Error()}
-	if e := workflow.ExecuteActivity(opts, na.Notify, n).Get(opts, nil); e != nil {
-		workflow.GetLogger(ctx).Warn("could not send failure notification", "error", e)
-	}
 }

@@ -1,7 +1,10 @@
 // Package notification defines the notification port shared by the workflows
-// and the thin activity that drives it. It has no dependencies beyond the
-// standard library; concrete adapters (see the notify package) implement
-// Notifier from the edges, keeping the cores decoupled from delivery details.
+// and the thin activity that drives it. The port types (Notification, Notifier,
+// Activity) depend only on the standard library; concrete adapters (see the
+// notify package) implement Notifier from the edges, keeping the cores
+// decoupled from delivery details. It also owns the workflow-side best-effort
+// delivery helpers (see workflow.go), which depend on the Temporal SDK so every
+// workflow shares one delivery policy.
 package notification
 
 import (

@@ -17,47 +17,6 @@ import (
 // still-pending Copilot review.
 const reviewPollInterval = time.Minute
 
-// notifyChainComplete sends a best-effort completion notification at a chain's
-// terminal step. Failures are logged and swallowed so a notification problem
-// never fails an otherwise successful workflow. It must be called before the
-// workflow returns (never on a continue-as-new path), since continue-as-new
-// cancels any in-flight activity. url, when non-empty, is a hyperlink to the
-// relevant resource (e.g. the pull request) that adapters surface alongside the
-// message.
-func notifyChainComplete(ctx workflow.Context, title, body, url string) {
-	opts := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: 30 * time.Second,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
-	})
-	var na *notification.Activity
-	if err := workflow.ExecuteActivity(opts, na.Notify, notification.Notification{Title: title, Body: body, URL: url}).Get(opts, nil); err != nil {
-		workflow.GetLogger(ctx).Warn("could not send completion notification", "error", err)
-	}
-}
-
-// notifyChainFailure sends a best-effort notification when a workflow fails. It
-// is a no-op on success (nil err) and on continue-as-new, which is a control
-// signal used to loop the chain rather than a failure. Delivery failures are
-// logged and swallowed so a notification problem never masks the original
-// error.
-func notifyChainFailure(ctx workflow.Context, title string, err error) {
-	if err == nil {
-		return
-	}
-	var canErr *workflow.ContinueAsNewError
-	if errors.As(err, &canErr) {
-		return
-	}
-	opts := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: 30 * time.Second,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
-	})
-	var na *notification.Activity
-	if e := workflow.ExecuteActivity(opts, na.Notify, notification.Notification{Title: title, Body: err.Error()}).Get(opts, nil); e != nil {
-		workflow.GetLogger(ctx).Warn("could not send failure notification", "error", e)
-	}
-}
-
 // PilotWorkflow drives the "code pilot" loop: it finds the open PR for the
 // current branch, waits out any in-flight review, has the Pi agent address the
 // PR's unresolved review comments, then replies to and resolves those comments
@@ -71,8 +30,9 @@ func notifyChainFailure(ctx workflow.Context, title string, err error) {
 // bounded event history under the same workflow ID.
 func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err error) {
 	// Notify best-effort when the pilot loop fails. Continue-as-new is a control
-	// signal (chained passes), not a failure, so notifyChainFailure excludes it.
-	defer func() { notifyChainFailure(ctx, "Copilot review chain failed", err) }()
+	// signal (chained passes), not a failure, so NotifyFailureBestEffort excludes
+	// it.
+	defer func() { notification.NotifyFailureBestEffort(ctx, "Copilot review chain failed", err) }()
 
 	var addressed bool
 	var tokens int
@@ -89,7 +49,7 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 		return "", workflow.NewContinueAsNewError(ctx, PilotWorkflow, next)
 	}
 	summary = withTokenTotal(summary, total)
-	notifyChainComplete(ctx, "Copilot review chain complete", summary, prURL)
+	notification.NotifyBestEffort(ctx, notification.Notification{Title: "Copilot review chain complete", Body: summary, URL: prURL})
 	return summary, nil
 }
 
@@ -212,7 +172,7 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, int, strin
 // ID so the caller can watch it.
 func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err error) {
 	// Notify best-effort when development fails before the review loop is started.
-	defer func() { notifyChainFailure(ctx, "Development failed", err) }()
+	defer func() { notification.NotifyFailureBestEffort(ctx, "Development failed", err) }()
 
 	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
 	// should not run forever.
@@ -264,9 +224,11 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 
 	summary := withTokenTotal(fmt.Sprintf("Developed branch %s with %d commit(s); started review %s.",
 		in.Branch, len(commits), reviewID), agentResult.Tokens)
-	notifyChainComplete(ctx, "Development complete",
-		fmt.Sprintf("Developed branch %s with %d commit(s) successfully. The review cycle will now commence.",
-			in.Branch, len(commits)), "")
+	notification.NotifyBestEffort(ctx, notification.Notification{
+		Title: "Development complete",
+		Body: fmt.Sprintf("Developed branch %s with %d commit(s) successfully. The review cycle will now commence.",
+			in.Branch, len(commits)),
+	})
 	return summary, nil
 }
 
@@ -290,8 +252,9 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 // implement pass keeps making commits, so it cannot run forever.
 func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err error) {
 	// Notify best-effort when the review loop fails. Continue-as-new is a control
-	// signal (looping passes), not a failure, so notifyChainFailure excludes it.
-	defer func() { notifyChainFailure(ctx, "Local review chain failed", err) }()
+	// signal (looping passes), not a failure, so NotifyFailureBestEffort excludes
+	// it.
+	defer func() { notification.NotifyFailureBestEffort(ctx, "Local review chain failed", err) }()
 
 	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
 	// should not run forever.
@@ -344,7 +307,7 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 			var appErr *temporal.ApplicationError
 			if errors.As(err, &appErr) && appErr.Type() == errNoAdvance {
 				summary := withTokenTotal("Review complete; the implement pass found nothing to commit.", total)
-				notifyChainComplete(ctx, "Local review chain complete", summary, "")
+				notification.NotifyBestEffort(ctx, notification.Notification{Title: "Local review chain complete", Body: summary})
 				return summary, nil
 			}
 			return "", err
@@ -374,7 +337,7 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 	nextPass := in.Pass + 1
 	if nextPass >= MaxReviewPasses {
 		summary := withTokenTotal(fmt.Sprintf("Review stopped after %d pass(es).", MaxReviewPasses), total)
-		notifyChainComplete(ctx, "Local review chain complete", summary, "")
+		notification.NotifyBestEffort(ctx, notification.Notification{Title: "Local review chain complete", Body: summary})
 		return summary, nil
 	}
 	return "", workflow.NewContinueAsNewError(ctx, ReviewWorkflow,
