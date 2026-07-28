@@ -40,8 +40,9 @@ func TestOpenPRWorkflow_HappyPath_OpensPRAndRequestsCopilot(t *testing.T) {
 	var out string
 	require.NoError(t, env.GetWorkflowResult(&out))
 	require.Contains(t, out, "PR #7")
-	// The completion notification links to the PR that was opened.
-	require.Equal(t, "Pull request opened", got.Title)
+	// The completion notification links to the PR and uses outcome-neutral wording,
+	// since EnsureOpen may have returned an already-open PR unchanged.
+	require.Equal(t, "Pull request ready", got.Title)
 	require.Equal(t, pr.URL, got.URL)
 	env.AssertExpectations(t)
 }

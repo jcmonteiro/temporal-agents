@@ -294,9 +294,13 @@ func OpenPRWorkflow(ctx workflow.Context, in OpenPRInput) (result string, err er
 		return "", err
 	}
 
-	summary := fmt.Sprintf("Opened PR #%d and requested a Copilot review.", pr.Number)
+	// OpenPR is idempotent: it returns an already-open PR unchanged rather than
+	// creating one, so a supported retry/re-run reaches here without necessarily
+	// having opened anything. Use outcome-neutral wording that holds whether the PR
+	// was just created or already existed.
+	summary := fmt.Sprintf("PR #%d is open and a Copilot review was requested.", pr.Number)
 	notifyComplete(ctx, false, false, in.WorkDir, notification.Notification{
-		Title: "Pull request opened", Body: summary, URL: pr.URL})
+		Title: "Pull request ready", Body: summary, URL: pr.URL})
 	return summary, nil
 }
 
