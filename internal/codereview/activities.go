@@ -195,9 +195,11 @@ func (a *Activities) EnsureDeveloped(ctx context.Context, req EnsureDevelopedReq
 
 // OpenPR publishes the current branch and ensures an open PR exists for it,
 // returning that PR. It pushes HEAD to the branch (so the PR has commits to
-// open against), then opens the PR when none exists yet. It is idempotent: an
-// already-open PR is returned unchanged rather than opening a duplicate, so a
-// retry or a re-run over an already-published branch succeeds.
+// open against), then opens the PR when none exists yet. PR creation is
+// idempotent: an already-open PR is returned unchanged rather than opening a
+// duplicate, so a retry or a re-run over an already-published branch succeeds.
+// Note the idempotency guarantee is about the PR, not the push: the preceding
+// non-force push fails if the remote branch has diverged from local HEAD.
 func (a *Activities) OpenPR(ctx context.Context, in OpenPRInput) (PullRequest, error) {
 	branch, err := a.Git.CurrentBranch(ctx, in.WorkDir)
 	if err != nil {
