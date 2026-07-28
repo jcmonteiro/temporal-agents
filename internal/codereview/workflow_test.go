@@ -279,7 +279,7 @@ func TestPilotWorkflow_Failure_SendsFailureNotification(t *testing.T) {
 	env := newEnv(t)
 
 	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).
-		Return(PullRequest{}, errors.New("no open PR"))
+		Return(PullRequest{}, temporal.NewNonRetryableApplicationError("no open PR", "NoPR", nil))
 	var got notification.Notification
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
