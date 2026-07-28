@@ -78,10 +78,10 @@ func TestDevelopWorkflow_Complete_NotifiesReviewWillCommence(t *testing.T) {
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
 	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
 	var got notification.Notification
-	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
-		got = n
-		return true
-	})).Return(nil)
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got = args.Get(1).(notification.Notification)
+		}).Return(nil)
 
 	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing"})
 
@@ -116,10 +116,10 @@ func TestDevelopWorkflow_Failure_SendsFailureNotification(t *testing.T) {
 	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
 		Return("", temporal.NewNonRetryableApplicationError("dirty", errDirtyWorktree, nil))
 	var got notification.Notification
-	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
-		got = n
-		return true
-	})).Return(nil)
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got = args.Get(1).(notification.Notification)
+		}).Return(nil)
 
 	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing"})
 

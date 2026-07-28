@@ -23,10 +23,10 @@ func TestPromptWorkflow_Complete_SendsRunNotification(t *testing.T) {
 		Return(piagent.Result{Output: "the agent output", Tokens: 12345}, nil)
 	var got notification.Notification
 	var na *notification.Activity
-	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
-		got = n
-		return true
-	})).Return(nil)
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got = args.Get(1).(notification.Notification)
+		}).Return(nil)
 
 	env.ExecuteWorkflow(PromptWorkflow, PromptRequest{Prompt: "summarize", WorkDir: "/repo"})
 
@@ -49,10 +49,10 @@ func TestPromptWorkflow_Failure_SendsFailureNotification(t *testing.T) {
 		Return(piagent.Result{}, errors.New("pi crashed"))
 	var got notification.Notification
 	var na *notification.Activity
-	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
-		got = n
-		return true
-	})).Return(nil)
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got = args.Get(1).(notification.Notification)
+		}).Return(nil)
 
 	env.ExecuteWorkflow(PromptWorkflow, PromptRequest{Prompt: "summarize", WorkDir: "/repo"})
 

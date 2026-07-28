@@ -281,10 +281,10 @@ func TestPilotWorkflow_Failure_SendsFailureNotification(t *testing.T) {
 	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).
 		Return(PullRequest{}, errors.New("no open PR"))
 	var got notification.Notification
-	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
-		got = n
-		return true
-	})).Return(nil)
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got = args.Get(1).(notification.Notification)
+		}).Return(nil)
 
 	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo"})
 
@@ -330,10 +330,10 @@ func TestPilotWorkflow_Complete_SendsCopilotChainNotification(t *testing.T) {
 	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
 		Return(LoadCommentsResult{Threads: nil}, nil)
 	var got notification.Notification
-	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
-		got = n
-		return true
-	})).Return(nil)
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got = args.Get(1).(notification.Notification)
+		}).Return(nil)
 
 	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo"})
 

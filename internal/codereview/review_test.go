@@ -184,10 +184,10 @@ func TestReviewWorkflow_Failure_SendsFailureNotification(t *testing.T) {
 	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).
 		Return(AgentResult{}, errors.New("review agent crashed"))
 	var got notification.Notification
-	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
-		got = n
-		return true
-	})).Return(nil)
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got = args.Get(1).(notification.Notification)
+		}).Return(nil)
 
 	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo"})
 
@@ -207,10 +207,10 @@ func TestReviewWorkflow_Complete_SendsLocalChainNotification(t *testing.T) {
 	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).
 		Return(nil, temporal.NewNonRetryableApplicationError("no commits", errNoAdvance, nil))
 	var got notification.Notification
-	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
-		got = n
-		return true
-	})).Return(nil)
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got = args.Get(1).(notification.Notification)
+		}).Return(nil)
 
 	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo", Payload: "prior review"})
 
