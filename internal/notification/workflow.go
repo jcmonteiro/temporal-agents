@@ -36,6 +36,11 @@ func NotifyBestEffort(ctx workflow.Context, n Notification) {
 // is a control signal used to chain/loop runs rather than a failure. Delivery is
 // best-effort via NotifyBestEffort, so a notification problem never masks the
 // original error.
+//
+// The notification is scheduled on a disconnected context so a workflow that
+// failed because it was cancelled — the case where a heads-up is most useful —
+// still notifies. Scheduling on the (now cancelled) workflow context would fail
+// immediately and silently drop the failure notification.
 func NotifyFailureBestEffort(ctx workflow.Context, title string, err error) {
 	if err == nil {
 		return
@@ -44,5 +49,7 @@ func NotifyFailureBestEffort(ctx workflow.Context, title string, err error) {
 	if errors.As(err, &canErr) {
 		return
 	}
-	NotifyBestEffort(ctx, Notification{Title: title, Body: err.Error()})
+	dctx, cancel := workflow.NewDisconnectedContext(ctx)
+	defer cancel()
+	NotifyBestEffort(dctx, Notification{Title: title, Body: err.Error()})
 }
