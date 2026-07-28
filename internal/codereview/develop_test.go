@@ -7,6 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
+
+	"temporal-agents/internal/notification"
 )
 
 // The develop workflow tests exercise observable behavior — which activities
@@ -17,6 +19,7 @@ func newDevelopEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestWorkflowEnvironment()
 	env.RegisterActivity(&Activities{})
+	env.RegisterActivity(&notification.Activity{})
 	env.RegisterWorkflow(DevelopWorkflow)
 	env.RegisterWorkflow(ReviewWorkflow)
 	return env
@@ -41,6 +44,28 @@ func TestDevelopWorkflow_HappyPath_DevelopsThenTriggersReview(t *testing.T) {
 	require.Contains(t, out, "feat/x")
 	require.Contains(t, out, "started review")
 	env.AssertExpectations(t)
+}
+
+func TestDevelopWorkflow_Complete_NotifiesReviewWillCommence(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return("base", nil)
+	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return("done", nil)
+	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
+	var got notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
+		got = n
+		return true
+	})).Return(nil)
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	// Finishing development notifies that it succeeded and review will commence.
+	require.Equal(t, "Development complete", got.Title)
+	require.Contains(t, got.Body, "review cycle")
 }
 
 func TestDevelopWorkflow_DirtyWorktree_FailsBeforeRunningAgent(t *testing.T) {

@@ -214,8 +214,12 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (string, error) {
 		return "", fmt.Errorf("start review workflow: %w", err)
 	}
 
-	return fmt.Sprintf("Developed branch %s with %d commit(s); started review %s.",
-		in.Branch, len(commits), reviewID), nil
+	summary := fmt.Sprintf("Developed branch %s with %d commit(s); started review %s.",
+		in.Branch, len(commits), reviewID)
+	notifyChainComplete(ctx, "Development complete",
+		fmt.Sprintf("Developed branch %s with %d commit(s) successfully. The review cycle will now commence.",
+			in.Branch, len(commits)))
+	return summary, nil
 }
 
 // ReviewWorkflow drives the "code review" loop entirely on the host machine.
