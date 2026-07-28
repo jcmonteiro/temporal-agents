@@ -35,6 +35,29 @@ func notifyChainComplete(ctx workflow.Context, title, body, url string) {
 	}
 }
 
+// notifyChainFailure sends a best-effort notification when a workflow fails. It
+// is a no-op on success (nil err) and on continue-as-new, which is a control
+// signal used to loop the chain rather than a failure. Delivery failures are
+// logged and swallowed so a notification problem never masks the original
+// error.
+func notifyChainFailure(ctx workflow.Context, title string, err error) {
+	if err == nil {
+		return
+	}
+	var canErr *workflow.ContinueAsNewError
+	if errors.As(err, &canErr) {
+		return
+	}
+	opts := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 30 * time.Second,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
+	})
+	var na *notification.Activity
+	if e := workflow.ExecuteActivity(opts, na.Notify, notification.Notification{Title: title, Body: err.Error()}).Get(opts, nil); e != nil {
+		workflow.GetLogger(ctx).Warn("could not send failure notification", "error", e)
+	}
+}
+
 // PilotWorkflow drives the "code pilot" loop: it finds the open PR for the
 // current branch, waits out any in-flight review, has the Pi agent address the
 // PR's unresolved review comments, then replies to and resolves those comments
@@ -46,8 +69,15 @@ func notifyChainComplete(ctx workflow.Context, title, body, url string) {
 // found no unresolved comments ends the chain instead of looping forever. This
 // mirrors PromptWorkflow: continue-as-new restarts the run with a fresh,
 // bounded event history under the same workflow ID.
-func PilotWorkflow(ctx workflow.Context, in PilotInput) (string, error) {
-	summary, addressed, tokens, prURL, err := runPilotOnce(ctx, in)
+func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err error) {
+	// Notify best-effort when the pilot loop fails. Continue-as-new is a control
+	// signal (chained passes), not a failure, so notifyChainFailure excludes it.
+	defer func() { notifyChainFailure(ctx, "Copilot review chain failed", err) }()
+
+	var addressed bool
+	var tokens int
+	var prURL string
+	summary, addressed, tokens, prURL, err = runPilotOnce(ctx, in)
 	if err != nil {
 		return "", err
 	}
@@ -180,7 +210,10 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, int, strin
 //
 // It returns once the review has been started, reporting the review workflow's
 // ID so the caller can watch it.
-func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (string, error) {
+func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err error) {
+	// Notify best-effort when development fails before the review loop is started.
+	defer func() { notifyChainFailure(ctx, "Development failed", err) }()
+
 	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
 	// should not run forever.
 	quick := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
@@ -255,7 +288,11 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (string, error) {
 //
 // The loop is also bounded: it stops after MaxReviewPasses passes even when the
 // implement pass keeps making commits, so it cannot run forever.
-func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (string, error) {
+func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err error) {
+	// Notify best-effort when the review loop fails. Continue-as-new is a control
+	// signal (looping passes), not a failure, so notifyChainFailure excludes it.
+	defer func() { notifyChainFailure(ctx, "Local review chain failed", err) }()
+
 	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
 	// should not run forever.
 	quick := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{

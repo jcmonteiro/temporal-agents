@@ -108,6 +108,26 @@ func TestDevelopWorkflow_DirtyWorktree_FailsBeforeRunningAgent(t *testing.T) {
 	env.AssertNotCalled(t, activityName(a.EnsureDeveloped), mock.Anything, mock.Anything)
 }
 
+func TestDevelopWorkflow_Failure_SendsFailureNotification(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	// CreateBranch refuses to proceed on a dirty working tree.
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
+		Return("", temporal.NewNonRetryableApplicationError("dirty", errDirtyWorktree, nil))
+	var got notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
+		got = n
+		return true
+	})).Return(nil)
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	// A failed development notifies best-effort that it failed.
+	require.Equal(t, "Development failed", got.Title)
+}
+
 func TestDevelopWorkflow_NoCommits_FailsWithoutTriggeringReview(t *testing.T) {
 	env := newDevelopEnv(t)
 

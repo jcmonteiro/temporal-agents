@@ -178,6 +178,26 @@ func TestReviewWorkflow_WithPayload_ImplementAgentError_Fails(t *testing.T) {
 	env.AssertNotCalled(t, activityName(a.RunReviewAgent), mock.Anything, mock.Anything)
 }
 
+func TestReviewWorkflow_Failure_SendsFailureNotification(t *testing.T) {
+	env := newReviewEnv(t)
+
+	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).
+		Return(AgentResult{}, errors.New("review agent crashed"))
+	var got notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
+		got = n
+		return true
+	})).Return(nil)
+
+	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	// A failed review pass notifies best-effort with the error as the body.
+	require.Equal(t, "Local review chain failed", got.Title)
+	require.Contains(t, got.Body, "review agent crashed")
+}
+
 func TestReviewWorkflow_Complete_SendsLocalChainNotification(t *testing.T) {
 	env := newReviewEnv(t)
 

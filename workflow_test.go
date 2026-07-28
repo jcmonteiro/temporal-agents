@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -36,6 +37,30 @@ func TestPromptWorkflow_Complete_SendsRunNotification(t *testing.T) {
 	require.Equal(t, "Run complete", got.Title)
 	require.Contains(t, got.Body, "the agent output")
 	require.Contains(t, got.Body, "Total token usage across all sessions: 12,345 tokens.")
+}
+
+func TestPromptWorkflow_Failure_SendsFailureNotification(t *testing.T) {
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestWorkflowEnvironment()
+	env.RegisterActivity(RunPiAgent)
+	env.RegisterActivity(&notification.Activity{})
+
+	env.OnActivity(RunPiAgent, mock.Anything, mock.Anything).
+		Return(piagent.Result{}, errors.New("pi crashed"))
+	var got notification.Notification
+	var na *notification.Activity
+	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
+		got = n
+		return true
+	})).Return(nil)
+
+	env.ExecuteWorkflow(PromptWorkflow, PromptRequest{Prompt: "summarize", WorkDir: "/repo"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	// A failed run notifies best-effort with the error as the body.
+	require.Equal(t, "Run failed", got.Title)
+	require.Contains(t, got.Body, "pi crashed")
 }
 
 func TestPromptWorkflow_Chain_ContinuesAsNewWithoutNotifying(t *testing.T) {
