@@ -283,8 +283,9 @@ FLAGS
                     webhook). Also propagated to the review loop this starts, so
                     a plain "develop --summary" runs two billable summaries
                     (develop and review). With --with-remote it is also
-                    propagated to the pilot loop, for three (develop, review,
-                    and pilot).
+                    propagated to the pilot loop, which summarizes on each pass
+                    that addresses comments, for at least three (develop,
+                    review, and one per pilot pass).
   --with-remote     After development and review, open the PR and request a
                     Copilot review, then run the pilot loop—this workflow
                     supervises each stage and stays alive until the pilot loop
@@ -347,9 +348,11 @@ USAGE
 FLAGS
   --append <prompt>   Append extra instructions to the default prompt
   --replace <prompt>  Replace the default prompt entirely
-  --summary           Before returning (on success or failure), summarize the
-                      last Pi execution and send it as the webhook message (only
-                      the webhook)
+  --summary           Summarize the agent's work and send it as the webhook
+                      message (only the webhook). Because the loop always chains,
+                      this runs on each pass that addresses comments (and on a
+                      failure after the agent has run), not once at the end—the
+                      terminal no-comments pass has no agent run to summarize.
 
 The --append and --replace flags are mutually exclusive. The unresolved
 comments are always appended to whichever prompt is used.

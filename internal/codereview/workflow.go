@@ -104,6 +104,14 @@ func notifyFailure(ctx workflow.Context, title, workDir string, summaryEnabled, 
 // found no unresolved comments ends the chain instead of looping forever. This
 // mirrors PromptWorkflow: continue-as-new restarts the run with a fresh,
 // bounded event history under the same workflow ID.
+//
+// The chain always runs in production (every caller sets Chain), so its only
+// terminal step is the no-comments pass, where no agent ran and there is
+// nothing to summarize. A pilot loop's meaningful work therefore lives entirely
+// in the passes that address comments and then continue as new. So when
+// in.Summary is set, each addressing pass summarizes its own Pi session and
+// delivers that summary (webhook body) before continuing—otherwise --summary
+// would produce no webhook body at all on the real, always-chained path.
 func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err error) {
 	// Notify best-effort when the pilot loop fails. Continue-as-new is a control
 	// signal (chained passes), not a failure, so NotifyFailureBestEffort excludes
@@ -122,6 +130,23 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 	// Fold this pass's usage into the running total carried across chained runs.
 	total := in.TokensSoFar + tokens
 	if in.Chain && addressed {
+		// This pass addressed comments, so the loop continues as new and never
+		// reaches the terminal notifyComplete below. Continue-as-new is normally a
+		// silent control signal, but --summary explicitly asks for a webhook summary
+		// of the agent's work, and on the always-chained production path every
+		// meaningful pass is one that addressed comments and chains. So when
+		// --summary is set, summarize this pass's Pi session and deliver it as the
+		// webhook-only body before continuing. The summary runs synchronously here
+		// because continue-as-new cancels any in-flight activity; without --summary
+		// the chain stays silent exactly as before.
+		if in.Summary {
+			wfnotify.NotifyBestEffort(ctx, notification.Notification{
+				Title:       "Copilot review pass complete",
+				Body:        summary,
+				URL:         prURL,
+				WebhookBody: summarizeForWebhook(ctx, in.Summary, agentRan, in.WorkDir, completeSummaryTimeout),
+			})
+		}
 		next := in
 		next.TokensSoFar = total
 		return "", workflow.NewContinueAsNewError(ctx, PilotWorkflow, next)
@@ -421,10 +446,12 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 	// The local review loop. Seed it with this develop session's token usage so
 	// its own result reports the whole tree's usage, and propagate --summary so it
 	// summarizes its own run for its completion webhook. Combined with the develop
-	// summary attached above and the pilot summary below, a single
-	// `develop --with-remote --summary` therefore triggers three independent,
-	// billable summary runs (develop, review, and pilot)—one more than the
-	// non-remote path's two (develop plus review).
+	// summary attached above and the pilot summaries below, a single
+	// `develop --with-remote --summary` therefore triggers at least three
+	// independent, billable summary runs (develop, review, and one per pilot pass
+	// that addresses comments)—at least one more than the non-remote path's two
+	// (develop plus review). The pilot summarizes on every addressing pass, so a
+	// pilot loop that iterates N times bills N pilot summaries, not one.
 	reviewCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "review-" + id})
 	if err := workflow.ExecuteChildWorkflow(reviewCtx, ReviewWorkflow,
 		ReviewInput{WorkDir: in.WorkDir, TokensSoFar: tokens, Summary: in.Summary}).Get(ctx, nil); err != nil {
