@@ -223,6 +223,28 @@ func TestReviewWorkflow_Summary_SetsWebhookBodyFromLastRunSummary(t *testing.T) 
 	require.Contains(t, got.Body, "nothing to commit")
 }
 
+func TestReviewWorkflow_NoSummaryFlag_DoesNotSummarize(t *testing.T) {
+	env := newReviewEnv(t)
+
+	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
+		Return(Checkpoint{HeadSHA: "base"}, nil)
+	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "nothing to change"}, nil)
+	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).
+		Return(nil, temporal.NewNonRetryableApplicationError("no commits", errNoAdvance, nil))
+	var got notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { got = args.Get(1).(notification.Notification) }).Return(nil)
+
+	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo", Payload: "prior review"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	// Without --summary the final summary step never runs even though an agent
+	// did, and the webhook body falls back to the plain Body.
+	env.AssertNotCalled(t, activityName(a.SummarizeLastRun), mock.Anything, mock.Anything)
+	require.Empty(t, got.WebhookBody)
+}
+
 func TestReviewWorkflow_Complete_SendsLocalChainNotification(t *testing.T) {
 	env := newReviewEnv(t)
 
