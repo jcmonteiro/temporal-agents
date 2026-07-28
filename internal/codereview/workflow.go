@@ -296,6 +296,14 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 		return "", err
 	}
 
+	// Summarize this develop run's Pi session for the webhook *before* spawning
+	// the review child. The child review loop runs its own agent passes in the
+	// same in.WorkDir, so deferring the summary until after the spawn would run
+	// this summary's Pi process concurrently with the review child's first pass
+	// over the same working tree. Summarizing first keeps the develop summary
+	// running against a quiescent tree, with no overlap against the child.
+	webhookBody := summarizeForWebhook(ctx, in.Summary, agentRan, in.WorkDir, completeSummaryTimeout)
+
 	// Trigger the review loop as an abandoned child so it outlives this workflow.
 	reviewID := "review-" + workflow.GetInfo(ctx).WorkflowExecution.ID
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
@@ -317,10 +325,14 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 
 	summary := withTokenTotal(fmt.Sprintf("Developed branch %s with %d commit(s); started review %s.",
 		in.Branch, len(commits), reviewID), agentResult.Tokens)
-	notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{
+	// Deliver the completion notification with the pre-computed webhook summary
+	// (see above); wfnotify.NotifyBestEffort is used directly here rather than
+	// notifyComplete because the summary was intentionally run before the spawn.
+	wfnotify.NotifyBestEffort(ctx, notification.Notification{
 		Title: "Development complete",
 		Body: fmt.Sprintf("Developed branch %s with %d commit(s) successfully. The review cycle will now commence.",
 			in.Branch, len(commits)),
+		WebhookBody: webhookBody,
 	})
 	return summary, nil
 }
