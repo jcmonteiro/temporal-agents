@@ -39,8 +39,15 @@ func codeCmd(args []string) {
 			fatalf("unexpected argument %q", args[1])
 		}
 		startReview()
+	case "develop":
+		if wantsHelp(args[1:]) {
+			developHelp(os.Stdout)
+			return
+		}
+		prompt, branch := parseDevelopFlags(args[1:])
+		startDevelop(prompt, branch)
 	default:
-		fatalf("unknown code subcommand %q (try: pilot, review)", args[0])
+		fatalf("unknown code subcommand %q (try: pilot, review, develop)", args[0])
 	}
 }
 
@@ -64,6 +71,65 @@ func startReview() {
 
 	fmt.Println("Review started.")
 	fmt.Printf("  id:      %s\n", we.GetID())
+	fmt.Printf("  workdir: %s\n", cwd())
+	fmt.Printf("  watch:   temporal-agents watch %s\n", we.GetID())
+}
+
+// parseDevelopFlags reads the develop command's arguments: a required prompt
+// (positional) and a required branch name (--branch <name> or --branch=<name>).
+func parseDevelopFlags(args []string) (prompt, branch string) {
+	setPrompt := func(v string) {
+		if prompt != "" {
+			fatalf("unexpected argument %q", v)
+		}
+		prompt = v
+	}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--branch":
+			if i+1 >= len(args) {
+				fatalf("--branch requires a branch name")
+			}
+			branch = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--branch="):
+			branch = strings.TrimPrefix(a, "--branch=")
+		default:
+			setPrompt(a)
+		}
+	}
+	if strings.TrimSpace(prompt) == "" {
+		fatalf("develop requires a prompt")
+	}
+	if strings.TrimSpace(branch) == "" {
+		fatalf("develop requires a branch name (--branch <name>)")
+	}
+	return prompt, branch
+}
+
+// startDevelop launches the DevelopWorkflow for the current repository.
+func startDevelop(prompt, branch string) {
+	c := dial()
+	defer c.Close()
+
+	id := "develop-" + uuid.NewString()
+	we, err := c.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{
+		ID:        id,
+		TaskQueue: TaskQueue,
+	}, codereview.DevelopWorkflow, codereview.DevelopInput{
+		WorkDir: cwd(),
+		Branch:  branch,
+		Prompt:  prompt,
+	})
+	if err != nil {
+		fatalf("Could not start workflow: %v", err)
+	}
+
+	fmt.Println("Develop started.")
+	fmt.Printf("  id:      %s\n", we.GetID())
+	fmt.Printf("  branch:  %s\n", branch)
+	fmt.Printf("  prompt:  %s\n", truncate(prompt, 60))
 	fmt.Printf("  workdir: %s\n", cwd())
 	fmt.Printf("  watch:   temporal-agents watch %s\n", we.GetID())
 }
@@ -140,12 +206,40 @@ func codeHelp(w io.Writer) {
 
 USAGE
   temporal-agents code pilot [--append <prompt> | --replace <prompt>]
+  temporal-agents code review
+  temporal-agents code develop "<prompt>" --branch <name>
 
 SUBCOMMANDS
-  pilot   Address the unresolved review comments on the current branch's PR
-  review  Review the current branch locally, then implement + re-review in a loop
+  pilot    Address the unresolved review comments on the current branch's PR
+  review   Review the current branch locally, then implement + re-review in a loop
+  develop  Create a branch, implement a prompt, then start a local review loop
 
-See "temporal-agents code pilot --help" and "temporal-agents code review --help".
+See "temporal-agents code pilot --help", "temporal-agents code review --help",
+and "temporal-agents code develop --help".
+`)
+}
+
+func developHelp(w io.Writer) {
+	fmt.Fprint(w, `temporal-agents code develop — implement a prompt on a fresh branch
+
+Runs a workflow that develops a change end to end on the current machine:
+
+  - Creates the requested branch off the current HEAD. This requires a clean
+    working tree; commit or stash local changes first.
+  - Runs a Pi agent to implement your prompt and commit its work.
+  - Confirms the agent advanced HEAD and left no uncommitted changes.
+  - Triggers the local review loop (the same one as "code review") on the new
+    branch, which keeps running after this command returns.
+
+USAGE
+  temporal-agents code develop "<prompt>" --branch <name>
+
+FLAGS
+  --branch <name>   Name of the new branch to create and develop on (required)
+
+EXAMPLES
+  temporal-agents code develop "add a rate limiter to the API client" --branch feat/rate-limit
+  temporal-agents watch <workflow-id>
 `)
 }
 

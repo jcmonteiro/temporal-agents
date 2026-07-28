@@ -12,6 +12,9 @@ import (
 // produced no new commits.
 const errNoAdvance = "NoCommits"
 
+// errDirtyWorktree is the error type returned (non-retryable) when the working
+// tree has local changes but a clean one is required.
+
 // Activities bundles the driven adapters the workflow orchestrates. It is
 // registered with the Temporal worker; each exported method is an activity.
 type Activities struct {
@@ -57,12 +60,119 @@ type RestoreStashRequest struct {
 	Stashed bool
 }
 
+// CreateBranchRequest is the input to CreateBranch.
+type CreateBranchRequest struct {
+	WorkDir string
+	Branch  string
+}
+
+// RunDevelopRequest is the input to RunDevelopAgent.
+type RunDevelopRequest struct {
+	WorkDir string
+	// Prompt is the caller's instruction describing what to implement.
+	Prompt string
+}
+
+// EnsureDevelopedRequest is the input to EnsureDeveloped.
+type EnsureDevelopedRequest struct {
+	WorkDir string
+	// BaseSHA is the commit the new branch started from, before the agent ran.
+	BaseSHA string
+}
+
 // RunImplementRequest is the input to RunImplementAgent.
 type RunImplementRequest struct {
 	WorkDir string
 	// Payload is the previous pass's raw review output whose changes are
 	// implemented.
 	Payload string
+}
+
+const errDirtyWorktree = "DirtyWorktree"
+
+// errBranchExists is the error type returned (non-retryable) when the requested
+// branch is already checked out on the first attempt, i.e. the caller asked to
+// develop on an existing branch rather than a fresh one.
+const errBranchExists = "BranchExists"
+
+// CreateBranch creates and checks out req.Branch at the current HEAD, returning
+// the HEAD SHA the branch starts from so a later step can confirm the agent
+// advanced it. It requires a clean working tree (no local changes).
+//
+// It is idempotent across Temporal retries: when req.Branch is already the
+// checked-out branch on a retry (attempt > 1, i.e. this activity already
+// switched before being retried), it skips the clean-tree check and branch
+// creation and simply reports the current HEAD. On the first attempt an
+// already-checked-out branch is instead rejected: it is indistinguishable from
+// a caller asking to develop on an existing branch, and skipping the clean-tree
+// check there would let unrelated local changes be committed by the agent.
+func (a *Activities) CreateBranch(ctx context.Context, req CreateBranchRequest) (string, error) {
+	current, err := a.Git.CurrentBranch(ctx, req.WorkDir)
+	if err != nil {
+		return "", fmt.Errorf("determine current branch: %w", err)
+	}
+	if current == req.Branch {
+		if activity.GetInfo(ctx).Attempt <= 1 {
+			return "", temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("branch %s is already checked out; choose a new branch name", req.Branch),
+				errBranchExists, nil)
+		}
+		head, err := a.Git.Head(ctx, req.WorkDir)
+		if err != nil {
+			return "", fmt.Errorf("read HEAD: %w", err)
+		}
+		return head, nil
+	}
+
+	dirty, err := a.Git.HasChanges(ctx, req.WorkDir)
+	if err != nil {
+		return "", fmt.Errorf("check for local changes: %w", err)
+	}
+	if dirty {
+		return "", temporal.NewNonRetryableApplicationError(
+			"working tree has local changes; commit or stash them first", errDirtyWorktree, nil)
+	}
+
+	if err := a.Git.CreateBranch(ctx, req.WorkDir, req.Branch); err != nil {
+		return "", fmt.Errorf("create branch %s: %w", req.Branch, err)
+	}
+	head, err := a.Git.Head(ctx, req.WorkDir)
+	if err != nil {
+		return "", fmt.Errorf("read HEAD: %w", err)
+	}
+	return head, nil
+}
+
+// RunDevelopAgent drives the Pi agent to implement the caller's prompt on the
+// freshly created branch, committing its work so the workflow's HEAD-advanced
+// check can confirm the change landed.
+func (a *Activities) RunDevelopAgent(ctx context.Context, req RunDevelopRequest) (string, error) {
+	return a.Agent.Run(ctx, BuildDevelopPrompt(req.Prompt), req.WorkDir)
+}
+
+// EnsureDeveloped confirms the develop agent advanced HEAD past the branch's
+// starting commit and left a clean working tree, returning the new commit SHAs.
+// It fails non-retryably when the agent produced no commits, and when it left
+// uncommitted changes behind: the develop pass must land all its work as
+// commits.
+func (a *Activities) EnsureDeveloped(ctx context.Context, req EnsureDevelopedRequest) ([]string, error) {
+	commits, err := a.Git.CommitsSince(ctx, req.WorkDir, req.BaseSHA)
+	if err != nil {
+		return nil, fmt.Errorf("list commits since %s: %w", req.BaseSHA, err)
+	}
+	if len(commits) == 0 {
+		return nil, temporal.NewNonRetryableApplicationError(
+			"agent produced no new commits", errNoAdvance, nil)
+	}
+	dirty, err := a.Git.HasChanges(ctx, req.WorkDir)
+	if err != nil {
+		return nil, fmt.Errorf("check for local changes: %w", err)
+	}
+	if dirty {
+		return nil, temporal.NewNonRetryableApplicationError(
+			"agent left uncommitted changes", errDirtyWorktree, nil)
+	}
+	return commits, nil
 }
 
 // DeterminePR finds the current branch and its single open PR, failing when

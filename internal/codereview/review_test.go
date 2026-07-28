@@ -9,6 +9,8 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
+
+	"temporal-agents/internal/notification"
 )
 
 // The review workflow tests exercise observable behavior — which activities run
@@ -18,6 +20,7 @@ func newReviewEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestWorkflowEnvironment()
 	env.RegisterActivity(&Activities{})
+	env.RegisterActivity(&notification.Activity{})
 	env.RegisterWorkflow(ReviewWorkflow)
 	return env
 }
@@ -151,4 +154,26 @@ func TestReviewWorkflow_WithPayload_ImplementAgentError_Fails(t *testing.T) {
 	require.Error(t, env.GetWorkflowError())
 	// A failed implement must stop before reviewing again.
 	env.AssertNotCalled(t, activityName(a.RunReviewAgent), mock.Anything, mock.Anything)
+}
+
+func TestReviewWorkflow_Complete_SendsLocalChainNotification(t *testing.T) {
+	env := newReviewEnv(t)
+
+	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
+		Return(Checkpoint{HeadSHA: "base"}, nil)
+	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return("nothing to change", nil)
+	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).
+		Return(nil, temporal.NewNonRetryableApplicationError("no commits", errNoAdvance, nil))
+	var got notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
+		got = n
+		return true
+	})).Return(nil)
+
+	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo", Payload: "prior review"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	// Converging the local review loop notifies that its chain is done.
+	require.Equal(t, "Local review chain complete", got.Title)
 }

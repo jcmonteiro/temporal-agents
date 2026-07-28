@@ -74,6 +74,18 @@ func TestBuildImplementPrompt_EmbedsReviewAndAsksToCommit(t *testing.T) {
 	}
 }
 
+func TestBuildDevelopPrompt_EmbedsPromptAndAsksToCommit(t *testing.T) {
+	prompt := "add a rate limiter to the API client"
+	got := BuildDevelopPrompt(prompt)
+
+	if !strings.Contains(got, prompt) {
+		t.Fatalf("develop prompt should embed the caller's prompt:\n%s", got)
+	}
+	if !strings.Contains(got, "commit") {
+		t.Fatalf("develop prompt should ask the agent to commit:\n%s", got)
+	}
+}
+
 func TestFormatReplyBody(t *testing.T) {
 	tests := []struct {
 		name string

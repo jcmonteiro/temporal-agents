@@ -178,6 +178,26 @@ type ReviewInput struct {
 // branch. It is deliberately terse; the agent decides how to review.
 const ReviewPrompt = "Perform a thorough code review of the current branch"
 
+// DevelopInput is the input to DevelopWorkflow.
+type DevelopInput struct {
+	// WorkDir is the repository directory the CLI was invoked from.
+	WorkDir string
+	// Branch is the new branch to create and develop on.
+	Branch string
+	// Prompt is the caller's instruction describing what to implement.
+	Prompt string
+}
+
+// BuildDevelopPrompt renders the instruction that has the Pi agent implement
+// the caller's task on the freshly created branch. It asks the agent to commit
+// all its work so the workflow's HEAD-advanced check can confirm the change
+// landed.
+func BuildDevelopPrompt(prompt string) string {
+	return `Implement the task described below. Read the referenced code and relevant in-repo documentation for context, then make the changes. Confirm lint/typecheck/build (and synth, if infra) pass, then commit all your work.
+
+` + strings.TrimSpace(prompt)
+}
+
 // BuildImplementPrompt renders the instruction that has the Pi agent act on a
 // code review's raw output. It asks the agent to commit its work so the
 // workflow's HEAD-advanced check can confirm the change landed, and to make no

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -22,6 +23,8 @@ import (
 	"temporal-agents/internal/codereview"
 	"temporal-agents/internal/ghcli"
 	"temporal-agents/internal/gitcli"
+	"temporal-agents/internal/notification"
+	"temporal-agents/internal/notify"
 	"temporal-agents/internal/piagent"
 )
 
@@ -32,7 +35,11 @@ func main() {
 
 	switch os.Args[1] {
 	case "worker":
-		runWorker()
+		if wantsHelp(os.Args[2:]) {
+			workerHelp(os.Stdout)
+			return
+		}
+		runWorker(parseWorkerFlags(os.Args[2:]))
 	case "run":
 		pos, save, chain := parseFlags(os.Args[2:])
 		if len(pos) < 1 {
@@ -72,7 +79,8 @@ USAGE
   temporal-agents <command> [arguments]
 
 COMMANDS
-  worker                                 Start the Temporal worker
+  worker [--no-desktop] [--webhook <url>]
+                                         Start the Temporal worker
   code <subcommand>                      Agent workflows for the current repo
   run "<prompt>" [--save <name>] [--chain]
                                          Start a workflow (returns immediately)
@@ -259,6 +267,30 @@ EXAMPLES
 `)
 }
 
+func workerHelp(w io.Writer) {
+	fmt.Fprint(w, `temporal-agents worker — start the Temporal worker
+
+Runs the worker that executes the workflows and their activities, including the
+completion notification that fires when a local review or Copilot review chain
+finishes.
+
+USAGE
+  temporal-agents worker [--no-desktop] [--webhook <url>]
+
+FLAGS
+  --no-desktop     Disable the macOS desktop notification (enabled by default on
+                   macOS only)
+  --webhook <url>  POST completion notifications as JSON to <url> (disabled by
+                   default)
+
+EXAMPLES
+  temporal-agents worker
+  temporal-agents worker --no-desktop
+  temporal-agents worker --webhook https://hooks.example.com/notify
+  temporal-agents worker --no-desktop --webhook https://hooks.example.com/notify
+`)
+}
+
 func scheduleHelp(w io.Writer) {
 	fmt.Fprint(w, `temporal-agents schedule — run a workflow on a recurring schedule
 
@@ -328,7 +360,58 @@ func cwd() string {
 	return dir
 }
 
-func runWorker() {
+// notifyOptions captures the notification adapters enabled at worker start.
+type notifyOptions struct {
+	// desktop enables the macOS desktop notifier (on by default on macOS only,
+	// since it shells out to the macOS-only osascript).
+	desktop bool
+	// webhookURL, when non-empty, enables the webhook notifier posting to it.
+	webhookURL string
+}
+
+// parseWorkerFlags reads the worker's notification flags: --no-desktop disables
+// the macOS desktop notifier (enabled by default on macOS only, as it shells
+// out to the macOS-only osascript), and --webhook <url> (or --webhook=<url>)
+// enables the webhook notifier posting to that URL (disabled by default).
+func parseWorkerFlags(args []string) notifyOptions {
+	opts := notifyOptions{desktop: runtime.GOOS == "darwin"}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--no-desktop":
+			opts.desktop = false
+		case a == "--webhook":
+			if i+1 >= len(args) {
+				fatalf("--webhook requires a URL")
+			}
+			opts.webhookURL = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--webhook="):
+			opts.webhookURL = strings.TrimPrefix(a, "--webhook=")
+			if opts.webhookURL == "" {
+				fatalf("--webhook requires a URL")
+			}
+		default:
+			fatalf("unexpected argument %q", a)
+		}
+	}
+	return opts
+}
+
+// buildNotifier assembles the fan-out notifier from the enabled adapters. When
+// none are enabled the returned Multi is empty and Notify is a no-op.
+func buildNotifier(opts notifyOptions) notification.Notifier {
+	var notifiers notify.Multi
+	if opts.desktop {
+		notifiers = append(notifiers, notify.NewDesktop())
+	}
+	if opts.webhookURL != "" {
+		notifiers = append(notifiers, notify.NewWebhook(opts.webhookURL))
+	}
+	return notifiers
+}
+
+func runWorker(opts notifyOptions) {
 	c := dial()
 	defer c.Close()
 
@@ -351,13 +434,23 @@ func runWorker() {
 	// activities (both share the same Activities bundle).
 	w.RegisterWorkflow(codereview.PilotWorkflow)
 	w.RegisterWorkflow(codereview.ReviewWorkflow)
+	w.RegisterWorkflow(codereview.DevelopWorkflow)
 	w.RegisterActivity(&codereview.Activities{
 		Git:   gitcli.New(),
 		PRs:   ghcli.New(),
 		Agent: piagent.Agent{},
 	})
 
-	fmt.Printf("Worker ready · task queue %q · press Ctrl+C to stop\n", TaskQueue)
+	// A single notification activity, shared by every workflow that notifies.
+	w.RegisterActivity(&notification.Activity{Notifier: buildNotifier(opts)})
+
+	fmt.Printf("Worker ready · task queue %q", TaskQueue)
+	fmt.Printf(" · desktop notifications %s", onOff(opts.desktop))
+	// Report only whether the webhook is enabled: webhook URLs commonly embed
+	// bearer-like secrets in their path or query, so printing the URL would leak
+	// credentials into terminal captures and service logs.
+	fmt.Printf(" · webhook %s", onOff(opts.webhookURL != ""))
+	fmt.Printf(" · press Ctrl+C to stop\n")
 	if err := w.Run(worker.InterruptCh()); err != nil {
 		fatalf("Worker stopped with error: %v", err)
 	}
@@ -562,6 +655,15 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max-1] + "…"
+}
+
+// onOff renders a boolean as a human-readable on/off state for worker startup
+// output.
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
 }
 
 func fatalf(format string, args ...any) {

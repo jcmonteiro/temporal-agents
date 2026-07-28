@@ -12,6 +12,8 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
+
+	"temporal-agents/internal/notification"
 )
 
 // The workflow tests exercise observable behavior — which activities run and
@@ -24,11 +26,14 @@ func newEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 	// Register a zero-value Activities so activity names resolve; the real
 	// methods are never invoked because every call is mocked below.
 	env.RegisterActivity(&Activities{})
+	env.RegisterActivity(&notification.Activity{})
 	env.RegisterWorkflow(PilotWorkflow)
 	return env
 }
 
 var a *Activities // used only to reference method names for OnActivity
+
+var na *notification.Activity // used only to reference Notify for OnActivity
 
 // activityName returns the Temporal-registered activity name for a *Activities
 // method value. Negative assertions (AssertNotCalled) take a method-name
@@ -209,4 +214,27 @@ func TestPilotWorkflow_NoNewCommits_FailsAndStopsBeforeReplying(t *testing.T) {
 	env.AssertNotCalled(t, activityName(a.PushBranch), mock.Anything, mock.Anything)
 	env.AssertNotCalled(t, activityName(a.ReplyAndResolve), mock.Anything, mock.Anything)
 	env.AssertNotCalled(t, activityName(a.RequestCopilotReview), mock.Anything, mock.Anything)
+}
+
+func TestPilotWorkflow_Complete_SendsCopilotChainNotification(t *testing.T) {
+	env := newEnv(t)
+	pr := PullRequest{Number: 7}
+
+	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
+	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
+		Return(LoadCommentsResult{Threads: nil}, nil)
+	var got notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
+		got = n
+		return true
+	})).Return(nil)
+
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	// Finishing the pilot loop notifies that the Copilot review chain is done.
+	require.Equal(t, "Copilot review chain complete", got.Title)
+	require.Contains(t, got.Body, "nothing to do")
 }

@@ -6,13 +6,32 @@ import (
 	"strings"
 	"time"
 
+	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
+
+	"temporal-agents/internal/notification"
 )
 
 // reviewPollInterval is how long the workflow sleeps between checks for a
 // still-pending Copilot review.
 const reviewPollInterval = time.Minute
+
+// notifyChainComplete sends a best-effort completion notification at a chain's
+// terminal step. Failures are logged and swallowed so a notification problem
+// never fails an otherwise successful workflow. It must be called before the
+// workflow returns (never on a continue-as-new path), since continue-as-new
+// cancels any in-flight activity.
+func notifyChainComplete(ctx workflow.Context, title, body string) {
+	opts := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 30 * time.Second,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
+	})
+	var na *notification.Activity
+	if err := workflow.ExecuteActivity(opts, na.Notify, notification.Notification{Title: title, Body: body}).Get(opts, nil); err != nil {
+		workflow.GetLogger(ctx).Warn("could not send completion notification", "error", err)
+	}
+}
 
 // PilotWorkflow drives the "code pilot" loop: it finds the open PR for the
 // current branch, waits out any in-flight review, has the Pi agent address the
@@ -33,6 +52,7 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (string, error) {
 	if in.Chain && addressed {
 		return "", workflow.NewContinueAsNewError(ctx, PilotWorkflow, in)
 	}
+	notifyChainComplete(ctx, "Copilot review chain complete", summary)
 	return summary, nil
 }
 
@@ -137,6 +157,71 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, error) {
 		len(loaded.Threads), pr.Number, len(commits)), true, nil
 }
 
+// DevelopWorkflow drives the "code develop" flow. In sequence it:
+//
+//   - Creates the requested branch off a clean working tree (CreateBranch fails
+//     when there are uncommitted local changes) and records the starting HEAD.
+//   - Has the Pi agent implement the caller's prompt on that branch.
+//   - Confirms the agent advanced HEAD and left a clean working tree
+//     (EnsureDeveloped fails when nothing was committed or changes remain).
+//   - Triggers the local review loop (ReviewWorkflow) on the new branch as an
+//     abandoned child, so it keeps running—and notifies on completion—after
+//     this workflow returns, exactly like a standalone "code review" run.
+//
+// It returns once the review has been started, reporting the review workflow's
+// ID so the caller can watch it.
+func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (string, error) {
+	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
+	// should not run forever.
+	quick := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 2 * time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
+	})
+	// The agent step is long-running and streams heartbeats.
+	agentCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: time.Hour,
+		HeartbeatTimeout:    time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
+	})
+
+	var a *Activities
+
+	var base string
+	if err := workflow.ExecuteActivity(quick, a.CreateBranch,
+		CreateBranchRequest{WorkDir: in.WorkDir, Branch: in.Branch}).Get(quick, &base); err != nil {
+		return "", err
+	}
+
+	if err := workflow.ExecuteActivity(agentCtx, a.RunDevelopAgent,
+		RunDevelopRequest{WorkDir: in.WorkDir, Prompt: in.Prompt}).Get(agentCtx, nil); err != nil {
+		return "", err
+	}
+
+	var commits []string
+	if err := workflow.ExecuteActivity(quick, a.EnsureDeveloped,
+		EnsureDevelopedRequest{WorkDir: in.WorkDir, BaseSHA: base}).Get(quick, &commits); err != nil {
+		return "", err
+	}
+
+	// Trigger the review loop as an abandoned child so it outlives this workflow.
+	reviewID := "review-" + workflow.GetInfo(ctx).WorkflowExecution.ID
+	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+		WorkflowID:        reviewID,
+		ParentClosePolicy: enums.PARENT_CLOSE_POLICY_ABANDON,
+	})
+	child := workflow.ExecuteChildWorkflow(childCtx, ReviewWorkflow, ReviewInput{WorkDir: in.WorkDir})
+	if err := child.GetChildWorkflowExecution().Get(ctx, nil); err != nil {
+		return "", fmt.Errorf("start review workflow: %w", err)
+	}
+
+	summary := fmt.Sprintf("Developed branch %s with %d commit(s); started review %s.",
+		in.Branch, len(commits), reviewID)
+	notifyChainComplete(ctx, "Development complete",
+		fmt.Sprintf("Developed branch %s with %d commit(s) successfully. The review cycle will now commence.",
+			in.Branch, len(commits)))
+	return summary, nil
+}
+
 // ReviewWorkflow drives the "code review" loop entirely on the host machine.
 // Each pass:
 //
@@ -199,7 +284,9 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (string, error) {
 			// so return without further cleanup.
 			var appErr *temporal.ApplicationError
 			if errors.As(err, &appErr) && appErr.Type() == errNoAdvance {
-				return "Review complete; the implement pass found nothing to commit.", nil
+				summary := "Review complete; the implement pass found nothing to commit."
+				notifyChainComplete(ctx, "Local review chain complete", summary)
+				return summary, nil
 			}
 			return "", err
 		}
@@ -225,7 +312,9 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (string, error) {
 	// pass cap so the loop cannot run forever.
 	nextPass := in.Pass + 1
 	if nextPass >= MaxReviewPasses {
-		return fmt.Sprintf("Review stopped after %d pass(es).", MaxReviewPasses), nil
+		summary := fmt.Sprintf("Review stopped after %d pass(es).", MaxReviewPasses)
+		notifyChainComplete(ctx, "Local review chain complete", summary)
+		return summary, nil
 	}
 	return "", workflow.NewContinueAsNewError(ctx, ReviewWorkflow,
 		ReviewInput{WorkDir: in.WorkDir, Payload: reviewOutput, Pass: nextPass})
