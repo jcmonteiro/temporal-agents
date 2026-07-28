@@ -28,6 +28,15 @@ type LoadCommentsResult struct {
 	Threads []ReviewThread
 }
 
+// AgentResult is the output of every agent activity: the agent's final message
+// and the total token usage of its session. The workflow accumulates Tokens
+// across passes (and, via child workflows, across parent workflows) so the
+// run's terminal result can report the whole chain's usage.
+type AgentResult struct {
+	Output string
+	Tokens int
+}
+
 // RunAgentRequest is the input to RunAgent.
 type RunAgentRequest struct {
 	Input   PilotInput
@@ -146,8 +155,12 @@ func (a *Activities) CreateBranch(ctx context.Context, req CreateBranchRequest) 
 // RunDevelopAgent drives the Pi agent to implement the caller's prompt on the
 // freshly created branch, committing its work so the workflow's HEAD-advanced
 // check can confirm the change landed.
-func (a *Activities) RunDevelopAgent(ctx context.Context, req RunDevelopRequest) (string, error) {
-	return a.Agent.Run(ctx, BuildDevelopPrompt(req.Prompt), req.WorkDir)
+func (a *Activities) RunDevelopAgent(ctx context.Context, req RunDevelopRequest) (AgentResult, error) {
+	out, tokens, err := a.Agent.Run(ctx, BuildDevelopPrompt(req.Prompt), req.WorkDir)
+	if err != nil {
+		return AgentResult{}, err
+	}
+	return AgentResult{Output: out, Tokens: tokens}, nil
 }
 
 // EnsureDeveloped confirms the develop agent advanced HEAD past the branch's
@@ -241,9 +254,13 @@ func (a *Activities) MarkHeadAndStash(ctx context.Context, in PilotInput) (Check
 // RunAgent is the only activity that drives the Pi agent. It builds the prompt
 // from the (default/append/replace) instruction plus the unresolved comments
 // and hands it to the agent, which is expected to commit its work.
-func (a *Activities) RunAgent(ctx context.Context, req RunAgentRequest) (string, error) {
+func (a *Activities) RunAgent(ctx context.Context, req RunAgentRequest) (AgentResult, error) {
 	prompt := BuildPrompt(req.Input.PromptMode, req.Input.PromptText, req.PR.Body, req.Threads)
-	return a.Agent.Run(ctx, prompt, req.Input.WorkDir)
+	out, tokens, err := a.Agent.Run(ctx, prompt, req.Input.WorkDir)
+	if err != nil {
+		return AgentResult{}, err
+	}
+	return AgentResult{Output: out, Tokens: tokens}, nil
 }
 
 // EnsureHeadAdvanced verifies the agent produced new commits. When it did, the
@@ -304,17 +321,25 @@ func (a *Activities) RequestCopilotReview(ctx context.Context, pr PullRequest) e
 // RunReviewAgent drives the Pi agent to review the current branch and returns
 // its final message. Unlike the Copilot flow, the review runs on the host and
 // blocks until it completes, so no waiting/polling is needed afterwards.
-func (a *Activities) RunReviewAgent(ctx context.Context, in ReviewInput) (string, error) {
-	return a.Agent.Run(ctx, ReviewPrompt, in.WorkDir)
+func (a *Activities) RunReviewAgent(ctx context.Context, in ReviewInput) (AgentResult, error) {
+	out, tokens, err := a.Agent.Run(ctx, ReviewPrompt, in.WorkDir)
+	if err != nil {
+		return AgentResult{}, err
+	}
+	return AgentResult{Output: out, Tokens: tokens}, nil
 }
 
 // RunImplementAgent drives the Pi agent to implement the changes called for by
 // the previous pass's raw review output, committing its work so the workflow's
 // HEAD-advanced check can confirm the change landed (or detect that there was
 // nothing to change).
-func (a *Activities) RunImplementAgent(ctx context.Context, req RunImplementRequest) (string, error) {
+func (a *Activities) RunImplementAgent(ctx context.Context, req RunImplementRequest) (AgentResult, error) {
 	prompt := BuildImplementPrompt(req.Payload)
-	return a.Agent.Run(ctx, prompt, req.WorkDir)
+	out, tokens, err := a.Agent.Run(ctx, prompt, req.WorkDir)
+	if err != nil {
+		return AgentResult{}, err
+	}
+	return AgentResult{Output: out, Tokens: tokens}, nil
 }
 
 // RestoreStash pops changes stashed by MarkHeadAndStash. It is invoked as a

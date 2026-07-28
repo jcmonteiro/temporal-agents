@@ -133,6 +133,37 @@ func TestProgress_ClearsThresholdCompactionWhenPiContinuesWithQueuedWork(t *test
 	}
 }
 
+func TestProgress_SumsSessionTokensAcrossResponses(t *testing.T) {
+	var p progress
+	// Each assistant message_end is one model response; the session total sums
+	// them (streaming updates in between must not be counted).
+	p.apply(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"a"}],"usage":{"totalTokens":1000}}}`)
+	p.apply(`{"type":"message_update","message":{"role":"assistant","content":[],"usage":{"totalTokens":1500}}}`)
+	p.apply(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"b"}],"usage":{"totalTokens":1800}}}`)
+
+	if p.sessionTokens != 2800 {
+		t.Fatalf("expected session token sum 2800, got %d", p.sessionTokens)
+	}
+}
+
+func TestProgress_SessionTokensIgnoreNonAssistantMessages(t *testing.T) {
+	var p progress
+	p.apply(`{"type":"message_end","message":{"role":"user","content":[],"usage":{"totalTokens":5000}}}`)
+
+	if p.sessionTokens != 0 {
+		t.Fatalf("expected only assistant responses to count, got %d", p.sessionTokens)
+	}
+}
+
+func TestFormatTokenTotal_GroupsThousands(t *testing.T) {
+	if got := FormatTokenTotal(1234567); got != "Total token usage across all sessions: 1,234,567 tokens." {
+		t.Fatalf("unexpected format: %q", got)
+	}
+	if got := FormatTokenTotal(0); got != "Total token usage across all sessions: 0 tokens." {
+		t.Fatalf("unexpected zero format: %q", got)
+	}
+}
+
 func TestPiArgs_RunsNonInteractiveJSONForSession(t *testing.T) {
 	args := piArgs("session-123")
 	if want := []string{"-p", "--mode", "json", "--session-id", "session-123"}; strings.Join(args, " ") != strings.Join(want, " ") {
@@ -145,25 +176,30 @@ func TestRunLoop_ResumesUntilRunEndsWithoutThresholdCompaction(t *testing.T) {
 	// First run ends on a threshold compaction (unfinished); second run finishes.
 	results := []struct {
 		result    string
+		tokens    int
 		compacted bool
 	}{
-		{result: "partial", compacted: true},
-		{result: "done", compacted: false},
+		{result: "partial", tokens: 1000, compacted: true},
+		{result: "done", tokens: 250, compacted: false},
 	}
 	i := 0
-	run := func(_ context.Context, _ []string, _, input string) (string, bool, error) {
+	run := func(_ context.Context, _ []string, _, input string) (string, int, bool, error) {
 		inputs = append(inputs, input)
 		r := results[i]
 		i++
-		return r.result, r.compacted, nil
+		return r.result, r.tokens, r.compacted, nil
 	}
 
 	got, err := runLoop(context.Background(), run, nil, "", "do the task")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "done" {
-		t.Fatalf("expected the final non-empty result, got %q", got)
+	if got.Output != "done" {
+		t.Fatalf("expected the final non-empty result, got %q", got.Output)
+	}
+	// Token usage is summed across every invocation, including the resume.
+	if got.Tokens != 1250 {
+		t.Fatalf("expected summed token usage 1250, got %d", got.Tokens)
 	}
 	if len(inputs) != 2 || inputs[0] != "do the task" || inputs[1] != continueMessage {
 		t.Fatalf("expected original prompt then a continue message, got %v", inputs)
@@ -173,17 +209,17 @@ func TestRunLoop_ResumesUntilRunEndsWithoutThresholdCompaction(t *testing.T) {
 func TestRunLoop_FailsWhenResumeCapExhaustedWhileStillCompacting(t *testing.T) {
 	// Every run ends on a threshold compaction, so the task never finishes.
 	var lastInput string
-	run := func(_ context.Context, _ []string, _, input string) (string, bool, error) {
+	run := func(_ context.Context, _ []string, _, input string) (string, int, bool, error) {
 		lastInput = input
-		return "partial", true, nil
+		return "partial", 10, true, nil
 	}
 
 	got, err := runLoop(context.Background(), run, nil, "", "do the task")
 	if err == nil {
-		t.Fatalf("expected an error when the resume cap is exhausted mid-task, got result %q", got)
+		t.Fatalf("expected an error when the resume cap is exhausted mid-task, got result %q", got.Output)
 	}
-	if got != "" {
-		t.Fatalf("expected no partial result on cap exhaustion, got %q", got)
+	if got.Output != "" || got.Tokens != 0 {
+		t.Fatalf("expected no partial result on cap exhaustion, got %+v", got)
 	}
 	if lastInput != continueMessage {
 		t.Fatalf("expected resumes to use the continue message, last input was %q", lastInput)

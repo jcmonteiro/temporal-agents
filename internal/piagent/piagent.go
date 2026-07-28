@@ -37,6 +37,25 @@ const maxResumes = 50
 // something new.
 const continueMessage = "Your context was automatically compacted to free space. Continue the task from where you left off; do not restart or wait for further input."
 
+// Result is the outcome of a Pi agent run: the final assistant message and the
+// session's total token usage.
+type Result struct {
+	// Output is the agent's final assistant message.
+	Output string
+	// Tokens is the total token usage of the session: the sum of every model
+	// response's reported token total. It reflects total tokens processed (each
+	// response re-processes the growing context), not the final context size. A
+	// session resumed after a threshold compaction sums across every invocation.
+	Tokens int
+}
+
+// FormatTokenTotal renders a human-readable total-token-usage line to append to
+// a workflow result, e.g. "Total token usage across all sessions: 18,477
+// tokens."
+func FormatTokenTotal(total int) string {
+	return fmt.Sprintf("Total token usage across all sessions: %s tokens.", groupThousands(total))
+}
+
 // piEvent is the subset of pi's --mode json events we care about.
 type piEvent struct {
 	Type     string `json:"type"`
@@ -88,6 +107,12 @@ type progress struct {
 	// returning 0 when unknown. It is injected so the parser stays pure and
 	// testable; production wires it to the pi model catalog.
 	window func(provider, model string) int
+
+	// sessionTokens accumulates the session's total token usage: the sum of each
+	// completed assistant message's reported token total. Unlike tokens (the
+	// latest context size, used for the heartbeat percentage), this is a running
+	// sum across every model response in the session.
+	sessionTokens int
 
 	// thresholdCompacted records that the run *trailed off* with a successful,
 	// non-retrying threshold auto-compaction: the compaction was the last
@@ -147,6 +172,12 @@ func (p *progress) apply(line string) (finalText string) {
 		}
 	case "message_end":
 		if e.Message != nil && e.Message.Role == "assistant" {
+			// Sum this response's token total into the session usage. Each
+			// assistant message_end is one model response, so summing them yields
+			// the session's total tokens processed.
+			if e.Message.Usage != nil {
+				p.sessionTokens += e.Message.Usage.TotalTokens
+			}
 			var b strings.Builder
 			for _, c := range e.Message.Content {
 				if c.Type == "text" {
@@ -238,9 +269,11 @@ func groupThousands(n int) string {
 // injected into workflows that need a coding agent.
 type Agent struct{}
 
-// Run runs the Pi agent for prompt in workDir. See the package-level Run.
-func (Agent) Run(ctx context.Context, prompt, workDir string) (string, error) {
-	return Run(ctx, prompt, workDir)
+// Run runs the Pi agent for prompt in workDir and returns its final message
+// and the session's total token usage. See the package-level Run.
+func (Agent) Run(ctx context.Context, prompt, workDir string) (output string, tokens int, err error) {
+	r, err := Run(ctx, prompt, workDir)
+	return r.Output, r.Tokens, err
 }
 
 // Run runs the Pi agent for prompt in workDir, streaming Pi's JSON events as
@@ -252,7 +285,7 @@ func (Agent) Run(ctx context.Context, prompt, workDir string) (string, error) {
 // Pi session (with full context) instead of starting fresh. The RunID is
 // constant across activity retries but changes on continue-as-new, so each
 // chained iteration still gets its own fresh session.
-func Run(ctx context.Context, prompt, workDir string) (string, error) {
+func Run(ctx context.Context, prompt, workDir string) (Result, error) {
 	sessionID := activity.GetInfo(ctx).WorkflowExecution.RunID
 
 	// Resolve context-window sizes from the pi model catalog for the token
@@ -266,14 +299,14 @@ func Run(ctx context.Context, prompt, workDir string) (string, error) {
 
 // runOnceFunc runs a single pi invocation. It is the seam runLoop is written
 // against so the resume loop can be tested without spawning pi.
-type runOnceFunc func(ctx context.Context, args []string, workDir, input string) (result string, thresholdCompacted bool, err error)
+type runOnceFunc func(ctx context.Context, args []string, workDir, input string) (result string, tokens int, thresholdCompacted bool, err error)
 
 // runLoop drives the resume loop: it invokes run with the original prompt, then
 // repeatedly resumes the same session with continueMessage as long as a run
 // ends with a trailing threshold auto-compaction, returning the last non-empty
 // final message. Bounded by maxResumes so a task that keeps producing
 // over-threshold context cannot loop forever.
-func runLoop(ctx context.Context, run runOnceFunc, args []string, workDir, prompt string) (string, error) {
+func runLoop(ctx context.Context, run runOnceFunc, args []string, workDir, prompt string) (Result, error) {
 	// First invocation sends the original prompt; see runOnce for why via stdin.
 	//
 	// Always send the original prompt on the first invocation, even on an
@@ -283,14 +316,16 @@ func runLoop(ctx context.Context, run runOnceFunc, args []string, workDir, promp
 	// still has the task to work from. A bare "Continue" would break that case.
 	input := prompt
 
-	var lastResult string
+	var res Result
 	for i := 0; ; i++ {
-		result, thresholdCompacted, err := run(ctx, args, workDir, input)
+		result, tokens, thresholdCompacted, err := run(ctx, args, workDir, input)
 		if err != nil {
-			return "", err
+			return Result{}, err
 		}
+		// Accumulate token usage across every invocation, including resumes.
+		res.Tokens += tokens
 		if result != "" {
-			lastResult = result
+			res.Output = result
 		}
 
 		// A threshold auto-compaction stops Pi in -p mode without finishing the
@@ -307,18 +342,18 @@ func runLoop(ctx context.Context, run runOnceFunc, args []string, workDir, promp
 		// partial output as success, so Temporal does not mark the activity
 		// complete and let downstream workflows proceed with a truncated result.
 		if i >= maxResumes {
-			return "", fmt.Errorf("pi resume cap (%d) exhausted while the run still ended in a threshold compaction; task unfinished", maxResumes)
+			return Result{}, fmt.Errorf("pi resume cap (%d) exhausted while the run still ended in a threshold compaction; task unfinished", maxResumes)
 		}
 		input = continueMessage
 	}
-	return lastResult, nil
+	return res, nil
 }
 
 // runOnce runs a single pi invocation with input on stdin, streaming Pi's JSON
 // events as Temporal heartbeat details. It returns the final assistant message
 // and whether the run ended with a successful threshold auto-compaction (which
 // stops Pi in -p mode and signals Run to resume the session).
-func runOnce(ctx context.Context, args []string, workDir, input string) (result string, thresholdCompacted bool, err error) {
+func runOnce(ctx context.Context, args []string, workDir, input string) (result string, tokens int, thresholdCompacted bool, err error) {
 	// Feed input via stdin rather than as a positional argument. Pi's `-p` is a
 	// boolean flag and the message is positional, so an input that begins with
 	// "-" (e.g. a bullet list) is otherwise parsed as an unknown option and Pi
@@ -336,13 +371,13 @@ func runOnce(ctx context.Context, args []string, workDir, input string) (result 
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", false, fmt.Errorf("pipe pi stdout: %w", err)
+		return "", 0, false, fmt.Errorf("pipe pi stdout: %w", err)
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
-		return "", false, fmt.Errorf("start pi: %w", err)
+		return "", 0, false, fmt.Errorf("start pi: %w", err)
 	}
 
 	// Keep the activity alive during quiet stretches (e.g. model thinking) by
@@ -385,14 +420,14 @@ func runOnce(ctx context.Context, args []string, workDir, input string) (result 
 	close(stop)
 
 	if waitErr := cmd.Wait(); waitErr != nil {
-		return "", false, fmt.Errorf("pi failed: %w\n%s", waitErr, strings.TrimSpace(stderr.String()))
+		return "", 0, false, fmt.Errorf("pi failed: %w\n%s", waitErr, strings.TrimSpace(stderr.String()))
 	}
 
 	result = strings.TrimSpace(finalMsg.String())
 	if result == "" {
 		result = strings.TrimSpace(prog.writing)
 	}
-	return result, prog.thresholdCompacted, nil
+	return result, prog.sessionTokens, prog.thresholdCompacted, nil
 }
 
 func truncate(s string, max int) string {

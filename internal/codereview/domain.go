@@ -47,6 +47,9 @@ type PilotInput struct {
 	// Chain, when true, spawns a delayed child run after a successful pass so
 	// the loop keeps addressing new review feedback indefinitely.
 	Chain bool
+	// TokensSoFar carries the accumulated total token usage from prior passes of
+	// a chained run, so the terminal result reports the whole chain's usage.
+	TokensSoFar int
 }
 
 // PullRequest identifies the open PR the loop operates on.
@@ -145,6 +148,37 @@ func formatThread(n int, t ReviewThread) string {
 	return b.String()
 }
 
+// FormatTokenTotal renders the total-token-usage line appended to a workflow's
+// result, e.g. "Total token usage across all sessions: 1,234,567 tokens." It is
+// defined here (rather than reusing the piagent adapter's identical helper) so
+// the application core does not depend on a driven adapter.
+func FormatTokenTotal(total int) string {
+	return "Total token usage across all sessions: " + groupThousands(total) + " tokens."
+}
+
+// withTokenTotal appends the total-token-usage line to a workflow summary.
+func withTokenTotal(summary string, total int) string {
+	return summary + "\n\n" + FormatTokenTotal(total)
+}
+
+// groupThousands formats n with comma thousands separators (1234567 ->
+// "1,234,567").
+func groupThousands(n int) string {
+	s := strconv.Itoa(n)
+	neg := ""
+	if n < 0 {
+		neg, s = "-", s[1:]
+	}
+	var b strings.Builder
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(c)
+	}
+	return neg + b.String()
+}
+
 // FormatReplyBody renders the commit hashes as required by the spec, e.g.
 // "<sha1> + <sha2> + <sha3>". It returns an empty string when there are no
 // commits.
@@ -172,6 +206,10 @@ type ReviewInput struct {
 	// first (review-only) run is pass 0; each continue-as-new increments it. The
 	// loop stops once it reaches MaxReviewPasses so it cannot run forever.
 	Pass int
+	// TokensSoFar carries accumulated total token usage from prior passes and,
+	// when this loop was spawned by DevelopWorkflow, from that parent workflow's
+	// develop session, so the terminal result reports the whole tree's usage.
+	TokensSoFar int
 }
 
 // ReviewPrompt is the instruction handed to the Pi agent to review the current

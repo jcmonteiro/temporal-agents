@@ -48,7 +48,7 @@ type PullRequests interface {
 // Agent is the port for running the Pi agent. The concrete adapter lives in the
 // piagent package.
 type Agent interface {
-	// Run executes the agent for prompt in workDir and returns its final
-	// message.
-	Run(ctx context.Context, prompt, workDir string) (string, error)
+	// Run executes the agent for prompt in workDir and returns its final message
+	// and the total token usage of the session.
+	Run(ctx context.Context, prompt, workDir string) (output string, tokens int, err error)
 }

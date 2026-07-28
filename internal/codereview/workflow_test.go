@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
@@ -101,7 +102,7 @@ func TestPilotWorkflow_Chain_ContinuesAsNewAfterAddressing(t *testing.T) {
 		Return(LoadCommentsResult{Threads: threads}, nil)
 	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
 		Return(Checkpoint{HeadSHA: "base"}, nil)
-	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).Return("done", nil)
+	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
 	env.OnActivity(a.PushBranch, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(a.ReplyAndResolve, mock.Anything, mock.Anything).Return(nil)
@@ -147,7 +148,7 @@ func TestPilotWorkflow_HappyPath_AddressesResolvesAndRequestsReview(t *testing.T
 		Return(LoadCommentsResult{Threads: threads}, nil)
 	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
 		Return(Checkpoint{HeadSHA: "base", Stashed: true}, nil)
-	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).Return("done", nil)
+	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return(commits, nil)
 	env.OnActivity(a.PushBranch, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(a.ReplyAndResolve, mock.Anything, mock.Anything).Return(nil)
@@ -176,7 +177,7 @@ func TestPilotWorkflow_StashRestoreFailure_StillSucceeds(t *testing.T) {
 		Return(LoadCommentsResult{Threads: threads}, nil)
 	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
 		Return(Checkpoint{HeadSHA: "base", Stashed: true}, nil)
-	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).Return("done", nil)
+	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
 	env.OnActivity(a.PushBranch, mock.Anything, mock.Anything).Return(nil)
 	env.OnActivity(a.ReplyAndResolve, mock.Anything, mock.Anything).Return(nil)
@@ -202,7 +203,7 @@ func TestPilotWorkflow_NoNewCommits_FailsAndStopsBeforeReplying(t *testing.T) {
 		Return(LoadCommentsResult{Threads: threads}, nil)
 	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
 		Return(Checkpoint{HeadSHA: "base"}, nil)
-	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).Return("nothing", nil)
+	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "nothing"}, nil)
 	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).
 		Return(nil, temporal.NewNonRetryableApplicationError("no commits", errNoAdvance, nil))
 
@@ -214,6 +215,64 @@ func TestPilotWorkflow_NoNewCommits_FailsAndStopsBeforeReplying(t *testing.T) {
 	env.AssertNotCalled(t, activityName(a.PushBranch), mock.Anything, mock.Anything)
 	env.AssertNotCalled(t, activityName(a.ReplyAndResolve), mock.Anything, mock.Anything)
 	env.AssertNotCalled(t, activityName(a.RequestCopilotReview), mock.Anything, mock.Anything)
+}
+
+func TestPilotWorkflow_Result_ReportsAccumulatedTokenUsage(t *testing.T) {
+	env := newEnv(t)
+	pr := PullRequest{Number: 42}
+	threads := []ReviewThread{{ID: "t1", Body: "fix"}}
+
+	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
+	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
+		Return(LoadCommentsResult{Threads: threads}, nil)
+	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
+		Return(Checkpoint{HeadSHA: "base"}, nil)
+	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).
+		Return(AgentResult{Output: "done", Tokens: 500}, nil)
+	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnActivity(a.PushBranch, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.ReplyAndResolve, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.RequestCopilotReview, mock.Anything, mock.Anything).Return(nil)
+
+	// Seed prior-pass usage so the result reports the whole chain's total.
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", TokensSoFar: 1000})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	var out string
+	require.NoError(t, env.GetWorkflowResult(&out))
+	// 1000 carried in + 500 this pass.
+	require.Contains(t, out, "Total token usage across all sessions: 1,500 tokens.")
+}
+
+func TestPilotWorkflow_Chain_CarriesTokenUsageForward(t *testing.T) {
+	env := newEnv(t)
+	pr := PullRequest{Number: 7}
+	threads := []ReviewThread{{ID: "t1", Body: "fix"}}
+
+	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
+	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
+		Return(LoadCommentsResult{Threads: threads}, nil)
+	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
+		Return(Checkpoint{HeadSHA: "base"}, nil)
+	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).
+		Return(AgentResult{Output: "done", Tokens: 700}, nil)
+	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnActivity(a.PushBranch, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.ReplyAndResolve, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.RequestCopilotReview, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Chain: true, TokensSoFar: 300})
+
+	require.True(t, env.IsWorkflowCompleted())
+	var canErr *workflow.ContinueAsNewError
+	require.ErrorAs(t, env.GetWorkflowError(), &canErr)
+	// The continued run carries the running total (300 carried + 700 this pass).
+	var next PilotInput
+	require.NoError(t, converter.GetDefaultDataConverter().FromPayloads(canErr.Input, &next))
+	require.Equal(t, 1000, next.TokensSoFar)
 }
 
 func TestPilotWorkflow_Complete_SendsCopilotChainNotification(t *testing.T) {

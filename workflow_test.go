@@ -9,6 +9,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"temporal-agents/internal/notification"
+	"temporal-agents/internal/piagent"
 )
 
 func TestPromptWorkflow_Complete_SendsRunNotification(t *testing.T) {
@@ -17,7 +18,8 @@ func TestPromptWorkflow_Complete_SendsRunNotification(t *testing.T) {
 	env.RegisterActivity(RunPiAgent)
 	env.RegisterActivity(&notification.Activity{})
 
-	env.OnActivity(RunPiAgent, mock.Anything, mock.Anything).Return("the agent output", nil)
+	env.OnActivity(RunPiAgent, mock.Anything, mock.Anything).
+		Return(piagent.Result{Output: "the agent output", Tokens: 12345}, nil)
 	var got notification.Notification
 	var na *notification.Activity
 	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
@@ -29,9 +31,11 @@ func TestPromptWorkflow_Complete_SendsRunNotification(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	// A finished (non-chained) run notifies with the agent's output as the body.
+	// A finished (non-chained) run notifies with the agent's output plus the
+	// total token usage as the body.
 	require.Equal(t, "Run complete", got.Title)
-	require.Equal(t, "the agent output", got.Body)
+	require.Contains(t, got.Body, "the agent output")
+	require.Contains(t, got.Body, "Total token usage across all sessions: 12,345 tokens.")
 }
 
 func TestPromptWorkflow_Chain_ContinuesAsNewWithoutNotifying(t *testing.T) {
@@ -40,7 +44,8 @@ func TestPromptWorkflow_Chain_ContinuesAsNewWithoutNotifying(t *testing.T) {
 	env.RegisterActivity(RunPiAgent)
 	env.RegisterActivity(&notification.Activity{})
 
-	env.OnActivity(RunPiAgent, mock.Anything, mock.Anything).Return("output", nil)
+	env.OnActivity(RunPiAgent, mock.Anything, mock.Anything).
+		Return(piagent.Result{Output: "output"}, nil)
 
 	env.ExecuteWorkflow(PromptWorkflow, PromptRequest{Prompt: "watch", WorkDir: "/repo", Chain: true})
 
