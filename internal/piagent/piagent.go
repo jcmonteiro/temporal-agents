@@ -261,7 +261,19 @@ func Run(ctx context.Context, prompt, workDir string) (string, error) {
 	go warmContextWindows()
 
 	args := piArgs(sessionID)
+	return runLoop(ctx, runOnce, args, workDir, prompt)
+}
 
+// runOnceFunc runs a single pi invocation. It is the seam runLoop is written
+// against so the resume loop can be tested without spawning pi.
+type runOnceFunc func(ctx context.Context, args []string, workDir, input string) (result string, thresholdCompacted bool, err error)
+
+// runLoop drives the resume loop: it invokes run with the original prompt, then
+// repeatedly resumes the same session with continueMessage as long as a run
+// ends with a trailing threshold auto-compaction, returning the last non-empty
+// final message. Bounded by maxResumes so a task that keeps producing
+// over-threshold context cannot loop forever.
+func runLoop(ctx context.Context, run runOnceFunc, args []string, workDir, prompt string) (string, error) {
 	// First invocation sends the original prompt; see runOnce for why via stdin.
 	//
 	// Always send the original prompt on the first invocation, even on an
@@ -273,7 +285,7 @@ func Run(ctx context.Context, prompt, workDir string) (string, error) {
 
 	var lastResult string
 	for i := 0; ; i++ {
-		result, thresholdCompacted, err := runOnce(ctx, args, workDir, input)
+		result, thresholdCompacted, err := run(ctx, args, workDir, input)
 		if err != nil {
 			return "", err
 		}
