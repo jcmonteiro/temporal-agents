@@ -330,8 +330,20 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	// Notify best-effort when development fails before the review loop is started.
 	// agentRan gates summarizing the last run: a failure before the develop agent
 	// runs has no Pi session to resume.
+	//
+	// remoteOwned is set once development has landed and ownership passes to the
+	// supervised remote pipeline (developWithRemote). From that point a child
+	// failure is a pipeline failure, not a development failure: developWithRemote
+	// emits its own stage-specific failure notification, so this defer stands down
+	// to avoid a second, misleading "Development failed" heads-up.
 	var agentRan bool
-	defer func() { notifyFailure(ctx, "Development failed", in.WorkDir, in.Summary, agentRan, err) }()
+	var remoteOwned bool
+	defer func() {
+		if remoteOwned {
+			return
+		}
+		notifyFailure(ctx, "Development failed", in.WorkDir, in.Summary, agentRan, err)
+	}()
 
 	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
 	// should not run forever.
@@ -378,6 +390,7 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	webhookBody := summarizeForWebhook(ctx, in.Summary, agentRan, in.WorkDir, completeSummaryTimeout)
 
 	if in.WithRemote {
+		remoteOwned = true
 		return developWithRemote(ctx, in, commits, agentResult.Tokens, webhookBody)
 	}
 
@@ -431,7 +444,15 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 // the pipeline converges) and a final "Remote pipeline complete" once the whole
 // pipeline has converged (with no summary body, so the terminal notification is
 // not misattributed the oldest, develop-only summary).
-func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, tokens int, webhookBody string) (string, error) {
+func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, tokens int, webhookBody string) (result string, err error) {
+	// Development has already landed, so a failure here belongs to the remote
+	// pipeline, not the develop step. Emit a pipeline-specific failure heads-up (the
+	// parent DevelopWorkflow defer stands down for the remote path). summaryEnabled
+	// and agentRan are false: the develop summary was already delivered up front, and
+	// the review/pilot children summarize their own sessions, so this terminal
+	// notification carries only the plain failure body.
+	defer func() { notifyFailure(ctx, "Remote pipeline failed", in.WorkDir, false, false, err) }()
+
 	id := workflow.GetInfo(ctx).WorkflowExecution.ID
 
 	// Deliver the develop-completion notification now, before the pipeline spawns.

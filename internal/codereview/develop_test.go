@@ -262,6 +262,35 @@ func TestDevelopWorkflow_WithRemote_OpenPRFailure_StopsBeforePilot(t *testing.T)
 	env.AssertNotCalled(t, "PilotWorkflow", mock.Anything, mock.Anything)
 }
 
+func TestDevelopWorkflow_WithRemote_PipelineFailure_NotifiesPipelineNotDevelopment(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return("base", nil)
+	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
+	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
+	// Opening the PR fails after development has already landed its commits.
+	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).
+		Return("", temporal.NewNonRetryableApplicationError("push rejected", "OpenPR", nil))
+	var sent []notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { sent = append(sent, args.Get(1).(notification.Notification)) }).Return(nil)
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing", WithRemote: true})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	// Once development succeeds and ownership passes to the remote pipeline, a stage
+	// failure is reported as a pipeline failure, not a second, misleading
+	// "Development failed".
+	var titles []string
+	for _, n := range sent {
+		titles = append(titles, n.Title)
+	}
+	require.Contains(t, titles, "Remote pipeline failed")
+	require.NotContains(t, titles, "Development failed")
+}
+
 func TestDevelopWorkflow_NoCommits_FailsWithoutTriggeringReview(t *testing.T) {
 	env := newDevelopEnv(t)
 
