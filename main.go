@@ -443,9 +443,10 @@ func runWorker(opts notifyOptions) {
 
 	fmt.Printf("Worker ready · task queue %q", TaskQueue)
 	fmt.Printf(" · desktop notifications %s", onOff(opts.desktop))
-	if opts.webhookURL != "" {
-		fmt.Printf(" · webhook %s", opts.webhookURL)
-	}
+	// Report only whether the webhook is enabled: webhook URLs commonly embed
+	// bearer-like secrets in their path or query, so printing the URL would leak
+	// credentials into terminal captures and service logs.
+	fmt.Printf(" · webhook %s", onOff(opts.webhookURL != ""))
 	fmt.Printf(" · press Ctrl+C to stop\n")
 	if err := w.Run(worker.InterruptCh()); err != nil {
 		fatalf("Worker stopped with error: %v", err)
