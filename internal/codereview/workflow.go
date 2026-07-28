@@ -396,15 +396,35 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 //
 // The children are supervised (not abandoned) so this workflow stays their
 // parent for the pipeline's lifetime. Each still emits its own completion
-// notification; this workflow adds a final "Development complete" once the whole
-// pipeline has converged.
+// notification. This workflow emits two of its own: a "Development complete"
+// notification up front (carrying the develop step's --summary webhook body,
+// since that summary describes the develop step and would be stale by the time
+// the pipeline converges) and a final "Remote pipeline complete" once the whole
+// pipeline has converged (with no summary body, so the terminal notification is
+// not misattributed the oldest, develop-only summary).
 func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, tokens int, webhookBody string) (string, error) {
 	id := workflow.GetInfo(ctx).WorkflowExecution.ID
 
+	// Deliver the develop-completion notification now, before the pipeline spawns.
+	// webhookBody summarizes *this develop step*, computed against the quiescent
+	// tree in DevelopWorkflow; attaching it here (rather than to the terminal
+	// pipeline notification below) keeps the summary matched to the step it
+	// describes. The review and pilot children emit their own, fresher summaries as
+	// they complete.
+	wfnotify.NotifyBestEffort(ctx, notification.Notification{
+		Title: "Development complete",
+		Body: fmt.Sprintf("Developed branch %s with %d commit(s) successfully. The review, pull request, and Copilot pilot stages will now commence.",
+			in.Branch, len(commits)),
+		WebhookBody: webhookBody,
+	})
+
 	// The local review loop. Seed it with this develop session's token usage so
 	// its own result reports the whole tree's usage, and propagate --summary so it
-	// summarizes its own run for its completion webhook (see the abandoned-child
-	// path above for the cost note).
+	// summarizes its own run for its completion webhook. Combined with the develop
+	// summary attached above and the pilot summary below, a single
+	// `develop --with-remote --summary` therefore triggers three independent,
+	// billable summary runs (develop, review, and pilot)—one more than the
+	// non-remote path's two (develop plus review).
 	reviewCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "review-" + id})
 	if err := workflow.ExecuteChildWorkflow(reviewCtx, ReviewWorkflow,
 		ReviewInput{WorkDir: in.WorkDir, TokensSoFar: tokens, Summary: in.Summary}).Get(ctx, nil); err != nil {
@@ -430,11 +450,13 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 	summary := withTokenTotal(fmt.Sprintf(
 		"Developed branch %s with %d commit(s); ran the review loop, opened the PR, and completed the Copilot pilot loop.",
 		in.Branch, len(commits)), tokens)
+	// The terminal pipeline notification carries no summary body: the develop
+	// summary was delivered up front with the develop-completion notification, and
+	// the review and pilot children have since emitted their own fresher summaries.
 	wfnotify.NotifyBestEffort(ctx, notification.Notification{
-		Title: "Development complete",
+		Title: "Remote pipeline complete",
 		Body: fmt.Sprintf("Developed branch %s with %d commit(s); the review, pull request, and Copilot pilot stages have all completed.",
 			in.Branch, len(commits)),
-		WebhookBody: webhookBody,
 	})
 	return summary, nil
 }

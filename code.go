@@ -280,7 +280,11 @@ FLAGS
   --branch <name>   Name of the new branch to create and develop on (required)
   --summary         Before returning (on success or failure), summarize the last
                     Pi execution and send it as the webhook message (only the
-                    webhook). Also propagated to the review loop this starts.
+                    webhook). Also propagated to the review loop this starts, so
+                    a plain "develop --summary" runs two billable summaries
+                    (develop and review). With --with-remote it is also
+                    propagated to the pilot loop, for three (develop, review,
+                    and pilot).
   --with-remote     After development and review, open the PR and request a
                     Copilot review, then run the pilot loop—this workflow
                     supervises each stage and stays alive until the pilot loop

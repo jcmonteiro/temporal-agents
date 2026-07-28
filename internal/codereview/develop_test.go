@@ -218,9 +218,9 @@ func TestDevelopWorkflow_WithRemote_SeedsReviewTokensAndPropagatesSummary(t *tes
 	})).Return("reviewed", nil)
 	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).Return("opened", nil)
 	env.OnWorkflow(PilotWorkflow, mock.Anything, mock.Anything).Return("piloted", nil)
-	var got notification.Notification
+	var sent []notification.Notification
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
-		Run(func(args mock.Arguments) { got = args.Get(1).(notification.Notification) }).Return(nil)
+		Run(func(args mock.Arguments) { sent = append(sent, args.Get(1).(notification.Notification)) }).Return(nil)
 
 	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing", Summary: true, WithRemote: true})
 
@@ -229,8 +229,14 @@ func TestDevelopWorkflow_WithRemote_SeedsReviewTokensAndPropagatesSummary(t *tes
 	var out string
 	require.NoError(t, env.GetWorkflowResult(&out))
 	require.Contains(t, out, "Total token usage across all sessions: 4,200 tokens.")
-	// The develop session's summary is delivered to the webhook only.
-	require.Equal(t, "develop summary for webhook", got.WebhookBody)
+	// The develop session's summary is delivered on the up-front develop-completion
+	// notification, matched to the step it describes. The terminal pipeline
+	// notification carries no (stale) summary body.
+	require.Len(t, sent, 2)
+	require.Equal(t, "Development complete", sent[0].Title)
+	require.Equal(t, "develop summary for webhook", sent[0].WebhookBody)
+	require.Equal(t, "Remote pipeline complete", sent[1].Title)
+	require.Empty(t, sent[1].WebhookBody)
 	env.AssertExpectations(t)
 }
 
