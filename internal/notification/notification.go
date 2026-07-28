@@ -22,6 +22,12 @@ type Notification struct {
 	// request a review chain operated on). It is empty when there is no such
 	// resource. Adapters render it however their channel allows.
 	URL string
+	// WebhookBody, when set, replaces Body for webhook delivery only; all other
+	// channels (e.g. the desktop notifier) keep using Body. It carries the
+	// optional, agent-generated summary of the last Pi execution requested via
+	// the code commands' --summary flag, which is meant for the webhook alone.
+	// It is empty when no such summary was produced.
+	WebhookBody string
 }
 
 // Notifier is the port for delivering a Notification to the outside world.

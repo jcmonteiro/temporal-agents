@@ -36,9 +36,11 @@ type webhookPayload struct {
 }
 
 // Notify POSTs n to the webhook URL as JSON and treats any non-2xx response as
-// a failure.
+// a failure. When n.WebhookBody is set it replaces n.Body in the payload, so
+// the webhook can carry the agent-generated summary while other channels keep
+// the plain body.
 func (w Webhook) Notify(ctx context.Context, n notification.Notification) error {
-	body, err := json.Marshal(webhookPayload{Title: n.Title, Body: n.Body, URL: n.URL})
+	body, err := json.Marshal(webhookPayload{Title: n.Title, Body: webhookBody(n), URL: n.URL})
 	if err != nil {
 		return fmt.Errorf("encode webhook payload: %w", err)
 	}
@@ -59,6 +61,15 @@ func (w Webhook) Notify(ctx context.Context, n notification.Notification) error 
 		return fmt.Errorf("webhook returned status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// webhookBody returns the body to POST: the webhook-only override when set,
+// otherwise the notification's plain body.
+func webhookBody(n notification.Notification) string {
+	if n.WebhookBody != "" {
+		return n.WebhookBody
+	}
+	return n.Body
 }
 
 // sanitizeURLError strips the request URL from *url.Error values so that

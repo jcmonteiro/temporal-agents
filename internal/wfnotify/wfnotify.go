@@ -59,6 +59,19 @@ func NotifyBestEffort(ctx workflow.Context, n notification.Notification) {
 // activity error ever embeds a token or signed URL, sanitize it at its source
 // before it reaches here.
 func NotifyFailureBestEffort(ctx workflow.Context, title string, err error) {
+	NotifyFailureBestEffortWith(ctx, title, err, nil)
+}
+
+// NotifyFailureBestEffortWith behaves exactly like NotifyFailureBestEffort but
+// lets the caller enrich the notification before delivery — for example to
+// attach a webhook-only body — without re-implementing the shared failure
+// policy (the nil/continue-as-new exclusions and the disconnected delivery
+// context). enrich, when non-nil, is invoked with the disconnected delivery
+// context and the base failure notification, and returns the notification to
+// deliver; running it on the disconnected context lets it schedule its own
+// activities (e.g. a summary step) that must also survive a cancelled workflow
+// context. A nil enrich delivers the plain failure notification.
+func NotifyFailureBestEffortWith(ctx workflow.Context, title string, err error, enrich func(ctx workflow.Context, n notification.Notification) notification.Notification) {
 	if err == nil {
 		return
 	}
@@ -68,5 +81,9 @@ func NotifyFailureBestEffort(ctx workflow.Context, title string, err error) {
 	}
 	dctx, cancel := workflow.NewDisconnectedContext(ctx)
 	defer cancel()
-	NotifyBestEffort(dctx, notification.Notification{Title: title, Body: err.Error()})
+	n := notification.Notification{Title: title, Body: err.Error()}
+	if enrich != nil {
+		n = enrich(dctx, n)
+	}
+	NotifyBestEffort(dctx, n)
 }
