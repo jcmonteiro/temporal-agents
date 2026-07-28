@@ -32,8 +32,8 @@ const reviewPollInterval = time.Minute
 // summary would run against a fresh, empty session and fabricate a description
 // of work that never happened. Guarding on agentRan makes the webhook cleanly
 // fall back to the plain Body on those paths instead.
-func summarizeForWebhook(ctx workflow.Context, enabled, agentRan bool, workDir string) string {
-	if !enabled || !agentRan {
+func summarizeForWebhook(ctx workflow.Context, summaryEnabled, agentRan bool, workDir string) string {
+	if !summaryEnabled || !agentRan {
 		return ""
 	}
 	// The summary is a long-running agent step, like the other agent activities,
@@ -53,26 +53,26 @@ func summarizeForWebhook(ctx workflow.Context, enabled, agentRan bool, workDir s
 }
 
 // notifyComplete delivers a completion notification best-effort, attaching the
-// optional last-run summary as the webhook-only body when summary is enabled
-// and an agent ran in this run (see summarizeForWebhook for why agentRan is
-// required).
-func notifyComplete(ctx workflow.Context, summary, agentRan bool, workDir string, n notification.Notification) {
-	n.WebhookBody = summarizeForWebhook(ctx, summary, agentRan, workDir)
+// optional last-run summary as the webhook-only body when the summary is
+// enabled and an agent ran in this run (see summarizeForWebhook for why
+// agentRan is required).
+func notifyComplete(ctx workflow.Context, summaryEnabled, agentRan bool, workDir string, n notification.Notification) {
+	n.WebhookBody = summarizeForWebhook(ctx, summaryEnabled, agentRan, workDir)
 	wfnotify.NotifyBestEffort(ctx, n)
 }
 
 // notifyFailure delivers a best-effort failure notification via
 // wfnotify.NotifyFailureBestEffortWith, reusing that helper's shared failure
 // policy (no-op on success and on continue-as-new; delivery on a disconnected
-// context so a cancellation-caused failure still notifies). When summary is
+// context so a cancellation-caused failure still notifies). When the summary is
 // enabled it enriches the notification with the last Pi execution's summary as
 // the webhook-only body, run on the same disconnected context so it survives a
 // cancelled workflow. The summary is attached only when an agent ran in this
 // run (see summarizeForWebhook for why agentRan is required).
-func notifyFailure(ctx workflow.Context, title, workDir string, summary, agentRan bool, err error) {
+func notifyFailure(ctx workflow.Context, title, workDir string, summaryEnabled, agentRan bool, err error) {
 	wfnotify.NotifyFailureBestEffortWith(ctx, title, err,
 		func(dctx workflow.Context, n notification.Notification) notification.Notification {
-			n.WebhookBody = summarizeForWebhook(dctx, summary, agentRan, workDir)
+			n.WebhookBody = summarizeForWebhook(dctx, summaryEnabled, agentRan, workDir)
 			return n
 		})
 }
