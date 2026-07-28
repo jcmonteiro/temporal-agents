@@ -89,9 +89,13 @@ type progress struct {
 	// testable; production wires it to the pi model catalog.
 	window func(provider, model string) int
 
-	// thresholdCompacted records that a successful, non-retrying threshold
-	// auto-compaction occurred. In -p mode this ends the run without finishing
-	// the task, so Run resumes the session when it is set.
+	// thresholdCompacted records that the run *trailed off* with a successful,
+	// non-retrying threshold auto-compaction: the compaction was the last
+	// meaningful activity, which in -p mode ends the run without finishing the
+	// task, so Run resumes the session when it is set. Pi can, however, continue
+	// after a compaction when an extension queues a message; any subsequent
+	// agent/message/tool activity therefore clears the flag so a compaction that
+	// was followed by more work is not mistaken for a trailing one.
 	thresholdCompacted bool
 }
 
@@ -117,6 +121,15 @@ func (p *progress) apply(line string) (finalText string) {
 		if e.Message.Model != "" {
 			p.model = e.Message.Model
 		}
+	}
+
+	// Any turn/message/tool activity means the run did not trail off with the
+	// compaction: Pi continued (e.g. an extension queued a message), so a
+	// previously recorded threshold compaction is no longer the terminal event.
+	switch e.Type {
+	case "turn_start", "message_start", "message_update", "message_end",
+		"tool_execution_start", "tool_execution_end":
+		p.thresholdCompacted = false
 	}
 
 	switch e.Type {

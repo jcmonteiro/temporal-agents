@@ -113,6 +113,25 @@ func TestProgress_DoesNotResumeOnOverflowOrRetryOrFailure(t *testing.T) {
 	}
 }
 
+func TestProgress_ClearsThresholdCompactionWhenPiContinuesWithQueuedWork(t *testing.T) {
+	var p progress
+	// Threshold compaction flags a resume...
+	p.apply(`{"type":"compaction_end","reason":"threshold","aborted":false,"willRetry":false}`)
+	if !p.thresholdCompacted {
+		t.Fatal("expected threshold compaction to flag a resume")
+	}
+
+	// ...but Pi then continues in the same invocation (e.g. an extension queued
+	// a message), so the compaction is no longer the trailing event and the run
+	// must not be resumed again by Run.
+	p.apply(`{"type":"turn_start"}`)
+	p.apply(`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}`)
+
+	if p.thresholdCompacted {
+		t.Fatal("expected subsequent agent/message activity to clear the trailing-compaction flag")
+	}
+}
+
 func TestPiArgs_RunsNonInteractiveJSONForSession(t *testing.T) {
 	args := piArgs("session-123")
 	if want := []string{"-p", "--mode", "json", "--session-id", "session-123"}; strings.Join(args, " ") != strings.Join(want, " ") {
