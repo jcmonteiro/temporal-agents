@@ -206,6 +206,8 @@ func codeHelp(w io.Writer) {
 
 USAGE
   temporal-agents code pilot [--append <prompt> | --replace <prompt>]
+  temporal-agents code review
+  temporal-agents code develop "<prompt>" --branch <name>
 
 SUBCOMMANDS
   pilot    Address the unresolved review comments on the current branch's PR
