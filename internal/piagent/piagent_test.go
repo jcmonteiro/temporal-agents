@@ -81,6 +81,45 @@ func TestParseContextWindows_KeysByProviderAndModelSkippingHeader(t *testing.T) 
 	}
 }
 
+func TestProgress_DetectsThresholdCompactionForResume(t *testing.T) {
+	var p progress
+	p.apply(`{"type":"compaction_start","reason":"threshold"}`)
+	p.apply(`{"type":"compaction_end","reason":"threshold","aborted":false,"willRetry":false}`)
+
+	if !p.thresholdCompacted {
+		t.Fatal("expected a successful threshold compaction to flag a resume")
+	}
+	if got := p.render(); !strings.Contains(got, "compaction complete") {
+		t.Fatalf("expected compaction to appear in transcript, got:\n%s", got)
+	}
+}
+
+func TestProgress_DoesNotResumeOnOverflowOrRetryOrFailure(t *testing.T) {
+	cases := map[string]string{
+		"overflow (auto-retried by pi)": `{"type":"compaction_end","reason":"overflow","willRetry":true}`,
+		"threshold but retrying":        `{"type":"compaction_end","reason":"threshold","willRetry":true}`,
+		"threshold aborted":             `{"type":"compaction_end","reason":"threshold","aborted":true,"willRetry":false}`,
+		"threshold failed":              `{"type":"compaction_end","reason":"threshold","willRetry":false,"errorMessage":"boom"}`,
+		"manual compaction":             `{"type":"compaction_end","reason":"manual","willRetry":false}`,
+	}
+	for name, line := range cases {
+		t.Run(name, func(t *testing.T) {
+			var p progress
+			p.apply(line)
+			if p.thresholdCompacted {
+				t.Fatalf("%s must not trigger a resume", name)
+			}
+		})
+	}
+}
+
+func TestPiArgs_RunsNonInteractiveJSONForSession(t *testing.T) {
+	args := piArgs("session-123")
+	if want := []string{"-p", "--mode", "json", "--session-id", "session-123"}; strings.Join(args, " ") != strings.Join(want, " ") {
+		t.Fatalf("piArgs = %v, want %v", args, want)
+	}
+}
+
 func TestParseTokenSize(t *testing.T) {
 	cases := map[string]int{
 		"200K": 200_000,
