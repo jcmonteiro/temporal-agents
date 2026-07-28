@@ -28,8 +28,8 @@ func codeCmd(args []string) {
 			pilotHelp(os.Stdout)
 			return
 		}
-		mode, text, summary := parsePilotFlags(args[1:])
-		startPilot(mode, text, summary)
+		mode, text, chain, summary := parsePilotFlags(args[1:])
+		startPilot(mode, text, chain, summary)
 	case "review":
 		if wantsHelp(args[1:]) {
 			reviewHelp(os.Stdout)
@@ -163,8 +163,8 @@ func startDevelop(prompt, branch string, summary, withRemote bool) {
 
 // parsePilotFlags reads the optional, mutually exclusive --append/--replace
 // flags (each in "--flag value" or "--flag=value" form) and returns the prompt
-// mode plus its text, along with the --summary toggle.
-func parsePilotFlags(args []string) (mode codereview.PromptMode, text string, summary bool) {
+// mode plus its text, along with the --chain and --summary toggles.
+func parsePilotFlags(args []string) (mode codereview.PromptMode, text string, chain, summary bool) {
 	set := func(m codereview.PromptMode, v string) {
 		if mode != codereview.PromptDefault {
 			fatalf("--append and --replace are mutually exclusive")
@@ -178,6 +178,8 @@ func parsePilotFlags(args []string) (mode codereview.PromptMode, text string, su
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
+		case a == "--chain":
+			chain = true
 		case a == "--summary":
 			summary = true
 		case a == "--append", a == "--replace":
@@ -194,13 +196,15 @@ func parsePilotFlags(args []string) (mode codereview.PromptMode, text string, su
 			fatalf("unexpected argument %q", a)
 		}
 	}
-	return mode, text, summary
+	return mode, text, chain, summary
 }
 
-// startPilot launches the PilotWorkflow for the current repository. The pilot
-// loop always chains: after a pass that addresses comments it continues as new,
-// looping until a pass finds no unresolved comments left.
-func startPilot(mode codereview.PromptMode, text string, summary bool) {
+// startPilot launches the PilotWorkflow for the current repository. Chaining is
+// opt-in via --chain: a standalone pilot runs a single pass by default, while
+// --chain makes a pass that addresses comments continue as new, looping until a
+// pass finds no unresolved comments left. (The develop --with-remote pipeline
+// sets Chain directly, independent of this standalone flag.)
+func startPilot(mode codereview.PromptMode, text string, chain, summary bool) {
 	c := dial()
 	defer c.Close()
 
@@ -212,7 +216,7 @@ func startPilot(mode codereview.PromptMode, text string, summary bool) {
 		WorkDir:    cwd(),
 		PromptMode: mode,
 		PromptText: text,
-		Chain:      true,
+		Chain:      chain,
 		Summary:    summary,
 	})
 	if err != nil {
@@ -225,7 +229,9 @@ func startPilot(mode codereview.PromptMode, text string, summary bool) {
 	if mode != codereview.PromptDefault {
 		fmt.Printf("  prompt:  %s (%s)\n", mode, truncate(text, 50))
 	}
-	fmt.Printf("  chain:   on (loops until no unresolved comments remain)\n")
+	if chain {
+		fmt.Printf("  chain:   on (loops until no unresolved comments remain)\n")
+	}
 	if summary {
 		fmt.Printf("  summary: on (webhook message summarizes the last Pi run)\n")
 	}
@@ -247,9 +253,10 @@ SUBCOMMANDS
 
 All subcommands accept --summary, which summarizes a Pi execution and sends
 that summary as the webhook notification's body (only the webhook). For review
-and develop this runs once before returning (on success or failure). For pilot
-it summarizes each addressing pass, so a multi-pass loop sends one summary per
-pass that addresses comments, not a single summary at the end.
+and develop this runs once before returning (on success or failure). For a
+chained pilot (--chain) it summarizes each addressing pass, so a multi-pass loop
+sends one summary per pass that addresses comments, not a single summary at the
+end; a single-pass pilot summarizes that one pass.
 
 See "temporal-agents code pilot --help", "temporal-agents code review --help",
 and "temporal-agents code develop --help".
@@ -340,27 +347,31 @@ successfully without changing anything.
 
 The agent works from a built-in default prompt. Use the flags to adjust it:
 
-The loop always chains: after a pass that addresses comments it continues,
-folding in the fresh Copilot review, until a pass finds no unresolved comments
-left.
+By default a pilot runs a single pass. With --chain it keeps looping: after a
+pass that addresses comments it continues, folding in the fresh Copilot review,
+until a pass finds no unresolved comments left.
 
 USAGE
-  temporal-agents code pilot [--append <prompt> | --replace <prompt>] [--summary]
+  temporal-agents code pilot [--append <prompt> | --replace <prompt>] [--chain] [--summary]
 
 FLAGS
   --append <prompt>   Append extra instructions to the default prompt
   --replace <prompt>  Replace the default prompt entirely
+  --chain             Loop until no unresolved comments remain, rather than
+                      running a single pass
   --summary           Summarize the agent's work and send it as the webhook
-                      message (only the webhook). Because the loop always chains,
-                      this runs on each pass that addresses comments (and on a
-                      failure after the agent has run), not once at the end—the
-                      terminal no-comments pass has no agent run to summarize.
+                      message (only the webhook). With --chain this runs on each
+                      pass that addresses comments (and on a failure after the
+                      agent has run), not once at the end—the terminal
+                      no-comments pass has no agent run to summarize. Without
+                      --chain it runs once for the single pass.
 
 The --append and --replace flags are mutually exclusive. The unresolved
 comments are always appended to whichever prompt is used.
 
 EXAMPLES
   temporal-agents code pilot
+  temporal-agents code pilot --chain
   temporal-agents code pilot --append "prefer table-driven tests"
   temporal-agents code pilot --replace "only fix the comments about naming"
   temporal-agents code pilot --summary

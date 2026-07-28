@@ -11,7 +11,7 @@ import (
 // fatalf (os.Exit) and are intentionally not exercised here.
 
 func TestParsePilotFlags_Summary(t *testing.T) {
-	mode, text, summary := parsePilotFlags([]string{"--summary"})
+	mode, text, _, summary := parsePilotFlags([]string{"--summary"})
 	if mode != codereview.PromptDefault || text != "" {
 		t.Fatalf("unexpected mode/text: %q %q", mode, text)
 	}
@@ -20,8 +20,19 @@ func TestParsePilotFlags_Summary(t *testing.T) {
 	}
 
 	// Summary defaults to false.
-	if _, _, summary = parsePilotFlags(nil); summary {
+	if _, _, _, summary = parsePilotFlags(nil); summary {
 		t.Fatal("summary should default to false")
+	}
+}
+
+func TestParsePilotFlags_Chain(t *testing.T) {
+	if _, _, chain, _ := parsePilotFlags([]string{"--chain"}); !chain {
+		t.Fatal("--chain should set chain = true")
+	}
+
+	// Chain is opt-in: a standalone pilot defaults to a single pass.
+	if _, _, chain, _ := parsePilotFlags(nil); chain {
+		t.Fatal("chain should default to false")
 	}
 }
 
