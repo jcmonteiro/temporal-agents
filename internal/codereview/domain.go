@@ -54,6 +54,15 @@ type PilotInput struct {
 	// (on success or failure) that summarizes the last Pi execution and sends
 	// that summary as the webhook notification's body (only the webhook).
 	Summary bool
+	// ChainSummary carries the webhook summary of the most recent addressed pass
+	// across continue-as-new. With --chain --summary the terminal success is the
+	// no-comments pass: it runs no agent (its own Pi session is empty) and lands
+	// under a new RunID, and because piagent keys the Pi session on the run, that
+	// pass cannot summarize the real work. So each addressing pass summarizes
+	// itself while its session is still live and carries the text here, and the
+	// terminal notification attaches this preserved summary instead. It is set
+	// only when both Chain and Summary are enabled.
+	ChainSummary string
 }
 
 // PullRequest identifies the open PR the loop operates on.

@@ -71,9 +71,19 @@ func summarizeForWebhook(ctx workflow.Context, summaryEnabled, agentRan bool, wo
 // notifyComplete delivers a completion notification best-effort, attaching the
 // optional last-run summary as the webhook-only body when the summary is
 // enabled and an agent ran in this run (see summarizeForWebhook for why
-// agentRan is required).
-func notifyComplete(ctx workflow.Context, summaryEnabled, agentRan bool, workDir string, n notification.Notification) {
-	n.WebhookBody = summarizeForWebhook(ctx, summaryEnabled, agentRan, workDir, completeSummaryTimeout)
+// agentRan is required). When no agent ran in this run but a summary was
+// preserved from an earlier pass (carriedSummary), that preserved text is
+// attached instead. This covers the chained pilot loop, whose terminal
+// no-comments pass runs no agent of its own yet should still surface the last
+// addressed pass's summary (see PilotInput.ChainSummary). carriedSummary is
+// only ever non-empty when the summary is enabled, so it is safe to fall back
+// to unconditionally.
+func notifyComplete(ctx workflow.Context, summaryEnabled, agentRan bool, workDir string, n notification.Notification, carriedSummary string) {
+	body := summarizeForWebhook(ctx, summaryEnabled, agentRan, workDir, completeSummaryTimeout)
+	if body == "" {
+		body = carriedSummary
+	}
+	n.WebhookBody = body
 	wfnotify.NotifyBestEffort(ctx, n)
 }
 
@@ -124,10 +134,18 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 	if in.Chain && addressed {
 		next := in
 		next.TokensSoFar = total
+		// Preserve this addressed pass's webhook summary across continue-as-new.
+		// The terminal no-comments pass runs no agent and lands under a new RunID,
+		// so it cannot summarize the real work itself; summarize now, while this
+		// pass's Pi session is still live, and carry the durable text forward. Only
+		// the last addressed pass's summary survives to the terminal notification;
+		// with --chain --summary this means one (billable) summary run per addressed
+		// pass, all but the last discarded — the cost of the opt-in flag combination.
+		next.ChainSummary = summarizeForWebhook(ctx, in.Summary, agentRan, in.WorkDir, completeSummaryTimeout)
 		return "", workflow.NewContinueAsNewError(ctx, PilotWorkflow, next)
 	}
 	summary = withTokenTotal(summary, total)
-	notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Copilot review chain complete", Body: summary, URL: prURL})
+	notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Copilot review chain complete", Body: summary, URL: prURL}, in.ChainSummary)
 	return summary, nil
 }
 
@@ -417,7 +435,9 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 			var appErr *temporal.ApplicationError
 			if errors.As(err, &appErr) && appErr.Type() == errNoAdvance {
 				summary := withTokenTotal("Review complete; the implement pass found nothing to commit.", total)
-				notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary})
+				// No carried summary here: this terminal pass ran the implement agent, so
+				// agentRan is true and summarizeForWebhook summarizes this run directly.
+				notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary}, "")
 				return summary, nil
 			}
 			return "", err
@@ -450,7 +470,9 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 	nextPass := in.Pass + 1
 	if nextPass >= MaxReviewPasses {
 		summary := withTokenTotal(fmt.Sprintf("Review stopped after %d pass(es).", MaxReviewPasses), total)
-		notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary})
+		// No carried summary here: this terminal pass ran the review agent, so
+		// agentRan is true and summarizeForWebhook summarizes this run directly.
+		notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary}, "")
 		return summary, nil
 	}
 	return "", workflow.NewContinueAsNewError(ctx, ReviewWorkflow,
