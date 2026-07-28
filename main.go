@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -277,7 +278,8 @@ USAGE
   temporal-agents worker [--no-desktop] [--webhook <url>]
 
 FLAGS
-  --no-desktop     Disable the macOS desktop notification (enabled by default)
+  --no-desktop     Disable the macOS desktop notification (enabled by default on
+                   macOS only)
   --webhook <url>  POST completion notifications as JSON to <url> (disabled by
                    default)
 
@@ -360,18 +362,19 @@ func cwd() string {
 
 // notifyOptions captures the notification adapters enabled at worker start.
 type notifyOptions struct {
-	// desktop enables the macOS desktop notifier (on by default).
+	// desktop enables the macOS desktop notifier (on by default on macOS only,
+	// since it shells out to the macOS-only osascript).
 	desktop bool
 	// webhookURL, when non-empty, enables the webhook notifier posting to it.
 	webhookURL string
 }
 
 // parseWorkerFlags reads the worker's notification flags: --no-desktop disables
-// the macOS desktop notifier (enabled by default), and --webhook <url> (or
-// --webhook=<url>) enables the webhook notifier posting to that URL (disabled
-// by default).
+// the macOS desktop notifier (enabled by default on macOS only, as it shells
+// out to the macOS-only osascript), and --webhook <url> (or --webhook=<url>)
+// enables the webhook notifier posting to that URL (disabled by default).
 func parseWorkerFlags(args []string) notifyOptions {
-	opts := notifyOptions{desktop: true}
+	opts := notifyOptions{desktop: runtime.GOOS == "darwin"}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
