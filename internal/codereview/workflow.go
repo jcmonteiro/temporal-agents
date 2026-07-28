@@ -18,13 +18,22 @@ import (
 // still-pending Copilot review.
 const reviewPollInterval = time.Minute
 
-// summarizeForWebhook runs the SummarizeLastRun activity when enabled and
-// returns the agent's summary, which the caller attaches as the webhook-only
-// notification body. It is best-effort: when disabled it returns "", and any
-// failure is logged and swallowed (returning "") so the webhook simply falls
-// back to the plain body rather than the run's notification being lost.
-func summarizeForWebhook(ctx workflow.Context, enabled bool, workDir string) string {
-	if !enabled {
+// summarizeForWebhook runs the SummarizeLastRun activity when enabled and an
+// agent actually ran in this workflow run, returning the agent's summary, which
+// the caller attaches as the webhook-only notification body. It is best-effort:
+// when disabled it returns "", and any failure is logged and swallowed
+// (returning "") so the webhook simply falls back to the plain body rather than
+// the run's notification being lost.
+//
+// The agentRan guard matters because piagent keys the Pi session on the
+// workflow run: SummarizeLastRun only resumes real work if an agent activity
+// already ran in this run. On terminal paths where none did (e.g. a pilot pass
+// that found nothing to address, or any failure before the first agent step), a
+// summary would run against a fresh, empty session and fabricate a description
+// of work that never happened. Guarding on agentRan makes the webhook cleanly
+// fall back to the plain Body on those paths instead.
+func summarizeForWebhook(ctx workflow.Context, enabled, agentRan bool, workDir string) string {
+	if !enabled || !agentRan {
 		return ""
 	}
 	// The summary is a long-running agent step, like the other agent activities,
@@ -44,9 +53,11 @@ func summarizeForWebhook(ctx workflow.Context, enabled bool, workDir string) str
 }
 
 // notifyComplete delivers a completion notification best-effort, attaching the
-// optional last-run summary as the webhook-only body when summary is enabled.
-func notifyComplete(ctx workflow.Context, summary bool, workDir string, n notification.Notification) {
-	n.WebhookBody = summarizeForWebhook(ctx, summary, workDir)
+// optional last-run summary as the webhook-only body when summary is enabled
+// and an agent ran in this run (see summarizeForWebhook for why agentRan is
+// required).
+func notifyComplete(ctx workflow.Context, summary, agentRan bool, workDir string, n notification.Notification) {
+	n.WebhookBody = summarizeForWebhook(ctx, summary, agentRan, workDir)
 	wfnotify.NotifyBestEffort(ctx, n)
 }
 
@@ -54,8 +65,10 @@ func notifyComplete(ctx workflow.Context, summary bool, workDir string, n notifi
 // enabled, first summarizes the last Pi execution and attaches it as the
 // webhook-only body. Like that helper it is a no-op on success and on
 // continue-as-new (a control signal, not a failure), and it delivers on a
-// disconnected context so a cancellation-caused failure still notifies.
-func notifyFailure(ctx workflow.Context, title, workDir string, summary bool, err error) {
+// disconnected context so a cancellation-caused failure still notifies. The
+// summary is attached only when an agent ran in this run (see
+// summarizeForWebhook for why agentRan is required).
+func notifyFailure(ctx workflow.Context, title, workDir string, summary, agentRan bool, err error) {
 	if err == nil {
 		return
 	}
@@ -66,7 +79,7 @@ func notifyFailure(ctx workflow.Context, title, workDir string, summary bool, er
 	dctx, cancel := workflow.NewDisconnectedContext(ctx)
 	defer cancel()
 	n := notification.Notification{Title: title, Body: err.Error()}
-	n.WebhookBody = summarizeForWebhook(dctx, summary, workDir)
+	n.WebhookBody = summarizeForWebhook(dctx, summary, agentRan, workDir)
 	wfnotify.NotifyBestEffort(dctx, n)
 }
 
@@ -84,13 +97,15 @@ func notifyFailure(ctx workflow.Context, title, workDir string, summary bool, er
 func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err error) {
 	// Notify best-effort when the pilot loop fails. Continue-as-new is a control
 	// signal (chained passes), not a failure, so NotifyFailureBestEffort excludes
-	// it.
-	defer func() { notifyFailure(ctx, "Copilot review chain failed", in.WorkDir, in.Summary, err) }()
+	// it. agentRan is read by the deferred notify to decide whether summarizing
+	// the last run is meaningful (a session exists to resume).
+	var agentRan bool
+	defer func() { notifyFailure(ctx, "Copilot review chain failed", in.WorkDir, in.Summary, agentRan, err) }()
 
 	var addressed bool
 	var tokens int
 	var prURL string
-	summary, addressed, tokens, prURL, err = runPilotOnce(ctx, in)
+	summary, addressed, tokens, prURL, err = runPilotOnce(ctx, in, &agentRan)
 	if err != nil {
 		return "", err
 	}
@@ -102,7 +117,7 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 		return "", workflow.NewContinueAsNewError(ctx, PilotWorkflow, next)
 	}
 	summary = withTokenTotal(summary, total)
-	notifyComplete(ctx, in.Summary, in.WorkDir, notification.Notification{Title: "Copilot review chain complete", Body: summary, URL: prURL})
+	notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Copilot review chain complete", Body: summary, URL: prURL})
 	return summary, nil
 }
 
@@ -111,8 +126,10 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 // unresolved comments, which the caller uses to decide whether to chain), the
 // pass's total agent token usage, and a hyperlink to the PR the pass operated
 // on (empty when it failed before determining the PR) so the caller can include
-// it in the completion notification.
-func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, int, string, error) {
+// it in the completion notification. It sets *agentRan to true once the Pi
+// agent has run in this pass, so callers know a resumable Pi session exists for
+// the optional last-run summary.
+func runPilotOnce(ctx workflow.Context, in PilotInput, agentRan *bool) (string, bool, int, string, error) {
 	// Quick, deterministic git/GitHub steps. They are idempotent enough to
 	// retry, but should not run forever.
 	quick := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
@@ -173,6 +190,9 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, int, strin
 	if err := workflow.ExecuteActivity(agentCtx, a.RunAgent, agentReq).Get(agentCtx, &agentResult); err != nil {
 		return "", false, 0, "", err
 	}
+	// The agent has run: a Pi session now exists for this run that a later
+	// SummarizeLastRun step could resume.
+	*agentRan = true
 
 	var commits []string
 	advReq := EnsureHeadAdvancedRequest{WorkDir: in.WorkDir, Checkpoint: cp}
@@ -225,7 +245,10 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, int, strin
 // ID so the caller can watch it.
 func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err error) {
 	// Notify best-effort when development fails before the review loop is started.
-	defer func() { notifyFailure(ctx, "Development failed", in.WorkDir, in.Summary, err) }()
+	// agentRan gates summarizing the last run: a failure before the develop agent
+	// runs has no Pi session to resume.
+	var agentRan bool
+	defer func() { notifyFailure(ctx, "Development failed", in.WorkDir, in.Summary, agentRan, err) }()
 
 	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
 	// should not run forever.
@@ -253,6 +276,9 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 		RunDevelopRequest{WorkDir: in.WorkDir, Prompt: in.Prompt}).Get(agentCtx, &agentResult); err != nil {
 		return "", err
 	}
+	// The develop agent has run: a Pi session now exists for this run that a
+	// later SummarizeLastRun step could resume.
+	agentRan = true
 
 	var commits []string
 	if err := workflow.ExecuteActivity(quick, a.EnsureDeveloped,
@@ -277,7 +303,7 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 
 	summary := withTokenTotal(fmt.Sprintf("Developed branch %s with %d commit(s); started review %s.",
 		in.Branch, len(commits), reviewID), agentResult.Tokens)
-	notifyComplete(ctx, in.Summary, in.WorkDir, notification.Notification{
+	notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{
 		Title: "Development complete",
 		Body: fmt.Sprintf("Developed branch %s with %d commit(s) successfully. The review cycle will now commence.",
 			in.Branch, len(commits)),
@@ -306,8 +332,10 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err error) {
 	// Notify best-effort when the review loop fails. Continue-as-new is a control
 	// signal (looping passes), not a failure, so NotifyFailureBestEffort excludes
-	// it.
-	defer func() { notifyFailure(ctx, "Local review chain failed", in.WorkDir, in.Summary, err) }()
+	// it. agentRan gates summarizing the last run: a failure before any agent step
+	// (e.g. MarkHeadAndStash) has no Pi session to resume.
+	var agentRan bool
+	defer func() { notifyFailure(ctx, "Local review chain failed", in.WorkDir, in.Summary, agentRan, err) }()
 
 	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
 	// should not run forever.
@@ -349,6 +377,9 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 		if err := workflow.ExecuteActivity(agentCtx, a.RunImplementAgent, implReq).Get(agentCtx, &implResult); err != nil {
 			return "", err
 		}
+		// The implement agent has run: a Pi session now exists for this run that a
+		// later SummarizeLastRun step could resume.
+		agentRan = true
 		total += implResult.Tokens
 
 		var commits []string
@@ -360,7 +391,7 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 			var appErr *temporal.ApplicationError
 			if errors.As(err, &appErr) && appErr.Type() == errNoAdvance {
 				summary := withTokenTotal("Review complete; the implement pass found nothing to commit.", total)
-				notifyComplete(ctx, in.Summary, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary})
+				notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary})
 				return summary, nil
 			}
 			return "", err
@@ -372,6 +403,9 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 	if err := workflow.ExecuteActivity(agentCtx, a.RunReviewAgent, ReviewInput{WorkDir: in.WorkDir}).Get(agentCtx, &reviewResult); err != nil {
 		return "", err
 	}
+	// The review agent has run: a Pi session now exists for this run that a later
+	// SummarizeLastRun step could resume.
+	agentRan = true
 	total += reviewResult.Tokens
 	reviewOutput := reviewResult.Output
 
@@ -390,7 +424,7 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 	nextPass := in.Pass + 1
 	if nextPass >= MaxReviewPasses {
 		summary := withTokenTotal(fmt.Sprintf("Review stopped after %d pass(es).", MaxReviewPasses), total)
-		notifyComplete(ctx, in.Summary, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary})
+		notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary})
 		return summary, nil
 	}
 	return "", workflow.NewContinueAsNewError(ctx, ReviewWorkflow,

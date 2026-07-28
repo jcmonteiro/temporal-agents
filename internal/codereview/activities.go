@@ -350,7 +350,10 @@ func (a *Activities) RunImplementAgent(ctx context.Context, req RunImplementRequ
 // SummarizeLastRun drives the Pi agent to summarize the work of the last
 // execution in this workflow run. Because piagent keys the Pi session on the
 // workflow run, running this as a later activity in the same run resumes that
-// session, so the agent summarizes what it actually did. The summary is used
+// session, so the agent summarizes what it actually did. This resume only
+// yields a real summary when an agent activity already ran in this run;
+// callers therefore gate it on that (see summarizeForWebhook's agentRan guard)
+// so it is never invoked against a fresh, empty session. The summary is used
 // only as the webhook notification body; its token usage is intentionally not
 // folded into the run's reported total, as this is a meta-step over an already
 // finished (or failed) run rather than part of the work itself.
