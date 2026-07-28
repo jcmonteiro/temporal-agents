@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -29,6 +30,16 @@ type piEvent struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
+		// Provider/Model identify the model that produced an assistant message.
+		// Together they key the context-window lookup used for the percentage.
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+		// Usage carries per-message token accounting. totalTokens reflects the
+		// full context size after the message, so the latest non-zero value is
+		// the current context consumption.
+		Usage *struct {
+			TotalTokens int `json:"totalTokens"`
+		} `json:"usage"`
 	} `json:"message"`
 	AssistantMessageEvent *struct {
 		Type  string `json:"type"`
@@ -42,6 +53,17 @@ type piEvent struct {
 type progress struct {
 	steps   []string // completed step descriptions, in order
 	writing string   // the assistant message currently being streamed
+
+	// Token accounting for the heartbeat. tokens is the latest reported context
+	// size; provider/model identify the active model so window can resolve the
+	// context-window size for the percentage.
+	tokens   int
+	provider string
+	model    string
+	// window resolves the context-window size (in tokens) for a provider/model,
+	// returning 0 when unknown. It is injected so the parser stays pure and
+	// testable; production wires it to the pi model catalog.
+	window func(provider, model string) int
 }
 
 func (p *progress) add(step string) { p.steps = append(p.steps, step) }
@@ -53,6 +75,19 @@ func (p *progress) apply(line string) (finalText string) {
 	if err := json.Unmarshal([]byte(line), &e); err != nil {
 		p.add(truncate(line, 200))
 		return ""
+	}
+
+	// Fold in token usage from any assistant message that reports it. The first
+	// message_start carries an all-zero usage, so only non-zero totals update
+	// the running consumption.
+	if e.Message != nil && e.Message.Role == "assistant" && e.Message.Usage != nil && e.Message.Usage.TotalTokens > 0 {
+		p.tokens = e.Message.Usage.TotalTokens
+		if e.Message.Provider != "" {
+			p.provider = e.Message.Provider
+		}
+		if e.Message.Model != "" {
+			p.model = e.Message.Model
+		}
 	}
 
 	switch e.Type {
@@ -93,14 +128,54 @@ func (p *progress) apply(line string) (finalText string) {
 	return ""
 }
 
-// render returns the entire progress transcript up to now.
+// render returns the entire progress transcript up to now, ending with the
+// current token consumption when known.
 func (p *progress) render() string {
-	lines := make([]string, 0, len(p.steps)+1)
+	lines := make([]string, 0, len(p.steps)+2)
 	lines = append(lines, p.steps...)
 	if p.writing != "" {
 		lines = append(lines, "writing: "+p.writing)
 	}
+	if s := p.contextLine(); s != "" {
+		lines = append(lines, s)
+	}
 	return strings.Join(lines, "\n")
+}
+
+// contextLine formats the current token consumption for the heartbeat: the
+// absolute token count and, when the context window is known, the percentage
+// of that window in use. Returns "" before any usage has been reported.
+func (p *progress) contextLine() string {
+	if p.tokens <= 0 {
+		return ""
+	}
+	var w int
+	if p.window != nil {
+		w = p.window(p.provider, p.model)
+	}
+	if w > 0 {
+		pct := float64(p.tokens) / float64(w) * 100
+		return fmt.Sprintf("context: %s tokens (%.1f%% of %s)", groupThousands(p.tokens), pct, groupThousands(w))
+	}
+	return fmt.Sprintf("context: %s tokens", groupThousands(p.tokens))
+}
+
+// groupThousands formats n with comma thousands separators (e.g. 18477 ->
+// "18,477") for readable heartbeat output.
+func groupThousands(n int) string {
+	s := strconv.Itoa(n)
+	neg := ""
+	if n < 0 {
+		neg, s = "-", s[1:]
+	}
+	var b strings.Builder
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(c)
+	}
+	return neg + b.String()
 }
 
 // Agent adapts Run to an interface (e.g. codereview.Agent) so it can be
@@ -175,7 +250,12 @@ func Run(ctx context.Context, prompt, workDir string) (string, error) {
 		}
 	}()
 
-	var prog progress
+	// Resolve context-window sizes from the pi model catalog for the token
+	// percentage. Warm the cache up front so the first usage event renders a
+	// percentage without blocking the stream loop on the catalog subprocess.
+	go warmContextWindows()
+
+	prog := progress{window: contextWindowFor}
 	var finalMsg strings.Builder
 	reader := bufio.NewReader(stdout)
 	for {
