@@ -11,6 +11,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"temporal-agents/internal/notification"
+	"temporal-agents/internal/wfnotify"
 )
 
 // reviewPollInterval is how long the workflow sleeps between checks for a
@@ -32,7 +33,7 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 	// Notify best-effort when the pilot loop fails. Continue-as-new is a control
 	// signal (chained passes), not a failure, so NotifyFailureBestEffort excludes
 	// it.
-	defer func() { notification.NotifyFailureBestEffort(ctx, "Copilot review chain failed", err) }()
+	defer func() { wfnotify.NotifyFailureBestEffort(ctx, "Copilot review chain failed", err) }()
 
 	var addressed bool
 	var tokens int
@@ -49,7 +50,7 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 		return "", workflow.NewContinueAsNewError(ctx, PilotWorkflow, next)
 	}
 	summary = withTokenTotal(summary, total)
-	notification.NotifyBestEffort(ctx, notification.Notification{Title: "Copilot review chain complete", Body: summary, URL: prURL})
+	wfnotify.NotifyBestEffort(ctx, notification.Notification{Title: "Copilot review chain complete", Body: summary, URL: prURL})
 	return summary, nil
 }
 
@@ -172,7 +173,7 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, int, strin
 // ID so the caller can watch it.
 func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err error) {
 	// Notify best-effort when development fails before the review loop is started.
-	defer func() { notification.NotifyFailureBestEffort(ctx, "Development failed", err) }()
+	defer func() { wfnotify.NotifyFailureBestEffort(ctx, "Development failed", err) }()
 
 	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
 	// should not run forever.
@@ -224,7 +225,7 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 
 	summary := withTokenTotal(fmt.Sprintf("Developed branch %s with %d commit(s); started review %s.",
 		in.Branch, len(commits), reviewID), agentResult.Tokens)
-	notification.NotifyBestEffort(ctx, notification.Notification{
+	wfnotify.NotifyBestEffort(ctx, notification.Notification{
 		Title: "Development complete",
 		Body: fmt.Sprintf("Developed branch %s with %d commit(s) successfully. The review cycle will now commence.",
 			in.Branch, len(commits)),
@@ -254,7 +255,7 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 	// Notify best-effort when the review loop fails. Continue-as-new is a control
 	// signal (looping passes), not a failure, so NotifyFailureBestEffort excludes
 	// it.
-	defer func() { notification.NotifyFailureBestEffort(ctx, "Local review chain failed", err) }()
+	defer func() { wfnotify.NotifyFailureBestEffort(ctx, "Local review chain failed", err) }()
 
 	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
 	// should not run forever.
@@ -307,7 +308,7 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 			var appErr *temporal.ApplicationError
 			if errors.As(err, &appErr) && appErr.Type() == errNoAdvance {
 				summary := withTokenTotal("Review complete; the implement pass found nothing to commit.", total)
-				notification.NotifyBestEffort(ctx, notification.Notification{Title: "Local review chain complete", Body: summary})
+				wfnotify.NotifyBestEffort(ctx, notification.Notification{Title: "Local review chain complete", Body: summary})
 				return summary, nil
 			}
 			return "", err
@@ -337,7 +338,7 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 	nextPass := in.Pass + 1
 	if nextPass >= MaxReviewPasses {
 		summary := withTokenTotal(fmt.Sprintf("Review stopped after %d pass(es).", MaxReviewPasses), total)
-		notification.NotifyBestEffort(ctx, notification.Notification{Title: "Local review chain complete", Body: summary})
+		wfnotify.NotifyBestEffort(ctx, notification.Notification{Title: "Local review chain complete", Body: summary})
 		return summary, nil
 	}
 	return "", workflow.NewContinueAsNewError(ctx, ReviewWorkflow,

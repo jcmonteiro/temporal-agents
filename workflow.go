@@ -7,6 +7,7 @@ import (
 
 	"temporal-agents/internal/notification"
 	"temporal-agents/internal/piagent"
+	"temporal-agents/internal/wfnotify"
 )
 
 // TaskQueue is the single, default task queue used by everything.
@@ -33,7 +34,7 @@ type PromptRequest struct {
 func PromptWorkflow(ctx workflow.Context, req PromptRequest) (out string, err error) {
 	// Notify best-effort when the run fails. Continue-as-new is a control signal
 	// (chained runs), not a failure, so NotifyFailureBestEffort excludes it.
-	defer func() { notification.NotifyFailureBestEffort(ctx, "Run failed", err) }()
+	defer func() { wfnotify.NotifyFailureBestEffort(ctx, "Run failed", err) }()
 
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: time.Hour,
@@ -63,6 +64,6 @@ func PromptWorkflow(ctx workflow.Context, req PromptRequest) (out string, err er
 	// usage to the result and notify best-effort. This runs only here (never
 	// before continue-as-new, which would cancel the in-flight activity).
 	result := res.Output + "\n\n" + piagent.FormatTokenTotal(total)
-	notification.NotifyBestEffort(ctx, notification.Notification{Title: "Run complete", Body: result})
+	wfnotify.NotifyBestEffort(ctx, notification.Notification{Title: "Run complete", Body: result})
 	return result, nil
 }

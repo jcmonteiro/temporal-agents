@@ -1,4 +1,8 @@
-package notification
+// Package wfnotify holds the workflow-side, best-effort delivery helpers for
+// the notification port. It depends on both the pure notification port (for the
+// Notification and Activity types) and the Temporal SDK, so every workflow
+// shares one delivery policy while the port package itself stays SDK-free.
+package wfnotify
 
 import (
 	"errors"
@@ -6,6 +10,8 @@ import (
 
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
+
+	"temporal-agents/internal/notification"
 )
 
 // notifyActivityOptions is the shared workflow-side delivery policy for the
@@ -23,9 +29,9 @@ func notifyActivityOptions(ctx workflow.Context) workflow.Context {
 // the workflow that requested it. It is the single workflow-side entry point
 // for delivering a notification, so the retry/timeout policy lives in one
 // place.
-func NotifyBestEffort(ctx workflow.Context, n Notification) {
+func NotifyBestEffort(ctx workflow.Context, n notification.Notification) {
 	opts := notifyActivityOptions(ctx)
-	var a *Activity
+	var a *notification.Activity
 	if err := workflow.ExecuteActivity(opts, a.Notify, n).Get(opts, nil); err != nil {
 		workflow.GetLogger(ctx).Warn("could not send notification", "error", err)
 	}
@@ -57,5 +63,5 @@ func NotifyFailureBestEffort(ctx workflow.Context, title string, err error) {
 	}
 	dctx, cancel := workflow.NewDisconnectedContext(ctx)
 	defer cancel()
-	NotifyBestEffort(dctx, Notification{Title: title, Body: err.Error()})
+	NotifyBestEffort(dctx, notification.Notification{Title: title, Body: err.Error()})
 }
