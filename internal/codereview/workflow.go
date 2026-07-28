@@ -142,7 +142,19 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 		// webhook-only body before continuing. The summary runs synchronously here
 		// because continue-as-new cancels any in-flight activity; without --summary
 		// the chain stays silent exactly as before.
-		if in.Summary {
+		//
+		// This notify-and-summarize sequence was added after the chained path
+		// already shipped, when the addressing pass emitted only the continue-as-new
+		// command. Gate it behind a workflow version so histories recorded before it
+		// replay their original command order: without the gate, replaying an
+		// in-flight chained --summary pass after deploying this code would insert
+		// notification and summary activity commands the recorded history lacks and
+		// fail nondeterministically. GetVersion is evaluated whenever this branch is
+		// reached (not just under --summary) so the version marker is recorded
+		// consistently for every chained addressing pass.
+		summarizeBeforeChain := workflow.GetVersion(
+			ctx, "pilot-summarize-before-continue-as-new", workflow.DefaultVersion, 1) == 1
+		if in.Summary && summarizeBeforeChain {
 			wfnotify.NotifyBestEffort(ctx, notification.Notification{
 				Title:       "Copilot review pass complete",
 				Body:        summary,
