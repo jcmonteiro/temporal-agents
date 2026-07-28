@@ -18,6 +18,21 @@ import (
 // still-pending Copilot review.
 const reviewPollInterval = time.Minute
 
+const (
+	// completeSummaryTimeout bounds the last-run summary step on a successful
+	// terminal path. Like the other agent activities it is a long-running Pi run,
+	// so it gets the same hour budget.
+	completeSummaryTimeout = time.Hour
+	// failureSummaryTimeout bounds the same summary step on the failure path,
+	// where it runs on the disconnected context *before* the best-effort failure
+	// notification is delivered and the workflow closes. A full hour there would
+	// let a slow summary hold the failure heads-up (and workflow close) hostage
+	// far beyond wfnotify's delivery budget, so the failure path caps it well
+	// below the completion budget. A summary that does not finish in time is
+	// simply dropped and the webhook falls back to the plain body.
+	failureSummaryTimeout = 2 * time.Minute
+)
+
 // summarizeForWebhook runs the SummarizeLastRun activity when enabled and an
 // agent actually ran in this workflow run, returning the agent's summary, which
 // the caller attaches as the webhook-only notification body. It is best-effort:
@@ -32,14 +47,15 @@ const reviewPollInterval = time.Minute
 // summary would run against a fresh, empty session and fabricate a description
 // of work that never happened. Guarding on agentRan makes the webhook cleanly
 // fall back to the plain Body on those paths instead.
-func summarizeForWebhook(ctx workflow.Context, summaryEnabled, agentRan bool, workDir string) string {
+func summarizeForWebhook(ctx workflow.Context, summaryEnabled, agentRan bool, workDir string, timeout time.Duration) string {
 	if !summaryEnabled || !agentRan {
 		return ""
 	}
 	// The summary is a long-running agent step, like the other agent activities,
 	// but runs once: a best-effort meta-step should not retry and multiply cost.
+	// The timeout differs by path (see completeSummaryTimeout/failureSummaryTimeout).
 	opts := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: time.Hour,
+		StartToCloseTimeout: timeout,
 		HeartbeatTimeout:    time.Minute,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	})
@@ -57,7 +73,7 @@ func summarizeForWebhook(ctx workflow.Context, summaryEnabled, agentRan bool, wo
 // enabled and an agent ran in this run (see summarizeForWebhook for why
 // agentRan is required).
 func notifyComplete(ctx workflow.Context, summaryEnabled, agentRan bool, workDir string, n notification.Notification) {
-	n.WebhookBody = summarizeForWebhook(ctx, summaryEnabled, agentRan, workDir)
+	n.WebhookBody = summarizeForWebhook(ctx, summaryEnabled, agentRan, workDir, completeSummaryTimeout)
 	wfnotify.NotifyBestEffort(ctx, n)
 }
 
@@ -72,7 +88,7 @@ func notifyComplete(ctx workflow.Context, summaryEnabled, agentRan bool, workDir
 func notifyFailure(ctx workflow.Context, title, workDir string, summaryEnabled, agentRan bool, err error) {
 	wfnotify.NotifyFailureBestEffortWith(ctx, title, err,
 		func(dctx workflow.Context, n notification.Notification) notification.Notification {
-			n.WebhookBody = summarizeForWebhook(dctx, summaryEnabled, agentRan, workDir)
+			n.WebhookBody = summarizeForWebhook(dctx, summaryEnabled, agentRan, workDir, failureSummaryTimeout)
 			return n
 		})
 }
