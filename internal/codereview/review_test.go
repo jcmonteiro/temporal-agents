@@ -41,6 +41,9 @@ func TestReviewWorkflow_NoPayload_ReviewsThenContinuesAsNewWithReview(t *testing
 	env.AssertNotCalled(t, activityName(a.MarkHeadAndStash), mock.Anything, mock.Anything)
 	env.AssertNotCalled(t, activityName(a.RunImplementAgent), mock.Anything, mock.Anything)
 	env.AssertNotCalled(t, activityName(a.EnsureHeadAdvanced), mock.Anything, mock.Anything)
+	// Continue-as-new is a control signal, not a failure or completion: it must
+	// not notify.
+	env.AssertNotCalled(t, activityName(na.Notify), mock.Anything, mock.Anything)
 }
 
 func TestReviewWorkflow_AtPassCap_StopsInsteadOfLooping(t *testing.T) {
