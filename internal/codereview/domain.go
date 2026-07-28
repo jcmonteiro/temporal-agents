@@ -50,6 +50,10 @@ type PilotInput struct {
 	// TokensSoFar carries the accumulated total token usage from prior passes of
 	// a chained run, so the terminal result reports the whole chain's usage.
 	TokensSoFar int
+	// Summary, when true, runs a final activity before the workflow returns
+	// (on success or failure) that summarizes the last Pi execution and sends
+	// that summary as the webhook notification's body (only the webhook).
+	Summary bool
 }
 
 // PullRequest identifies the open PR the loop operates on.
@@ -210,11 +214,22 @@ type ReviewInput struct {
 	// when this loop was spawned by DevelopWorkflow, from that parent workflow's
 	// develop session, so the terminal result reports the whole tree's usage.
 	TokensSoFar int
+	// Summary, when true, runs a final activity before the workflow returns
+	// (on success or failure) that summarizes the last Pi execution and sends
+	// that summary as the webhook notification's body (only the webhook).
+	Summary bool
 }
 
 // ReviewPrompt is the instruction handed to the Pi agent to review the current
 // branch. It is deliberately terse; the agent decides how to review.
 const ReviewPrompt = "Perform a thorough code review of the current branch"
+
+// SummarizePrompt is handed to the Pi agent, resuming the workflow run's
+// session, to condense the work it just performed. Because piagent keys the
+// session on the workflow run, running it as a later activity in the same run
+// continues the last execution's session, so the agent summarizes what it
+// actually did. The result is delivered as the webhook notification body.
+const SummarizePrompt = "Summarize the work performed in this session in a few sentences: what changed and why, at a high level. Do not make any further code changes."
 
 // DevelopInput is the input to DevelopWorkflow.
 type DevelopInput struct {
@@ -224,6 +239,11 @@ type DevelopInput struct {
 	Branch string
 	// Prompt is the caller's instruction describing what to implement.
 	Prompt string
+	// Summary, when true, runs a final activity before the workflow returns
+	// (on success or failure) that summarizes the last Pi execution and sends
+	// that summary as the webhook notification's body (only the webhook). It is
+	// also propagated to the review loop this workflow spawns.
+	Summary bool
 }
 
 // BuildDevelopPrompt renders the instruction that has the Pi agent implement

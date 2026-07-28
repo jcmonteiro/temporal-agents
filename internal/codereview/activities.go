@@ -97,6 +97,11 @@ type RunImplementRequest struct {
 	Payload string
 }
 
+// SummarizeRequest is the input to SummarizeLastRun.
+type SummarizeRequest struct {
+	WorkDir string
+}
+
 const errDirtyWorktree = "DirtyWorktree"
 
 // errBranchExists is the error type returned (non-retryable) when the requested
@@ -340,6 +345,21 @@ func (a *Activities) RunImplementAgent(ctx context.Context, req RunImplementRequ
 		return AgentResult{}, err
 	}
 	return AgentResult{Output: out, Tokens: tokens}, nil
+}
+
+// SummarizeLastRun drives the Pi agent to summarize the work of the last
+// execution in this workflow run. Because piagent keys the Pi session on the
+// workflow run, running this as a later activity in the same run resumes that
+// session, so the agent summarizes what it actually did. The summary is used
+// only as the webhook notification body; its token usage is intentionally not
+// folded into the run's reported total, as this is a meta-step over an already
+// finished (or failed) run rather than part of the work itself.
+func (a *Activities) SummarizeLastRun(ctx context.Context, req SummarizeRequest) (string, error) {
+	out, _, err := a.Agent.Run(ctx, SummarizePrompt, req.WorkDir)
+	if err != nil {
+		return "", err
+	}
+	return out, nil
 }
 
 // RestoreStash pops changes stashed by MarkHeadAndStash. It is invoked as a

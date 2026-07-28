@@ -321,6 +321,70 @@ func TestPilotWorkflow_Chain_DoesNotSendFailureNotification(t *testing.T) {
 	env.AssertNotCalled(t, activityName(na.Notify), mock.Anything, mock.Anything)
 }
 
+func TestPilotWorkflow_Summary_SetsWebhookBodyFromLastRunSummaryOnSuccess(t *testing.T) {
+	env := newEnv(t)
+	pr := PullRequest{Number: 7, URL: "https://github.com/acme/widgets/pull/7"}
+
+	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
+	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
+		Return(LoadCommentsResult{Threads: nil}, nil)
+	env.OnActivity(a.SummarizeLastRun, mock.Anything, mock.Anything).Return("short summary for webhook", nil)
+	var got notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { got = args.Get(1).(notification.Notification) }).Return(nil)
+
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Summary: true})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	// The summary is delivered to the webhook only: it is the WebhookBody, while
+	// the plain Body (used by other channels) keeps the completion text.
+	require.Equal(t, "short summary for webhook", got.WebhookBody)
+	require.Contains(t, got.Body, "nothing to do")
+}
+
+func TestPilotWorkflow_Summary_SetsWebhookBodyOnFailure(t *testing.T) {
+	env := newEnv(t)
+
+	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).
+		Return(PullRequest{}, temporal.NewNonRetryableApplicationError("no open PR", "NoPR", nil))
+	env.OnActivity(a.SummarizeLastRun, mock.Anything, mock.Anything).Return("failure summary", nil)
+	var got notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { got = args.Get(1).(notification.Notification) }).Return(nil)
+
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Summary: true})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	// Even on failure the last run is summarized for the webhook body.
+	require.Equal(t, "Copilot review chain failed", got.Title)
+	require.Equal(t, "failure summary", got.WebhookBody)
+}
+
+func TestPilotWorkflow_NoSummaryFlag_DoesNotSummarize(t *testing.T) {
+	env := newEnv(t)
+	pr := PullRequest{Number: 7}
+
+	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
+	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
+		Return(LoadCommentsResult{Threads: nil}, nil)
+	var got notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { got = args.Get(1).(notification.Notification) }).Return(nil)
+
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	// Without --summary the final summary step never runs and the webhook body
+	// falls back to the plain Body.
+	env.AssertNotCalled(t, activityName(a.SummarizeLastRun), mock.Anything, mock.Anything)
+	require.Empty(t, got.WebhookBody)
+}
+
 func TestPilotWorkflow_Complete_SendsCopilotChainNotification(t *testing.T) {
 	env := newEnv(t)
 	pr := PullRequest{Number: 7, URL: "https://github.com/acme/widgets/pull/7"}

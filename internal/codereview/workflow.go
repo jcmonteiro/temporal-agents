@@ -18,6 +18,58 @@ import (
 // still-pending Copilot review.
 const reviewPollInterval = time.Minute
 
+// summarizeForWebhook runs the SummarizeLastRun activity when enabled and
+// returns the agent's summary, which the caller attaches as the webhook-only
+// notification body. It is best-effort: when disabled it returns "", and any
+// failure is logged and swallowed (returning "") so the webhook simply falls
+// back to the plain body rather than the run's notification being lost.
+func summarizeForWebhook(ctx workflow.Context, enabled bool, workDir string) string {
+	if !enabled {
+		return ""
+	}
+	// The summary is a long-running agent step, like the other agent activities,
+	// but runs once: a best-effort meta-step should not retry and multiply cost.
+	opts := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: time.Hour,
+		HeartbeatTimeout:    time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+	})
+	var a *Activities
+	var summary string
+	if err := workflow.ExecuteActivity(opts, a.SummarizeLastRun, SummarizeRequest{WorkDir: workDir}).Get(opts, &summary); err != nil {
+		workflow.GetLogger(ctx).Warn("could not summarize last Pi execution for webhook", "error", err)
+		return ""
+	}
+	return summary
+}
+
+// notifyComplete delivers a completion notification best-effort, attaching the
+// optional last-run summary as the webhook-only body when summary is enabled.
+func notifyComplete(ctx workflow.Context, summary bool, workDir string, n notification.Notification) {
+	n.WebhookBody = summarizeForWebhook(ctx, summary, workDir)
+	wfnotify.NotifyBestEffort(ctx, n)
+}
+
+// notifyFailure mirrors wfnotify.NotifyFailureBestEffort but, when summary is
+// enabled, first summarizes the last Pi execution and attaches it as the
+// webhook-only body. Like that helper it is a no-op on success and on
+// continue-as-new (a control signal, not a failure), and it delivers on a
+// disconnected context so a cancellation-caused failure still notifies.
+func notifyFailure(ctx workflow.Context, title, workDir string, summary bool, err error) {
+	if err == nil {
+		return
+	}
+	var canErr *workflow.ContinueAsNewError
+	if errors.As(err, &canErr) {
+		return
+	}
+	dctx, cancel := workflow.NewDisconnectedContext(ctx)
+	defer cancel()
+	n := notification.Notification{Title: title, Body: err.Error()}
+	n.WebhookBody = summarizeForWebhook(dctx, summary, workDir)
+	wfnotify.NotifyBestEffort(dctx, n)
+}
+
 // PilotWorkflow drives the "code pilot" loop: it finds the open PR for the
 // current branch, waits out any in-flight review, has the Pi agent address the
 // PR's unresolved review comments, then replies to and resolves those comments
@@ -33,7 +85,7 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 	// Notify best-effort when the pilot loop fails. Continue-as-new is a control
 	// signal (chained passes), not a failure, so NotifyFailureBestEffort excludes
 	// it.
-	defer func() { wfnotify.NotifyFailureBestEffort(ctx, "Copilot review chain failed", err) }()
+	defer func() { notifyFailure(ctx, "Copilot review chain failed", in.WorkDir, in.Summary, err) }()
 
 	var addressed bool
 	var tokens int
@@ -50,7 +102,7 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 		return "", workflow.NewContinueAsNewError(ctx, PilotWorkflow, next)
 	}
 	summary = withTokenTotal(summary, total)
-	wfnotify.NotifyBestEffort(ctx, notification.Notification{Title: "Copilot review chain complete", Body: summary, URL: prURL})
+	notifyComplete(ctx, in.Summary, in.WorkDir, notification.Notification{Title: "Copilot review chain complete", Body: summary, URL: prURL})
 	return summary, nil
 }
 
@@ -173,7 +225,7 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, int, strin
 // ID so the caller can watch it.
 func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err error) {
 	// Notify best-effort when development fails before the review loop is started.
-	defer func() { wfnotify.NotifyFailureBestEffort(ctx, "Development failed", err) }()
+	defer func() { notifyFailure(ctx, "Development failed", in.WorkDir, in.Summary, err) }()
 
 	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
 	// should not run forever.
@@ -218,14 +270,14 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	// terminal result reports the whole tree's usage ("including parent
 	// workflows").
 	child := workflow.ExecuteChildWorkflow(childCtx, ReviewWorkflow,
-		ReviewInput{WorkDir: in.WorkDir, TokensSoFar: agentResult.Tokens})
+		ReviewInput{WorkDir: in.WorkDir, TokensSoFar: agentResult.Tokens, Summary: in.Summary})
 	if err := child.GetChildWorkflowExecution().Get(ctx, nil); err != nil {
 		return "", fmt.Errorf("start review workflow: %w", err)
 	}
 
 	summary := withTokenTotal(fmt.Sprintf("Developed branch %s with %d commit(s); started review %s.",
 		in.Branch, len(commits), reviewID), agentResult.Tokens)
-	wfnotify.NotifyBestEffort(ctx, notification.Notification{
+	notifyComplete(ctx, in.Summary, in.WorkDir, notification.Notification{
 		Title: "Development complete",
 		Body: fmt.Sprintf("Developed branch %s with %d commit(s) successfully. The review cycle will now commence.",
 			in.Branch, len(commits)),
@@ -255,7 +307,7 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 	// Notify best-effort when the review loop fails. Continue-as-new is a control
 	// signal (looping passes), not a failure, so NotifyFailureBestEffort excludes
 	// it.
-	defer func() { wfnotify.NotifyFailureBestEffort(ctx, "Local review chain failed", err) }()
+	defer func() { notifyFailure(ctx, "Local review chain failed", in.WorkDir, in.Summary, err) }()
 
 	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
 	// should not run forever.
@@ -308,7 +360,7 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 			var appErr *temporal.ApplicationError
 			if errors.As(err, &appErr) && appErr.Type() == errNoAdvance {
 				summary := withTokenTotal("Review complete; the implement pass found nothing to commit.", total)
-				wfnotify.NotifyBestEffort(ctx, notification.Notification{Title: "Local review chain complete", Body: summary})
+				notifyComplete(ctx, in.Summary, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary})
 				return summary, nil
 			}
 			return "", err
@@ -338,9 +390,9 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 	nextPass := in.Pass + 1
 	if nextPass >= MaxReviewPasses {
 		summary := withTokenTotal(fmt.Sprintf("Review stopped after %d pass(es).", MaxReviewPasses), total)
-		wfnotify.NotifyBestEffort(ctx, notification.Notification{Title: "Local review chain complete", Body: summary})
+		notifyComplete(ctx, in.Summary, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary})
 		return summary, nil
 	}
 	return "", workflow.NewContinueAsNewError(ctx, ReviewWorkflow,
-		ReviewInput{WorkDir: in.WorkDir, Payload: reviewOutput, Pass: nextPass, TokensSoFar: total})
+		ReviewInput{WorkDir: in.WorkDir, Payload: reviewOutput, Pass: nextPass, TokensSoFar: total, Summary: in.Summary})
 }

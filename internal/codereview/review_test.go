@@ -201,6 +201,28 @@ func TestReviewWorkflow_Failure_SendsFailureNotification(t *testing.T) {
 	require.Contains(t, got.Body, "review agent crashed")
 }
 
+func TestReviewWorkflow_Summary_SetsWebhookBodyFromLastRunSummary(t *testing.T) {
+	env := newReviewEnv(t)
+
+	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
+		Return(Checkpoint{HeadSHA: "base"}, nil)
+	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "nothing to change"}, nil)
+	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).
+		Return(nil, temporal.NewNonRetryableApplicationError("no commits", errNoAdvance, nil))
+	env.OnActivity(a.SummarizeLastRun, mock.Anything, mock.Anything).Return("review summary for webhook", nil)
+	var got notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { got = args.Get(1).(notification.Notification) }).Return(nil)
+
+	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo", Payload: "prior review", Summary: true})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	// The last run's summary is delivered to the webhook only.
+	require.Equal(t, "review summary for webhook", got.WebhookBody)
+	require.Contains(t, got.Body, "nothing to commit")
+}
+
 func TestReviewWorkflow_Complete_SendsLocalChainNotification(t *testing.T) {
 	env := newReviewEnv(t)
 
