@@ -5,6 +5,7 @@ package ghcli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -45,11 +46,18 @@ func (h GitHub) FindOpen(ctx context.Context, dir, branch string) (codereview.Pu
 
 // EnsureOpen returns the open PR whose head is branch, creating it when none
 // exists yet. It first tries to locate an existing open PR (returning it
-// unchanged so the operation is idempotent); only when none is found does it
-// create one with `gh pr create --fill`, then locates the freshly opened PR.
+// unchanged so the operation is idempotent). Only when FindOpen reports the
+// specific "no open PR" case (errNoOpenPR) does it create one with
+// `gh pr create --fill`, then locate the freshly opened PR. Any other FindOpen
+// failure — more than one open PR, or a transient/auth `gh` error — is returned
+// as-is rather than masked by a spurious create attempt.
 func (h GitHub) EnsureOpen(ctx context.Context, dir, branch string) (codereview.PullRequest, error) {
-	if pr, err := h.FindOpen(ctx, dir, branch); err == nil {
+	pr, err := h.FindOpen(ctx, dir, branch)
+	if err == nil {
 		return pr, nil
+	}
+	if !errors.Is(err, errNoOpenPR) {
+		return codereview.PullRequest{}, err
 	}
 	if _, err := runDir(ctx, dir, "pr", "create", "--head", branch, "--fill"); err != nil {
 		return codereview.PullRequest{}, err
