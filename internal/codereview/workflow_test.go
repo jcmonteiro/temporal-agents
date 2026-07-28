@@ -277,7 +277,7 @@ func TestPilotWorkflow_Chain_CarriesTokenUsageForward(t *testing.T) {
 
 func TestPilotWorkflow_Complete_SendsCopilotChainNotification(t *testing.T) {
 	env := newEnv(t)
-	pr := PullRequest{Number: 7}
+	pr := PullRequest{Number: 7, URL: "https://github.com/acme/widgets/pull/7"}
 
 	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
 	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
@@ -296,4 +296,6 @@ func TestPilotWorkflow_Complete_SendsCopilotChainNotification(t *testing.T) {
 	// Finishing the pilot loop notifies that the Copilot review chain is done.
 	require.Equal(t, "Copilot review chain complete", got.Title)
 	require.Contains(t, got.Body, "nothing to do")
+	// The notification carries a hyperlink to the PR the loop operated on.
+	require.Equal(t, pr.URL, got.URL)
 }

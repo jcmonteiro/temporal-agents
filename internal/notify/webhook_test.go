@@ -23,7 +23,7 @@ func TestWebhookPostsNotificationAsJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n := notification.Notification{Title: "chain done", Body: "3 commits"}
+	n := notification.Notification{Title: "chain done", Body: "3 commits", URL: "https://github.com/acme/widgets/pull/7"}
 	if err := NewWebhook(srv.URL).Notify(context.Background(), n); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -36,6 +36,10 @@ func TestWebhookPostsNotificationAsJSON(t *testing.T) {
 	}
 	if gotBody.Title != n.Title || gotBody.Body != n.Body {
 		t.Errorf("payload = %+v, want %+v", gotBody, n)
+	}
+	// The PR hyperlink is carried through to the webhook payload.
+	if gotBody.URL != n.URL {
+		t.Errorf("payload url = %q, want %q", gotBody.URL, n.URL)
 	}
 }
 
