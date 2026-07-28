@@ -185,7 +185,7 @@ func TestReviewWorkflow_Failure_SendsFailureNotification(t *testing.T) {
 	env := newReviewEnv(t)
 
 	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).
-		Return(AgentResult{}, errors.New("review agent crashed"))
+		Return(AgentResult{}, temporal.NewNonRetryableApplicationError("review agent crashed", "AgentError", nil))
 	var got notification.Notification
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
