@@ -229,6 +229,11 @@ const ReviewPrompt = "Perform a thorough code review of the current branch"
 // session on the workflow run, running it as a later activity in the same run
 // continues the last execution's session, so the agent summarizes what it
 // actually did. The result is delivered as the webhook notification body.
+//
+// This only holds when an agent activity actually ran earlier in the workflow
+// run; on terminal paths where none did, the step is skipped entirely (see the
+// agentRan guard on summarizeForWebhook) so the agent is never asked to
+// summarize a fresh, empty session.
 const SummarizePrompt = "Summarize the work performed in this session in a few sentences: what changed and why, at a high level. Do not make any further code changes."
 
 // DevelopInput is the input to DevelopWorkflow.
