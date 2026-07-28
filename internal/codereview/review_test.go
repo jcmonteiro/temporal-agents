@@ -28,7 +28,7 @@ func newReviewEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 func TestReviewWorkflow_NoPayload_ReviewsThenContinuesAsNewWithReview(t *testing.T) {
 	env := newReviewEnv(t)
 
-	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return("rename foo", nil)
+	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "rename foo"}, nil)
 
 	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo"})
 
@@ -50,9 +50,9 @@ func TestReviewWorkflow_AtPassCap_StopsInsteadOfLooping(t *testing.T) {
 	// re-review; the next pass would be MaxReviewPasses, so it must stop.
 	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
 		Return(Checkpoint{HeadSHA: "base"}, nil)
-	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return("done", nil)
+	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
-	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return("more feedback", nil)
+	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "more feedback"}, nil)
 
 	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo", Payload: "prior review", Pass: MaxReviewPasses - 1})
 
@@ -63,14 +63,36 @@ func TestReviewWorkflow_AtPassCap_StopsInsteadOfLooping(t *testing.T) {
 	require.Contains(t, out, "stopped after")
 }
 
+func TestReviewWorkflow_Result_ReportsAccumulatedTokenUsageAcrossSessions(t *testing.T) {
+	env := newReviewEnv(t)
+
+	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
+		Return(Checkpoint{HeadSHA: "base"}, nil)
+	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).
+		Return(AgentResult{Output: "done", Tokens: 200}, nil)
+	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).
+		Return(AgentResult{Output: "more feedback", Tokens: 150}, nil)
+
+	// At the pass cap the loop stops and reports the total: prior passes/parent
+	// (1000) + this pass's implement (200) + review (150).
+	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo", Payload: "prior review", Pass: MaxReviewPasses - 1, TokensSoFar: 1000})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	var out string
+	require.NoError(t, env.GetWorkflowResult(&out))
+	require.Contains(t, out, "Total token usage across all sessions: 1,350 tokens.")
+}
+
 func TestReviewWorkflow_WithPayload_ImplementsCheckingHeadThenReviewsAndLoops(t *testing.T) {
 	env := newReviewEnv(t)
 
 	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
 		Return(Checkpoint{HeadSHA: "base"}, nil)
-	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return("done", nil)
+	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
-	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return("new feedback", nil)
+	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "new feedback"}, nil)
 
 	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo", Payload: "prior review"})
 
@@ -86,7 +108,7 @@ func TestReviewWorkflow_WithPayload_NoNewCommits_SucceedsAndStops(t *testing.T) 
 
 	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
 		Return(Checkpoint{HeadSHA: "base"}, nil)
-	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return("nothing to change", nil)
+	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "nothing to change"}, nil)
 	// The implement pass produced no commits: the branch has converged.
 	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).
 		Return(nil, temporal.NewNonRetryableApplicationError("no commits", errNoAdvance, nil))
@@ -107,9 +129,9 @@ func TestReviewWorkflow_WithPayload_RestoresStashedChanges(t *testing.T) {
 
 	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
 		Return(Checkpoint{HeadSHA: "base", Stashed: true}, nil)
-	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return("done", nil)
+	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
-	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return("new feedback", nil)
+	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "new feedback"}, nil)
 	// The changes stashed before the implement agent ran are restored at the end.
 	env.OnActivity(a.RestoreStash, mock.Anything, mock.Anything).Return(nil)
 
@@ -126,9 +148,9 @@ func TestReviewWorkflow_StashRestoreFailure_StillLoops(t *testing.T) {
 
 	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
 		Return(Checkpoint{HeadSHA: "base", Stashed: true}, nil)
-	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return("done", nil)
+	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
-	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return("new feedback", nil)
+	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "new feedback"}, nil)
 	// The stash pop conflicts, but the pass has already done its work.
 	env.OnActivity(a.RestoreStash, mock.Anything, mock.Anything).
 		Return(errors.New("CONFLICT: merge conflict"))
@@ -146,7 +168,7 @@ func TestReviewWorkflow_WithPayload_ImplementAgentError_Fails(t *testing.T) {
 	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
 		Return(Checkpoint{HeadSHA: "base"}, nil)
 	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).
-		Return("", errors.New("pi failed"))
+		Return(AgentResult{}, errors.New("pi failed"))
 
 	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo", Payload: "prior review"})
 
@@ -161,7 +183,7 @@ func TestReviewWorkflow_Complete_SendsLocalChainNotification(t *testing.T) {
 
 	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
 		Return(Checkpoint{HeadSHA: "base"}, nil)
-	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return("nothing to change", nil)
+	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "nothing to change"}, nil)
 	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).
 		Return(nil, temporal.NewNonRetryableApplicationError("no commits", errNoAdvance, nil))
 	var got notification.Notification
