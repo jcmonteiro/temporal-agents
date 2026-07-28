@@ -41,6 +41,9 @@ func TestReviewWorkflow_NoPayload_ReviewsThenContinuesAsNewWithReview(t *testing
 	env.AssertNotCalled(t, activityName(a.MarkHeadAndStash), mock.Anything, mock.Anything)
 	env.AssertNotCalled(t, activityName(a.RunImplementAgent), mock.Anything, mock.Anything)
 	env.AssertNotCalled(t, activityName(a.EnsureHeadAdvanced), mock.Anything, mock.Anything)
+	// Continue-as-new is a control signal, not a failure or completion: it must
+	// not notify.
+	env.AssertNotCalled(t, activityName(na.Notify), mock.Anything, mock.Anything)
 }
 
 func TestReviewWorkflow_AtPassCap_StopsInsteadOfLooping(t *testing.T) {
@@ -178,6 +181,26 @@ func TestReviewWorkflow_WithPayload_ImplementAgentError_Fails(t *testing.T) {
 	env.AssertNotCalled(t, activityName(a.RunReviewAgent), mock.Anything, mock.Anything)
 }
 
+func TestReviewWorkflow_Failure_SendsFailureNotification(t *testing.T) {
+	env := newReviewEnv(t)
+
+	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).
+		Return(AgentResult{}, temporal.NewNonRetryableApplicationError("review agent crashed", "AgentError", nil))
+	var got notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got = args.Get(1).(notification.Notification)
+		}).Return(nil)
+
+	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	// A failed review pass notifies best-effort with the error as the body.
+	require.Equal(t, "Local review chain failed", got.Title)
+	require.Contains(t, got.Body, "review agent crashed")
+}
+
 func TestReviewWorkflow_Complete_SendsLocalChainNotification(t *testing.T) {
 	env := newReviewEnv(t)
 
@@ -187,10 +210,10 @@ func TestReviewWorkflow_Complete_SendsLocalChainNotification(t *testing.T) {
 	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).
 		Return(nil, temporal.NewNonRetryableApplicationError("no commits", errNoAdvance, nil))
 	var got notification.Notification
-	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
-		got = n
-		return true
-	})).Return(nil)
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got = args.Get(1).(notification.Notification)
+		}).Return(nil)
 
 	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo", Payload: "prior review"})
 

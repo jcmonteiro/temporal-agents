@@ -78,10 +78,10 @@ func TestDevelopWorkflow_Complete_NotifiesReviewWillCommence(t *testing.T) {
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
 	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
 	var got notification.Notification
-	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
-		got = n
-		return true
-	})).Return(nil)
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got = args.Get(1).(notification.Notification)
+		}).Return(nil)
 
 	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing"})
 
@@ -106,6 +106,27 @@ func TestDevelopWorkflow_DirtyWorktree_FailsBeforeRunningAgent(t *testing.T) {
 	// Nothing should run once the branch could not be created.
 	env.AssertNotCalled(t, activityName(a.RunDevelopAgent), mock.Anything, mock.Anything)
 	env.AssertNotCalled(t, activityName(a.EnsureDeveloped), mock.Anything, mock.Anything)
+}
+
+func TestDevelopWorkflow_Failure_SendsFailureNotification(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	// Simulate CreateBranch failing; the specific cause is immaterial here — this
+	// test only asserts that a failure produces a notification.
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
+		Return("", temporal.NewNonRetryableApplicationError("dirty", errDirtyWorktree, nil))
+	var got notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got = args.Get(1).(notification.Notification)
+		}).Return(nil)
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	// A failed development notifies best-effort that it failed.
+	require.Equal(t, "Development failed", got.Title)
 }
 
 func TestDevelopWorkflow_NoCommits_FailsWithoutTriggeringReview(t *testing.T) {

@@ -275,6 +275,52 @@ func TestPilotWorkflow_Chain_CarriesTokenUsageForward(t *testing.T) {
 	require.Equal(t, 1000, next.TokensSoFar)
 }
 
+func TestPilotWorkflow_Failure_SendsFailureNotification(t *testing.T) {
+	env := newEnv(t)
+
+	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).
+		Return(PullRequest{}, temporal.NewNonRetryableApplicationError("no open PR", "NoPR", nil))
+	var got notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got = args.Get(1).(notification.Notification)
+		}).Return(nil)
+
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	// A failed pilot loop notifies best-effort with the error as the body.
+	require.Equal(t, "Copilot review chain failed", got.Title)
+	require.Contains(t, got.Body, "no open PR")
+}
+
+func TestPilotWorkflow_Chain_DoesNotSendFailureNotification(t *testing.T) {
+	env := newEnv(t)
+	pr := PullRequest{Number: 7}
+	threads := []ReviewThread{{ID: "t1", Body: "fix"}}
+
+	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
+	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
+		Return(LoadCommentsResult{Threads: threads}, nil)
+	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
+		Return(Checkpoint{HeadSHA: "base"}, nil)
+	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
+	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnActivity(a.PushBranch, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.ReplyAndResolve, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.RequestCopilotReview, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Chain: true})
+
+	require.True(t, env.IsWorkflowCompleted())
+	var canErr *workflow.ContinueAsNewError
+	require.ErrorAs(t, env.GetWorkflowError(), &canErr)
+	// Continue-as-new is a control signal, not a failure: it must not notify.
+	env.AssertNotCalled(t, activityName(na.Notify), mock.Anything, mock.Anything)
+}
+
 func TestPilotWorkflow_Complete_SendsCopilotChainNotification(t *testing.T) {
 	env := newEnv(t)
 	pr := PullRequest{Number: 7, URL: "https://github.com/acme/widgets/pull/7"}
@@ -284,10 +330,10 @@ func TestPilotWorkflow_Complete_SendsCopilotChainNotification(t *testing.T) {
 	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
 		Return(LoadCommentsResult{Threads: nil}, nil)
 	var got notification.Notification
-	env.OnActivity(na.Notify, mock.Anything, mock.MatchedBy(func(n notification.Notification) bool {
-		got = n
-		return true
-	})).Return(nil)
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got = args.Get(1).(notification.Notification)
+		}).Return(nil)
 
 	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo"})
 

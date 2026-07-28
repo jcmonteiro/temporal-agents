@@ -1,7 +1,10 @@
 // Package notification defines the notification port shared by the workflows
-// and the thin activity that drives it. It has no dependencies beyond the
-// standard library; concrete adapters (see the notify package) implement
-// Notifier from the edges, keeping the cores decoupled from delivery details.
+// and the thin activity that drives it. The port types (Notification, Notifier,
+// Activity) depend only on the standard library; concrete adapters (see the
+// notify package) implement Notifier from the edges, keeping the cores
+// decoupled from delivery details. The workflow-side best-effort delivery
+// helpers, which depend on the Temporal SDK, live in the wfnotify package so
+// this port stays SDK-free.
 package notification
 
 import (

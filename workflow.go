@@ -3,11 +3,11 @@ package main
 import (
 	"time"
 
-	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
 	"temporal-agents/internal/notification"
 	"temporal-agents/internal/piagent"
+	"temporal-agents/internal/wfnotify"
 )
 
 // TaskQueue is the single, default task queue used by everything.
@@ -31,7 +31,11 @@ type PromptRequest struct {
 // PromptWorkflow runs the Pi agent activity for the given prompt and returns its
 // output. When req.Chain is set, a successful run continues as new with the
 // same input, chaining the workflow indefinitely.
-func PromptWorkflow(ctx workflow.Context, req PromptRequest) (string, error) {
+func PromptWorkflow(ctx workflow.Context, req PromptRequest) (out string, err error) {
+	// Notify best-effort when the run fails. Continue-as-new is a control signal
+	// (chained runs), not a failure, so NotifyFailureBestEffort excludes it.
+	defer func() { wfnotify.NotifyFailureBestEffort(ctx, "Run failed", err) }()
+
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: time.Hour,
 		// The activity streams Pi's progress via heartbeats; if it stops
@@ -60,21 +64,6 @@ func PromptWorkflow(ctx workflow.Context, req PromptRequest) (string, error) {
 	// usage to the result and notify best-effort. This runs only here (never
 	// before continue-as-new, which would cancel the in-flight activity).
 	result := res.Output + "\n\n" + piagent.FormatTokenTotal(total)
-	notifyPromptComplete(ctx, result)
+	wfnotify.NotifyBestEffort(ctx, notification.Notification{Title: "Run complete", Body: result})
 	return result, nil
-}
-
-// notifyPromptComplete sends a best-effort completion notification for a
-// finished run. Failures are logged and swallowed so a notification problem
-// never fails an otherwise successful workflow.
-func notifyPromptComplete(ctx workflow.Context, result string) {
-	opts := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: 30 * time.Second,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
-	})
-	var na *notification.Activity
-	n := notification.Notification{Title: "Run complete", Body: result}
-	if err := workflow.ExecuteActivity(opts, na.Notify, n).Get(opts, nil); err != nil {
-		workflow.GetLogger(ctx).Warn("could not send completion notification", "error", err)
-	}
 }

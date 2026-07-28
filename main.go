@@ -271,8 +271,7 @@ func workerHelp(w io.Writer) {
 	fmt.Fprint(w, `temporal-agents worker — start the Temporal worker
 
 Runs the worker that executes the workflows and their activities, including the
-completion notification that fires when a local review or Copilot review chain
-finishes.
+notifications that fire when a workflow finishes or fails.
 
 USAGE
   temporal-agents worker [--no-desktop] [--webhook <url>]
