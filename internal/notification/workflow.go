@@ -41,6 +41,12 @@ func NotifyBestEffort(ctx workflow.Context, n Notification) {
 // failed because it was cancelled — the case where a heads-up is most useful —
 // still notifies. Scheduling on the (now cancelled) workflow context would fail
 // immediately and silently drop the failure notification.
+//
+// The body is the workflow error verbatim, so network adapters (e.g. the
+// webhook notifier) transmit it as-is — the adapter only sanitizes transport
+// errors, not this body. Current workflow errors carry no secrets; if an
+// activity error ever embeds a token or signed URL, sanitize it at its source
+// before it reaches here.
 func NotifyFailureBestEffort(ctx workflow.Context, title string, err error) {
 	if err == nil {
 		return
