@@ -294,7 +294,11 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	})
 	// Seed the review loop with this develop session's token usage so its
 	// terminal result reports the whole tree's usage ("including parent
-	// workflows").
+	// workflows"). When --summary is set it is also propagated, so the spawned
+	// review loop summarizes its own (later) run for its completion webhook. This
+	// is intentional but means a single `develop --summary` triggers two
+	// independent summary agent runs (this develop completion plus the review
+	// completion), each a full, billable Pi run.
 	child := workflow.ExecuteChildWorkflow(childCtx, ReviewWorkflow,
 		ReviewInput{WorkDir: in.WorkDir, TokensSoFar: agentResult.Tokens, Summary: in.Summary})
 	if err := child.GetChildWorkflowExecution().Get(ctx, nil); err != nil {
