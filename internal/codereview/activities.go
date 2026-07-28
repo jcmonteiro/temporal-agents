@@ -90,19 +90,33 @@ type RunImplementRequest struct {
 
 const errDirtyWorktree = "DirtyWorktree"
 
+// errBranchExists is the error type returned (non-retryable) when the requested
+// branch is already checked out on the first attempt, i.e. the caller asked to
+// develop on an existing branch rather than a fresh one.
+const errBranchExists = "BranchExists"
+
 // CreateBranch creates and checks out req.Branch at the current HEAD, returning
 // the HEAD SHA the branch starts from so a later step can confirm the agent
 // advanced it. It requires a clean working tree (no local changes).
 //
-// It is idempotent: when req.Branch is already the checked-out branch (e.g. a
-// retry after this activity already switched), it skips the clean-tree check
-// and branch creation and simply reports the current HEAD.
+// It is idempotent across Temporal retries: when req.Branch is already the
+// checked-out branch on a retry (attempt > 1, i.e. this activity already
+// switched before being retried), it skips the clean-tree check and branch
+// creation and simply reports the current HEAD. On the first attempt an
+// already-checked-out branch is instead rejected: it is indistinguishable from
+// a caller asking to develop on an existing branch, and skipping the clean-tree
+// check there would let unrelated local changes be committed by the agent.
 func (a *Activities) CreateBranch(ctx context.Context, req CreateBranchRequest) (string, error) {
 	current, err := a.Git.CurrentBranch(ctx, req.WorkDir)
 	if err != nil {
 		return "", fmt.Errorf("determine current branch: %w", err)
 	}
 	if current == req.Branch {
+		if activity.GetInfo(ctx).Attempt <= 1 {
+			return "", temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("branch %s is already checked out; choose a new branch name", req.Branch),
+				errBranchExists, nil)
+		}
 		head, err := a.Git.Head(ctx, req.WorkDir)
 		if err != nil {
 			return "", fmt.Errorf("read HEAD: %w", err)
