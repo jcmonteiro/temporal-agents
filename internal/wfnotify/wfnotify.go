@@ -47,7 +47,9 @@ func NotifyBestEffort(ctx workflow.Context, n notification.Notification) {
 // The notification is scheduled on a disconnected context so a workflow that
 // failed because it was cancelled — the case where a heads-up is most useful —
 // still notifies. Scheduling on the (now cancelled) workflow context would fail
-// immediately and silently drop the failure notification.
+// immediately and silently drop the failure notification. On this path the
+// activity's own timeout and retries can delay workflow close by up to the full
+// delivery budget; that delay is accepted for a best-effort heads-up.
 //
 // The body is the workflow error verbatim, so network adapters (e.g. the
 // webhook notifier) transmit it as-is — the adapter only sanitizes transport
