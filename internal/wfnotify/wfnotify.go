@@ -14,10 +14,11 @@ import (
 	"temporal-agents/internal/notification"
 )
 
-// notifyActivityOptions is the shared workflow-side delivery policy for the
-// best-effort notification activity: a short timeout with a couple of retries.
-// Centralizing it here keeps every workflow's notification behavior consistent.
-func notifyActivityOptions(ctx workflow.Context) workflow.Context {
+// withNotifyOptions returns ctx with the shared workflow-side delivery policy
+// for the best-effort notification activity applied: a short timeout with a
+// couple of retries. Centralizing it here keeps every workflow's notification
+// behavior consistent.
+func withNotifyOptions(ctx workflow.Context) workflow.Context {
 	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 30 * time.Second,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
@@ -30,7 +31,7 @@ func notifyActivityOptions(ctx workflow.Context) workflow.Context {
 // for delivering a notification, so the retry/timeout policy lives in one
 // place.
 func NotifyBestEffort(ctx workflow.Context, n notification.Notification) {
-	opts := notifyActivityOptions(ctx)
+	opts := withNotifyOptions(ctx)
 	var a *notification.Activity
 	if err := workflow.ExecuteActivity(opts, a.Notify, n).Get(opts, nil); err != nil {
 		workflow.GetLogger(ctx).Warn("could not send notification", "error", err)
