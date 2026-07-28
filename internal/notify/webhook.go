@@ -30,12 +30,15 @@ func NewWebhook(url string) Webhook {
 type webhookPayload struct {
 	Title string `json:"title"`
 	Body  string `json:"body"`
+	// URL is a hyperlink to the relevant resource (e.g. the pull request). It is
+	// omitted when the notification carries no link.
+	URL string `json:"url,omitempty"`
 }
 
 // Notify POSTs n to the webhook URL as JSON and treats any non-2xx response as
 // a failure.
 func (w Webhook) Notify(ctx context.Context, n notification.Notification) error {
-	body, err := json.Marshal(webhookPayload{Title: n.Title, Body: n.Body})
+	body, err := json.Marshal(webhookPayload{Title: n.Title, Body: n.Body, URL: n.URL})
 	if err != nil {
 		return fmt.Errorf("encode webhook payload: %w", err)
 	}

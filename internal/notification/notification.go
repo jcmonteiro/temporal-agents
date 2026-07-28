@@ -15,6 +15,10 @@ type Notification struct {
 	Title string
 	// Body is the human-readable detail, typically the workflow's summary.
 	Body string
+	// URL, when set, is a hyperlink to the relevant resource (e.g. the pull
+	// request a review chain operated on). It is empty when there is no such
+	// resource. Adapters render it however their channel allows.
+	URL string
 }
 
 // Notifier is the port for delivering a Notification to the outside world.

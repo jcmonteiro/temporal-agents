@@ -21,14 +21,16 @@ const reviewPollInterval = time.Minute
 // terminal step. Failures are logged and swallowed so a notification problem
 // never fails an otherwise successful workflow. It must be called before the
 // workflow returns (never on a continue-as-new path), since continue-as-new
-// cancels any in-flight activity.
-func notifyChainComplete(ctx workflow.Context, title, body string) {
+// cancels any in-flight activity. url, when non-empty, is a hyperlink to the
+// relevant resource (e.g. the pull request) that adapters surface alongside the
+// message.
+func notifyChainComplete(ctx workflow.Context, title, body, url string) {
 	opts := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 30 * time.Second,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 2},
 	})
 	var na *notification.Activity
-	if err := workflow.ExecuteActivity(opts, na.Notify, notification.Notification{Title: title, Body: body}).Get(opts, nil); err != nil {
+	if err := workflow.ExecuteActivity(opts, na.Notify, notification.Notification{Title: title, Body: body, URL: url}).Get(opts, nil); err != nil {
 		workflow.GetLogger(ctx).Warn("could not send completion notification", "error", err)
 	}
 }
@@ -45,21 +47,24 @@ func notifyChainComplete(ctx workflow.Context, title, body string) {
 // mirrors PromptWorkflow: continue-as-new restarts the run with a fresh,
 // bounded event history under the same workflow ID.
 func PilotWorkflow(ctx workflow.Context, in PilotInput) (string, error) {
-	summary, addressed, err := runPilotOnce(ctx, in)
+	summary, addressed, prURL, err := runPilotOnce(ctx, in)
 	if err != nil {
 		return "", err
 	}
 	if in.Chain && addressed {
 		return "", workflow.NewContinueAsNewError(ctx, PilotWorkflow, in)
 	}
-	notifyChainComplete(ctx, "Copilot review chain complete", summary)
+	notifyChainComplete(ctx, "Copilot review chain complete", summary, prURL)
 	return summary, nil
 }
 
 // runPilotOnce performs a single pass of the loop. It returns a human-readable
-// summary and whether it actually addressed any comments (false when the PR had
-// no unresolved comments), which the caller uses to decide whether to chain.
-func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, error) {
+// summary, whether it actually addressed any comments (false when the PR had
+// no unresolved comments, which the caller uses to decide whether to chain),
+// and a hyperlink to the PR the pass operated on (empty when it failed before
+// determining the PR) so the caller can include it in the completion
+// notification.
+func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, string, error) {
 	// Quick, deterministic git/GitHub steps. They are idempotent enough to
 	// retry, but should not run forever.
 	quick := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
@@ -83,7 +88,7 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, error) {
 
 	var pr PullRequest
 	if err := workflow.ExecuteActivity(quick, a.DeterminePR, in).Get(quick, &pr); err != nil {
-		return "", false, err
+		return "", false, "", err
 	}
 
 	// Wait out any review still in progress so we act on a settled comment set.
@@ -92,55 +97,55 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, error) {
 	for {
 		var ongoing bool
 		if err := workflow.ExecuteActivity(quick, a.CheckOngoingReview, pr).Get(quick, &ongoing); err != nil {
-			return "", false, err
+			return "", false, "", err
 		}
 		if !ongoing {
 			break
 		}
 		if err := workflow.Sleep(ctx, reviewPollInterval); err != nil {
-			return "", false, err
+			return "", false, "", err
 		}
 	}
 
 	var loaded LoadCommentsResult
 	if err := workflow.ExecuteActivity(quick, a.LoadUnresolvedComments, pr).Get(quick, &loaded); err != nil {
-		return "", false, err
+		return "", false, "", err
 	}
 	if len(loaded.Threads) == 0 {
-		return fmt.Sprintf("No unresolved comments on PR #%d; nothing to do.", pr.Number), false, nil
+		return fmt.Sprintf("No unresolved comments on PR #%d; nothing to do.", pr.Number), false, pr.URL, nil
 	}
 
 	var cp Checkpoint
 	if err := workflow.ExecuteActivity(quick, a.MarkHeadAndStash, in).Get(quick, &cp); err != nil {
-		return "", false, err
+		return "", false, "", err
 	}
 
 	var agentResult string
 	agentReq := RunAgentRequest{Input: in, PR: pr, Threads: loaded.Threads}
 	if err := workflow.ExecuteActivity(agentCtx, a.RunAgent, agentReq).Get(agentCtx, &agentResult); err != nil {
-		return "", false, err
+		return "", false, "", err
 	}
 
 	var commits []string
 	advReq := EnsureHeadAdvancedRequest{WorkDir: in.WorkDir, Checkpoint: cp}
 	if err := workflow.ExecuteActivity(quick, a.EnsureHeadAdvanced, advReq).Get(quick, &commits); err != nil {
-		return "", false, err
+		return "", false, "", err
 	}
 
 	// Publish the new commits to the PR branch before answering comments and
 	// requesting a fresh review, so both see the pushed work.
 	pushReq := PushBranchRequest{WorkDir: in.WorkDir, Branch: pr.HeadRef}
 	if err := workflow.ExecuteActivity(quick, a.PushBranch, pushReq).Get(quick, nil); err != nil {
-		return "", false, err
+		return "", false, "", err
 	}
 
 	replyReq := ReplyAndResolveRequest{PR: pr, Threads: loaded.Threads, CommitSHAs: commits}
 	if err := workflow.ExecuteActivity(quick, a.ReplyAndResolve, replyReq).Get(quick, nil); err != nil {
-		return "", false, err
+		return "", false, "", err
 	}
 
 	if err := workflow.ExecuteActivity(quick, a.RequestCopilotReview, pr).Get(quick, nil); err != nil {
-		return "", false, err
+		return "", false, "", err
 	}
 
 	// Put the developer's pre-existing local changes back. This is best-effort:
@@ -154,7 +159,7 @@ func runPilotOnce(ctx workflow.Context, in PilotInput) (string, bool, error) {
 	}
 
 	return fmt.Sprintf("Addressed %d comment(s) on PR #%d with %d commit(s); requested Copilot review.",
-		len(loaded.Threads), pr.Number, len(commits)), true, nil
+		len(loaded.Threads), pr.Number, len(commits)), true, pr.URL, nil
 }
 
 // DevelopWorkflow drives the "code develop" flow. In sequence it:
@@ -218,7 +223,7 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (string, error) {
 		in.Branch, len(commits), reviewID)
 	notifyChainComplete(ctx, "Development complete",
 		fmt.Sprintf("Developed branch %s with %d commit(s) successfully. The review cycle will now commence.",
-			in.Branch, len(commits)))
+			in.Branch, len(commits)), "")
 	return summary, nil
 }
 
@@ -285,7 +290,7 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (string, error) {
 			var appErr *temporal.ApplicationError
 			if errors.As(err, &appErr) && appErr.Type() == errNoAdvance {
 				summary := "Review complete; the implement pass found nothing to commit."
-				notifyChainComplete(ctx, "Local review chain complete", summary)
+				notifyChainComplete(ctx, "Local review chain complete", summary, "")
 				return summary, nil
 			}
 			return "", err
@@ -313,7 +318,7 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (string, error) {
 	nextPass := in.Pass + 1
 	if nextPass >= MaxReviewPasses {
 		summary := fmt.Sprintf("Review stopped after %d pass(es).", MaxReviewPasses)
-		notifyChainComplete(ctx, "Local review chain complete", summary)
+		notifyChainComplete(ctx, "Local review chain complete", summary, "")
 		return summary, nil
 	}
 	return "", workflow.NewContinueAsNewError(ctx, ReviewWorkflow,
