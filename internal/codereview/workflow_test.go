@@ -411,6 +411,37 @@ func TestPilotWorkflow_Summary_SetsWebhookBodyFromLastRunSummaryOnSuccess(t *tes
 	require.Contains(t, got.Body, "PR #7")
 }
 
+func TestPilotWorkflow_Summary_CancellationDuringSummary_FailsInsteadOfCompleting(t *testing.T) {
+	env := newEnv(t)
+	pr := PullRequest{Number: 7, URL: "https://github.com/acme/widgets/pull/7"}
+	threads := []ReviewThread{{ID: "t1", Body: "fix"}}
+
+	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
+	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
+		Return(LoadCommentsResult{Threads: threads}, nil)
+	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
+		Return(Checkpoint{HeadSHA: "base"}, nil)
+	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
+	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnActivity(a.PushBranch, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.ReplyAndResolve, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.RequestCopilotReview, mock.Anything, mock.Anything).Return(nil)
+	// A workflow cancellation while the terminal summary step is running surfaces
+	// as a cancellation error on its Get. It must propagate as a workflow failure
+	// rather than being swallowed into a successful completion.
+	env.OnActivity(a.SummarizeLastRun, mock.Anything, mock.Anything).
+		Return("", temporal.NewCanceledError())
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Summary: true})
+
+	require.True(t, env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	require.Error(t, err)
+	require.True(t, temporal.IsCanceledError(err), "expected cancellation to propagate, got %v", err)
+}
+
 func TestPilotWorkflow_Summary_SetsWebhookBodyOnFailureAfterAgentRan(t *testing.T) {
 	env := newEnv(t)
 	pr := PullRequest{Number: 7}

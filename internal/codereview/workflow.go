@@ -35,10 +35,17 @@ const (
 
 // summarizeForWebhook runs the SummarizeLastRun activity when enabled and an
 // agent actually ran in this workflow run, returning the agent's summary, which
-// the caller attaches as the webhook-only notification body. It is best-effort:
-// when disabled it returns "", and any failure is logged and swallowed
-// (returning "") so the webhook simply falls back to the plain body rather than
-// the run's notification being lost.
+// the caller attaches as the webhook-only notification body. Ordinary summary
+// failures are best-effort: when disabled it returns "", and an ordinary failure
+// is logged and swallowed (returning "", nil) so the webhook simply falls back
+// to the plain body rather than the run's notification being lost.
+//
+// A workflow cancellation while this up-to-one-hour step is running surfaces
+// here as a cancellation error, and is *not* swallowed: it is returned so
+// completion callers propagate it instead of converting a user cancellation into
+// a successful terminal completion. On the failure path the summary runs on a
+// disconnected context (see notifyFailure), so it is not cancelled there and its
+// error is dropped.
 //
 // The agentRan guard matters because piagent keys the Pi session on the
 // workflow run: SummarizeLastRun only resumes real work if an agent activity
@@ -47,9 +54,9 @@ const (
 // summary would run against a fresh, empty session and fabricate a description
 // of work that never happened. Guarding on agentRan makes the webhook cleanly
 // fall back to the plain Body on those paths instead.
-func summarizeForWebhook(ctx workflow.Context, summaryEnabled, agentRan bool, workDir string, timeout time.Duration) string {
+func summarizeForWebhook(ctx workflow.Context, summaryEnabled, agentRan bool, workDir string, timeout time.Duration) (string, error) {
 	if !summaryEnabled || !agentRan {
-		return ""
+		return "", nil
 	}
 	// The summary is a long-running agent step, like the other agent activities,
 	// but runs once: a best-effort meta-step should not retry and multiply cost.
@@ -62,10 +69,18 @@ func summarizeForWebhook(ctx workflow.Context, summaryEnabled, agentRan bool, wo
 	var a *Activities
 	var summary string
 	if err := workflow.ExecuteActivity(opts, a.SummarizeLastRun, SummarizeRequest{WorkDir: workDir}).Get(opts, &summary); err != nil {
+		// A workflow cancellation while this long-running step is pending surfaces as
+		// a cancellation error; propagate it so completion callers fail rather than
+		// treating a cancelled run as a successful completion. Ordinary summary
+		// failures stay best-effort: log and drop so the webhook falls back to the
+		// plain body.
+		if temporal.IsCanceledError(err) {
+			return "", err
+		}
 		workflow.GetLogger(ctx).Warn("could not summarize last Pi execution for webhook", "error", err)
-		return ""
+		return "", nil
 	}
-	return summary
+	return summary, nil
 }
 
 // notifyComplete delivers a completion notification best-effort, attaching the
@@ -78,13 +93,22 @@ func summarizeForWebhook(ctx workflow.Context, summaryEnabled, agentRan bool, wo
 // addressed pass's summary (see PilotInput.ChainSummary). carriedSummary is
 // only ever non-empty when the summary is enabled, so it is safe to fall back
 // to unconditionally.
-func notifyComplete(ctx workflow.Context, summaryEnabled, agentRan bool, workDir string, n notification.Notification, carriedSummary string) {
-	body := summarizeForWebhook(ctx, summaryEnabled, agentRan, workDir, completeSummaryTimeout)
+//
+// It returns an error only when the summary step is cancelled (a workflow
+// cancellation), which the caller must propagate so a cancellation during the
+// terminal summary is not reported as a successful completion. The notification
+// itself remains best-effort.
+func notifyComplete(ctx workflow.Context, summaryEnabled, agentRan bool, workDir string, n notification.Notification, carriedSummary string) error {
+	body, err := summarizeForWebhook(ctx, summaryEnabled, agentRan, workDir, completeSummaryTimeout)
+	if err != nil {
+		return err
+	}
 	if body == "" {
 		body = carriedSummary
 	}
 	n.WebhookBody = body
 	wfnotify.NotifyBestEffort(ctx, n)
+	return nil
 }
 
 // notifyFailure delivers a best-effort failure notification via
@@ -98,7 +122,11 @@ func notifyComplete(ctx workflow.Context, summaryEnabled, agentRan bool, workDir
 func notifyFailure(ctx workflow.Context, title, workDir string, summaryEnabled, agentRan bool, err error) {
 	wfnotify.NotifyFailureBestEffortWith(ctx, title, err,
 		func(dctx workflow.Context, n notification.Notification) notification.Notification {
-			n.WebhookBody = summarizeForWebhook(dctx, summaryEnabled, agentRan, workDir, failureSummaryTimeout)
+			// The summary runs on the disconnected context, so a cancelled workflow does
+			// not cancel it; on this best-effort failure path any summary error is
+			// dropped and the webhook falls back to the plain body.
+			body, _ := summarizeForWebhook(dctx, summaryEnabled, agentRan, workDir, failureSummaryTimeout)
+			n.WebhookBody = body
 			return n
 		})
 }
@@ -141,11 +169,15 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 		// the last addressed pass's summary survives to the terminal notification;
 		// with --chain --summary this means one (billable) summary run per addressed
 		// pass, all but the last discarded — the cost of the opt-in flag combination.
-		next.ChainSummary = summarizeForWebhook(ctx, in.Summary, agentRan, in.WorkDir, completeSummaryTimeout)
+		if next.ChainSummary, err = summarizeForWebhook(ctx, in.Summary, agentRan, in.WorkDir, completeSummaryTimeout); err != nil {
+			return "", err
+		}
 		return "", workflow.NewContinueAsNewError(ctx, PilotWorkflow, next)
 	}
 	summary = withTokenTotal(summary, total)
-	notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Copilot review chain complete", Body: summary, URL: prURL}, in.ChainSummary)
+	if err = notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Copilot review chain complete", Body: summary, URL: prURL}, in.ChainSummary); err != nil {
+		return "", err
+	}
 	return summary, nil
 }
 
@@ -320,7 +352,10 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	// this summary's Pi process concurrently with the review child's first pass
 	// over the same working tree. Summarizing first keeps the develop summary
 	// running against a quiescent tree, with no overlap against the child.
-	webhookBody := summarizeForWebhook(ctx, in.Summary, agentRan, in.WorkDir, completeSummaryTimeout)
+	webhookBody, err := summarizeForWebhook(ctx, in.Summary, agentRan, in.WorkDir, completeSummaryTimeout)
+	if err != nil {
+		return "", err
+	}
 
 	// Trigger the review loop as an abandoned child so it outlives this workflow.
 	reviewID := "review-" + workflow.GetInfo(ctx).WorkflowExecution.ID
@@ -437,7 +472,9 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 				summary := withTokenTotal("Review complete; the implement pass found nothing to commit.", total)
 				// No carried summary here: this terminal pass ran the implement agent, so
 				// agentRan is true and summarizeForWebhook summarizes this run directly.
-				notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary}, "")
+				if err := notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary}, ""); err != nil {
+					return "", err
+				}
 				return summary, nil
 			}
 			return "", err
@@ -472,7 +509,9 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 		summary := withTokenTotal(fmt.Sprintf("Review stopped after %d pass(es).", MaxReviewPasses), total)
 		// No carried summary here: this terminal pass ran the review agent, so
 		// agentRan is true and summarizeForWebhook summarizes this run directly.
-		notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary}, "")
+		if err := notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary}, ""); err != nil {
+			return "", err
+		}
 		return summary, nil
 	}
 	return "", workflow.NewContinueAsNewError(ctx, ReviewWorkflow,
