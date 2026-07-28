@@ -11,18 +11,17 @@ import (
 // fatalf (os.Exit) and are intentionally not exercised here.
 
 func TestParsePilotFlags_Summary(t *testing.T) {
-	mode, text, chain, summary := parsePilotFlags([]string{"--summary"})
-	if mode != codereview.PromptDefault || text != "" || chain {
-		t.Fatalf("unexpected mode/text/chain: %q %q %v", mode, text, chain)
+	mode, text, summary := parsePilotFlags([]string{"--summary"})
+	if mode != codereview.PromptDefault || text != "" {
+		t.Fatalf("unexpected mode/text: %q %q", mode, text)
 	}
 	if !summary {
 		t.Fatal("--summary should set summary = true")
 	}
 
-	// Absent by default, and independent of the other flags.
-	_, _, chain, summary = parsePilotFlags([]string{"--chain"})
-	if !chain || summary {
-		t.Fatalf("chain=%v summary=%v, want chain=true summary=false", chain, summary)
+	// Summary defaults to false.
+	if _, _, summary = parsePilotFlags(nil); summary {
+		t.Fatal("summary should default to false")
 	}
 }
 
@@ -36,15 +35,34 @@ func TestParseReviewFlags_Summary(t *testing.T) {
 }
 
 func TestParseDevelopFlags_Summary(t *testing.T) {
-	prompt, branch, summary := parseDevelopFlags([]string{"do the thing", "--branch", "feat/x", "--summary"})
+	prompt, branch, summary, withRemote := parseDevelopFlags([]string{"do the thing", "--branch", "feat/x", "--summary"})
 	if prompt != "do the thing" || branch != "feat/x" {
 		t.Fatalf("prompt=%q branch=%q, unexpected", prompt, branch)
 	}
 	if !summary {
 		t.Fatal("--summary should set summary = true")
 	}
+	if withRemote {
+		t.Fatal("with-remote should default to false")
+	}
 
-	_, _, summary = parseDevelopFlags([]string{"do the thing", "--branch=feat/x"})
+	_, _, summary, withRemote = parseDevelopFlags([]string{"do the thing", "--branch=feat/x"})
+	if summary {
+		t.Fatal("summary should default to false")
+	}
+	if withRemote {
+		t.Fatal("with-remote should default to false")
+	}
+}
+
+func TestParseDevelopFlags_WithRemote(t *testing.T) {
+	prompt, branch, summary, withRemote := parseDevelopFlags([]string{"do the thing", "--branch", "feat/x", "--with-remote"})
+	if prompt != "do the thing" || branch != "feat/x" {
+		t.Fatalf("prompt=%q branch=%q, unexpected", prompt, branch)
+	}
+	if !withRemote {
+		t.Fatal("--with-remote should set withRemote = true")
+	}
 	if summary {
 		t.Fatal("summary should default to false")
 	}

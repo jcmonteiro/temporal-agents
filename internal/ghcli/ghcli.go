@@ -43,6 +43,20 @@ func (h GitHub) FindOpen(ctx context.Context, dir, branch string) (codereview.Pu
 	return selectOpenPR(prs, branch)
 }
 
+// EnsureOpen returns the open PR whose head is branch, creating it when none
+// exists yet. It first tries to locate an existing open PR (returning it
+// unchanged so the operation is idempotent); only when none is found does it
+// create one with `gh pr create --fill`, then locates the freshly opened PR.
+func (h GitHub) EnsureOpen(ctx context.Context, dir, branch string) (codereview.PullRequest, error) {
+	if pr, err := h.FindOpen(ctx, dir, branch); err == nil {
+		return pr, nil
+	}
+	if _, err := runDir(ctx, dir, "pr", "create", "--head", branch, "--fill"); err != nil {
+		return codereview.PullRequest{}, err
+	}
+	return h.FindOpen(ctx, dir, branch)
+}
+
 // baseRepo returns the owner and name of the repository in dir.
 func (h GitHub) baseRepo(ctx context.Context, dir string) (owner, repo string, err error) {
 	out, err := runDir(ctx, dir, "repo", "view", "--json", "owner,name")

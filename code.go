@@ -28,8 +28,8 @@ func codeCmd(args []string) {
 			pilotHelp(os.Stdout)
 			return
 		}
-		mode, text, chain, summary := parsePilotFlags(args[1:])
-		startPilot(mode, text, chain, summary)
+		mode, text, summary := parsePilotFlags(args[1:])
+		startPilot(mode, text, summary)
 	case "review":
 		if wantsHelp(args[1:]) {
 			reviewHelp(os.Stdout)
@@ -41,8 +41,8 @@ func codeCmd(args []string) {
 			developHelp(os.Stdout)
 			return
 		}
-		prompt, branch, summary := parseDevelopFlags(args[1:])
-		startDevelop(prompt, branch, summary)
+		prompt, branch, summary, withRemote := parseDevelopFlags(args[1:])
+		startDevelop(prompt, branch, summary, withRemote)
 	default:
 		fatalf("unknown code subcommand %q (try: pilot, review, develop)", args[0])
 	}
@@ -91,8 +91,8 @@ func startReview(summary bool) {
 
 // parseDevelopFlags reads the develop command's arguments: a required prompt
 // (positional), a required branch name (--branch <name> or --branch=<name>),
-// and the optional --summary flag.
-func parseDevelopFlags(args []string) (prompt, branch string, summary bool) {
+// and the optional --summary and --with-remote flags.
+func parseDevelopFlags(args []string) (prompt, branch string, summary, withRemote bool) {
 	setPrompt := func(v string) {
 		if prompt != "" {
 			fatalf("unexpected argument %q", v)
@@ -104,6 +104,8 @@ func parseDevelopFlags(args []string) (prompt, branch string, summary bool) {
 		switch {
 		case a == "--summary":
 			summary = true
+		case a == "--with-remote":
+			withRemote = true
 		case a == "--branch":
 			if i+1 >= len(args) {
 				fatalf("--branch requires a branch name")
@@ -122,11 +124,11 @@ func parseDevelopFlags(args []string) (prompt, branch string, summary bool) {
 	if strings.TrimSpace(branch) == "" {
 		fatalf("develop requires a branch name (--branch <name>)")
 	}
-	return prompt, branch, summary
+	return prompt, branch, summary, withRemote
 }
 
 // startDevelop launches the DevelopWorkflow for the current repository.
-func startDevelop(prompt, branch string, summary bool) {
+func startDevelop(prompt, branch string, summary, withRemote bool) {
 	c := dial()
 	defer c.Close()
 
@@ -135,10 +137,11 @@ func startDevelop(prompt, branch string, summary bool) {
 		ID:        id,
 		TaskQueue: TaskQueue,
 	}, codereview.DevelopWorkflow, codereview.DevelopInput{
-		WorkDir: cwd(),
-		Branch:  branch,
-		Prompt:  prompt,
-		Summary: summary,
+		WorkDir:    cwd(),
+		Branch:     branch,
+		Prompt:     prompt,
+		Summary:    summary,
+		WithRemote: withRemote,
 	})
 	if err != nil {
 		fatalf("Could not start workflow: %v", err)
@@ -152,13 +155,16 @@ func startDevelop(prompt, branch string, summary bool) {
 	if summary {
 		fmt.Printf("  summary: on (webhook message summarizes the last Pi run)\n")
 	}
+	if withRemote {
+		fmt.Printf("  remote:  on (after review, open the PR + Copilot, then run the pilot loop)\n")
+	}
 	fmt.Printf("  watch:   temporal-agents watch %s\n", we.GetID())
 }
 
 // parsePilotFlags reads the optional, mutually exclusive --append/--replace
 // flags (each in "--flag value" or "--flag=value" form) and returns the prompt
-// mode plus its text, along with the --chain and --summary toggles.
-func parsePilotFlags(args []string) (mode codereview.PromptMode, text string, chain, summary bool) {
+// mode plus its text, along with the --summary toggle.
+func parsePilotFlags(args []string) (mode codereview.PromptMode, text string, summary bool) {
 	set := func(m codereview.PromptMode, v string) {
 		if mode != codereview.PromptDefault {
 			fatalf("--append and --replace are mutually exclusive")
@@ -172,8 +178,6 @@ func parsePilotFlags(args []string) (mode codereview.PromptMode, text string, ch
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "--chain":
-			chain = true
 		case a == "--summary":
 			summary = true
 		case a == "--append", a == "--replace":
@@ -190,11 +194,13 @@ func parsePilotFlags(args []string) (mode codereview.PromptMode, text string, ch
 			fatalf("unexpected argument %q", a)
 		}
 	}
-	return mode, text, chain, summary
+	return mode, text, summary
 }
 
-// startPilot launches the PilotWorkflow for the current repository.
-func startPilot(mode codereview.PromptMode, text string, chain, summary bool) {
+// startPilot launches the PilotWorkflow for the current repository. The pilot
+// loop always chains: after a pass that addresses comments it continues as new,
+// looping until a pass finds no unresolved comments left.
+func startPilot(mode codereview.PromptMode, text string, summary bool) {
 	c := dial()
 	defer c.Close()
 
@@ -206,7 +212,7 @@ func startPilot(mode codereview.PromptMode, text string, chain, summary bool) {
 		WorkDir:    cwd(),
 		PromptMode: mode,
 		PromptText: text,
-		Chain:      chain,
+		Chain:      true,
 		Summary:    summary,
 	})
 	if err != nil {
@@ -219,9 +225,7 @@ func startPilot(mode codereview.PromptMode, text string, chain, summary bool) {
 	if mode != codereview.PromptDefault {
 		fmt.Printf("  prompt:  %s (%s)\n", mode, truncate(text, 50))
 	}
-	if chain {
-		fmt.Printf("  chain:   on (spawns a delayed child run after each success)\n")
-	}
+	fmt.Printf("  chain:   on (loops until no unresolved comments remain)\n")
 	if summary {
 		fmt.Printf("  summary: on (webhook message summarizes the last Pi run)\n")
 	}
@@ -262,17 +266,29 @@ Runs a workflow that develops a change end to end on the current machine:
   - Triggers the local review loop (the same one as "code review") on the new
     branch, which keeps running after this command returns.
 
+With --with-remote it goes further, and the workflow instead stays alive to
+oversee the whole pipeline end to end. After development it supervises, in
+order and waiting for each to finish: the local review loop, then a workflow
+that opens the pull request and requests a Copilot review (succeeding if the PR
+or the Copilot request already exists), then the pilot loop (the same one as
+"code pilot", which loops until Copilot has no unresolved comments left).
+
 USAGE
-  temporal-agents code develop "<prompt>" --branch <name> [--summary]
+  temporal-agents code develop "<prompt>" --branch <name> [--summary] [--with-remote]
 
 FLAGS
   --branch <name>   Name of the new branch to create and develop on (required)
   --summary         Before returning (on success or failure), summarize the last
                     Pi execution and send it as the webhook message (only the
                     webhook). Also propagated to the review loop this starts.
+  --with-remote     After development and review, open the PR and request a
+                    Copilot review, then run the pilot loop—this workflow
+                    supervises each stage and stays alive until the pilot loop
+                    finishes.
 
 EXAMPLES
   temporal-agents code develop "add a rate limiter to the API client" --branch feat/rate-limit
+  temporal-agents code develop "add a rate limiter" --branch feat/rate-limit --with-remote
   temporal-agents watch <workflow-id>
 `)
 }
@@ -317,14 +333,16 @@ successfully without changing anything.
 
 The agent works from a built-in default prompt. Use the flags to adjust it:
 
+The loop always chains: after a pass that addresses comments it continues,
+folding in the fresh Copilot review, until a pass finds no unresolved comments
+left.
+
 USAGE
-  temporal-agents code pilot [--append <prompt> | --replace <prompt>] [--chain] [--summary]
+  temporal-agents code pilot [--append <prompt> | --replace <prompt>] [--summary]
 
 FLAGS
   --append <prompt>   Append extra instructions to the default prompt
   --replace <prompt>  Replace the default prompt entirely
-  --chain             After a successful pass, spawn a child run that starts
-                      3 minutes later, looping to fold in new feedback
   --summary           Before returning (on success or failure), summarize the
                       last Pi execution and send it as the webhook message (only
                       the webhook)
@@ -336,7 +354,6 @@ EXAMPLES
   temporal-agents code pilot
   temporal-agents code pilot --append "prefer table-driven tests"
   temporal-agents code pilot --replace "only fix the comments about naming"
-  temporal-agents code pilot --chain
   temporal-agents code pilot --summary
 `)
 }

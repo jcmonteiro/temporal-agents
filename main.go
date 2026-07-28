@@ -434,6 +434,7 @@ func runWorker(opts notifyOptions) {
 	w.RegisterWorkflow(codereview.PilotWorkflow)
 	w.RegisterWorkflow(codereview.ReviewWorkflow)
 	w.RegisterWorkflow(codereview.DevelopWorkflow)
+	w.RegisterWorkflow(codereview.OpenPRWorkflow)
 	w.RegisterActivity(&codereview.Activities{
 		Git:   gitcli.New(),
 		PRs:   ghcli.New(),

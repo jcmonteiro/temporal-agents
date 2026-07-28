@@ -193,6 +193,26 @@ func (a *Activities) EnsureDeveloped(ctx context.Context, req EnsureDevelopedReq
 	return commits, nil
 }
 
+// OpenPR publishes the current branch and ensures an open PR exists for it,
+// returning that PR. It pushes HEAD to the branch (so the PR has commits to
+// open against), then opens the PR when none exists yet. It is idempotent: an
+// already-open PR is returned unchanged rather than opening a duplicate, so a
+// retry or a re-run over an already-published branch succeeds.
+func (a *Activities) OpenPR(ctx context.Context, in OpenPRInput) (PullRequest, error) {
+	branch, err := a.Git.CurrentBranch(ctx, in.WorkDir)
+	if err != nil {
+		return PullRequest{}, fmt.Errorf("determine current branch: %w", err)
+	}
+	if err := a.Git.Push(ctx, in.WorkDir, branch); err != nil {
+		return PullRequest{}, fmt.Errorf("push branch %s: %w", branch, err)
+	}
+	pr, err := a.PRs.EnsureOpen(ctx, in.WorkDir, branch)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	return pr, nil
+}
+
 // DeterminePR finds the current branch and its single open PR, failing when
 // there is no open PR or more than one.
 func (a *Activities) DeterminePR(ctx context.Context, in PilotInput) (PullRequest, error) {

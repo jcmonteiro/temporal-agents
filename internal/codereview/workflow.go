@@ -240,6 +240,41 @@ func runPilotOnce(ctx workflow.Context, in PilotInput, agentRan *bool) (string, 
 		len(loaded.Threads), pr.Number, len(commits)), true, agentResult.Tokens, pr.URL, nil
 }
 
+// OpenPRWorkflow publishes the current branch, ensures an open pull request
+// exists for it, and requests a fresh Copilot review. Both steps are
+// idempotent, so re-running over an already-published branch or an already-open
+// PR simply succeeds. It is used as a supervised stage of the
+// `develop --with-remote` pipeline but is a standalone workflow in its own
+// right.
+func OpenPRWorkflow(ctx workflow.Context, in OpenPRInput) (result string, err error) {
+	// No agent runs here, so there is never a Pi session to summarize; pass
+	// summaryEnabled/agentRan false so the notification simply carries the plain
+	// body.
+	defer func() { notifyFailure(ctx, "Opening the pull request failed", in.WorkDir, false, false, err) }()
+
+	// Quick, deterministic git/GitHub steps. Idempotent enough to retry, but
+	// should not run forever.
+	quick := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 2 * time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
+	})
+
+	var a *Activities
+
+	var pr PullRequest
+	if err := workflow.ExecuteActivity(quick, a.OpenPR, in).Get(quick, &pr); err != nil {
+		return "", err
+	}
+	if err := workflow.ExecuteActivity(quick, a.RequestCopilotReview, pr).Get(quick, nil); err != nil {
+		return "", err
+	}
+
+	summary := fmt.Sprintf("Opened PR #%d and requested a Copilot review.", pr.Number)
+	notifyComplete(ctx, false, false, in.WorkDir, notification.Notification{
+		Title: "Pull request opened", Body: summary, URL: pr.URL})
+	return summary, nil
+}
+
 // DevelopWorkflow drives the "code develop" flow. In sequence it:
 //
 //   - Creates the requested branch off a clean working tree (CreateBranch fails
@@ -247,12 +282,21 @@ func runPilotOnce(ctx workflow.Context, in PilotInput, agentRan *bool) (string, 
 //   - Has the Pi agent implement the caller's prompt on that branch.
 //   - Confirms the agent advanced HEAD and left a clean working tree
 //     (EnsureDeveloped fails when nothing was committed or changes remain).
-//   - Triggers the local review loop (ReviewWorkflow) on the new branch as an
-//     abandoned child, so it keeps running—and notifies on completion—after
-//     this workflow returns, exactly like a standalone "code review" run.
 //
-// It returns once the review has been started, reporting the review workflow's
-// ID so the caller can watch it.
+// What happens next depends on in.WithRemote:
+//
+//   - When false (the default), it triggers the local review loop
+//     (ReviewWorkflow) on the new branch as an abandoned child, so it keeps
+//     running—and notifies on completion—after this workflow returns, exactly
+//     like a standalone "code review" run. It returns once the review has been
+//     started, reporting the review workflow's ID so the caller can watch it.
+//   - When true, it instead supervises the full remote pipeline as a sequence
+//     of waited-on children: the review loop, then OpenPRWorkflow (open the PR
+//     and request Copilot), then the pilot loop. Each child still continues as
+//     new internally, but a parent's child future resolves only when the whole
+//     continue-as-new chain converges, so this workflow stays alive and
+//     oversees the pipeline end to end, returning only once the pilot loop has
+//     finished folding in Copilot feedback.
 func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err error) {
 	// Notify best-effort when development fails before the review loop is started.
 	// agentRan gates summarizing the last run: a failure before the develop agent
@@ -304,6 +348,10 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	// running against a quiescent tree, with no overlap against the child.
 	webhookBody := summarizeForWebhook(ctx, in.Summary, agentRan, in.WorkDir, completeSummaryTimeout)
 
+	if in.WithRemote {
+		return developWithRemote(ctx, in, commits, agentResult.Tokens, webhookBody)
+	}
+
 	// Trigger the review loop as an abandoned child so it outlives this workflow.
 	reviewID := "review-" + workflow.GetInfo(ctx).WorkflowExecution.ID
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
@@ -331,6 +379,60 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	wfnotify.NotifyBestEffort(ctx, notification.Notification{
 		Title: "Development complete",
 		Body: fmt.Sprintf("Developed branch %s with %d commit(s) successfully. The review cycle will now commence.",
+			in.Branch, len(commits)),
+		WebhookBody: webhookBody,
+	})
+	return summary, nil
+}
+
+// developWithRemote runs the `develop --with-remote` tail: after development has
+// landed its commits, it supervises the remote pipeline as a sequence of
+// waited-on children—the local review loop, then OpenPRWorkflow (open the PR
+// and request Copilot), then the pilot loop—returning only once the pilot loop
+// has finished. Each child continues as new internally; a parent's child future
+// resolves only when the whole continue-as-new chain converges, so waiting on
+// each in turn keeps this workflow alive and overseeing the pipeline end to end
+// rather than continuing as new itself.
+//
+// The children are supervised (not abandoned) so this workflow stays their
+// parent for the pipeline's lifetime. Each still emits its own completion
+// notification; this workflow adds a final "Development complete" once the whole
+// pipeline has converged.
+func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, tokens int, webhookBody string) (string, error) {
+	id := workflow.GetInfo(ctx).WorkflowExecution.ID
+
+	// The local review loop. Seed it with this develop session's token usage so
+	// its own result reports the whole tree's usage, and propagate --summary so it
+	// summarizes its own run for its completion webhook (see the abandoned-child
+	// path above for the cost note).
+	reviewCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "review-" + id})
+	if err := workflow.ExecuteChildWorkflow(reviewCtx, ReviewWorkflow,
+		ReviewInput{WorkDir: in.WorkDir, TokensSoFar: tokens, Summary: in.Summary}).Get(ctx, nil); err != nil {
+		return "", fmt.Errorf("review workflow: %w", err)
+	}
+
+	// Open the PR and request a Copilot review.
+	openCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "open-pr-" + id})
+	if err := workflow.ExecuteChildWorkflow(openCtx, OpenPRWorkflow,
+		OpenPRInput{WorkDir: in.WorkDir}).Get(ctx, nil); err != nil {
+		return "", fmt.Errorf("open PR workflow: %w", err)
+	}
+
+	// The pilot loop. It always chains (Chain: true), so waiting on it here blocks
+	// until a pass finds no unresolved comments left to address and the loop
+	// converges.
+	pilotCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "pilot-" + id})
+	if err := workflow.ExecuteChildWorkflow(pilotCtx, PilotWorkflow,
+		PilotInput{WorkDir: in.WorkDir, Chain: true, Summary: in.Summary}).Get(ctx, nil); err != nil {
+		return "", fmt.Errorf("pilot workflow: %w", err)
+	}
+
+	summary := withTokenTotal(fmt.Sprintf(
+		"Developed branch %s with %d commit(s); ran the review loop, opened the PR, and completed the Copilot pilot loop.",
+		in.Branch, len(commits)), tokens)
+	wfnotify.NotifyBestEffort(ctx, notification.Notification{
+		Title: "Development complete",
+		Body: fmt.Sprintf("Developed branch %s with %d commit(s); the review, pull request, and Copilot pilot stages have all completed.",
 			in.Branch, len(commits)),
 		WebhookBody: webhookBody,
 	})

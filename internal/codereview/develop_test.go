@@ -22,6 +22,8 @@ func newDevelopEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 	env.RegisterActivity(&notification.Activity{})
 	env.RegisterWorkflow(DevelopWorkflow)
 	env.RegisterWorkflow(ReviewWorkflow)
+	env.RegisterWorkflow(OpenPRWorkflow)
+	env.RegisterWorkflow(PilotWorkflow)
 	return env
 }
 
@@ -172,6 +174,82 @@ func TestDevelopWorkflow_Failure_SendsFailureNotification(t *testing.T) {
 	require.Error(t, env.GetWorkflowError())
 	// A failed development notifies best-effort that it failed.
 	require.Equal(t, "Development failed", got.Title)
+}
+
+func TestDevelopWorkflow_WithRemote_OrchestratesReviewOpenPRAndPilot(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return("base", nil)
+	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
+	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	// The full remote pipeline runs as supervised children this workflow waits on.
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
+	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).Return("opened", nil)
+	// The pilot loop is triggered with chaining enabled so it loops until Copilot
+	// has nothing left; here it is mocked to return once.
+	env.OnWorkflow(PilotWorkflow, mock.Anything, mock.MatchedBy(func(in PilotInput) bool {
+		return in.Chain
+	})).Return("piloted", nil)
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing", WithRemote: true})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	var out string
+	require.NoError(t, env.GetWorkflowResult(&out))
+	// The result reflects the whole pipeline having completed, not just review.
+	require.Contains(t, out, "opened the PR")
+	require.Contains(t, out, "pilot")
+	env.AssertExpectations(t)
+}
+
+func TestDevelopWorkflow_WithRemote_SeedsReviewTokensAndPropagatesSummary(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return("base", nil)
+	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).
+		Return(AgentResult{Output: "done", Tokens: 4200}, nil)
+	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnActivity(a.SummarizeLastRun, mock.Anything, mock.Anything).Return("develop summary for webhook", nil)
+	// The review loop is still seeded with the develop session's usage and gets
+	// --summary propagated, exactly like the non-remote path.
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.MatchedBy(func(in ReviewInput) bool {
+		return in.TokensSoFar == 4200 && in.Summary
+	})).Return("reviewed", nil)
+	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).Return("opened", nil)
+	env.OnWorkflow(PilotWorkflow, mock.Anything, mock.Anything).Return("piloted", nil)
+	var got notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { got = args.Get(1).(notification.Notification) }).Return(nil)
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing", Summary: true, WithRemote: true})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	var out string
+	require.NoError(t, env.GetWorkflowResult(&out))
+	require.Contains(t, out, "Total token usage across all sessions: 4,200 tokens.")
+	// The develop session's summary is delivered to the webhook only.
+	require.Equal(t, "develop summary for webhook", got.WebhookBody)
+	env.AssertExpectations(t)
+}
+
+func TestDevelopWorkflow_WithRemote_OpenPRFailure_StopsBeforePilot(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return("base", nil)
+	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
+	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
+	// Opening the PR fails, so the pilot loop must never start.
+	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).
+		Return("", temporal.NewNonRetryableApplicationError("no commits to open a PR", "OpenPR", nil))
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing", WithRemote: true})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	env.AssertNotCalled(t, "PilotWorkflow", mock.Anything, mock.Anything)
 }
 
 func TestDevelopWorkflow_NoCommits_FailsWithoutTriggeringReview(t *testing.T) {
