@@ -111,7 +111,8 @@ func TestDevelopWorkflow_DirtyWorktree_FailsBeforeRunningAgent(t *testing.T) {
 func TestDevelopWorkflow_Failure_SendsFailureNotification(t *testing.T) {
 	env := newDevelopEnv(t)
 
-	// CreateBranch refuses to proceed on a dirty working tree.
+	// Simulate CreateBranch failing; the specific cause is immaterial here — this
+	// test only asserts that a failure produces a notification.
 	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
 		Return("", temporal.NewNonRetryableApplicationError("dirty", errDirtyWorktree, nil))
 	var got notification.Notification
