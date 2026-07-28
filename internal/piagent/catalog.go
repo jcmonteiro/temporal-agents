@@ -1,11 +1,13 @@
 package piagent
 
 import (
+	"context"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // The pi model catalog (`pi --list-models`) is stable for the lifetime of a
@@ -43,11 +45,21 @@ func warmContextWindows() {
 	})
 }
 
+// catalogTimeout bounds the pi model catalog subprocess. Because
+// contextWindowFor waits on the same sync.Once, a hung lookup would otherwise
+// block JSON-stream processing and heartbeats; the timeout keeps percentage
+// enrichment best-effort so a stuck catalog cannot stall a healthy activity.
+const catalogTimeout = 10 * time.Second
+
 // loadContextWindows runs the pi model catalog and parses each row into a
 // provider/model -> context-window map. --offline avoids network calls; the
-// locally cached catalog is sufficient for context-window sizes.
+// locally cached catalog is sufficient for context-window sizes. The lookup is
+// bounded by catalogTimeout and returns nil on timeout or error, degrading
+// gracefully to absolute-only token reporting.
 func loadContextWindows() map[string]int {
-	out, err := exec.Command("pi", "--offline", "--list-models").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), catalogTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "pi", "--offline", "--list-models").Output()
 	if err != nil {
 		return nil
 	}
