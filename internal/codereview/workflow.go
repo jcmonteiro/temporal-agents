@@ -61,26 +61,20 @@ func notifyComplete(ctx workflow.Context, summary, agentRan bool, workDir string
 	wfnotify.NotifyBestEffort(ctx, n)
 }
 
-// notifyFailure mirrors wfnotify.NotifyFailureBestEffort but, when summary is
-// enabled, first summarizes the last Pi execution and attaches it as the
-// webhook-only body. Like that helper it is a no-op on success and on
-// continue-as-new (a control signal, not a failure), and it delivers on a
-// disconnected context so a cancellation-caused failure still notifies. The
-// summary is attached only when an agent ran in this run (see
-// summarizeForWebhook for why agentRan is required).
+// notifyFailure delivers a best-effort failure notification via
+// wfnotify.NotifyFailureBestEffortWith, reusing that helper's shared failure
+// policy (no-op on success and on continue-as-new; delivery on a disconnected
+// context so a cancellation-caused failure still notifies). When summary is
+// enabled it enriches the notification with the last Pi execution's summary as
+// the webhook-only body, run on the same disconnected context so it survives a
+// cancelled workflow. The summary is attached only when an agent ran in this
+// run (see summarizeForWebhook for why agentRan is required).
 func notifyFailure(ctx workflow.Context, title, workDir string, summary, agentRan bool, err error) {
-	if err == nil {
-		return
-	}
-	var canErr *workflow.ContinueAsNewError
-	if errors.As(err, &canErr) {
-		return
-	}
-	dctx, cancel := workflow.NewDisconnectedContext(ctx)
-	defer cancel()
-	n := notification.Notification{Title: title, Body: err.Error()}
-	n.WebhookBody = summarizeForWebhook(dctx, summary, agentRan, workDir)
-	wfnotify.NotifyBestEffort(dctx, n)
+	wfnotify.NotifyFailureBestEffortWith(ctx, title, err,
+		func(dctx workflow.Context, n notification.Notification) notification.Notification {
+			n.WebhookBody = summarizeForWebhook(dctx, summary, agentRan, workDir)
+			return n
+		})
 }
 
 // PilotWorkflow drives the "code pilot" loop: it finds the open PR for the
