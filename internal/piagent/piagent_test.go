@@ -1,6 +1,7 @@
 package piagent
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -136,6 +137,56 @@ func TestPiArgs_RunsNonInteractiveJSONForSession(t *testing.T) {
 	args := piArgs("session-123")
 	if want := []string{"-p", "--mode", "json", "--session-id", "session-123"}; strings.Join(args, " ") != strings.Join(want, " ") {
 		t.Fatalf("piArgs = %v, want %v", args, want)
+	}
+}
+
+func TestRunLoop_ResumesUntilRunEndsWithoutThresholdCompaction(t *testing.T) {
+	var inputs []string
+	// First run ends on a threshold compaction (unfinished); second run finishes.
+	results := []struct {
+		result    string
+		compacted bool
+	}{
+		{result: "partial", compacted: true},
+		{result: "done", compacted: false},
+	}
+	i := 0
+	run := func(_ context.Context, _ []string, _, input string) (string, bool, error) {
+		inputs = append(inputs, input)
+		r := results[i]
+		i++
+		return r.result, r.compacted, nil
+	}
+
+	got, err := runLoop(context.Background(), run, nil, "", "do the task")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "done" {
+		t.Fatalf("expected the final non-empty result, got %q", got)
+	}
+	if len(inputs) != 2 || inputs[0] != "do the task" || inputs[1] != continueMessage {
+		t.Fatalf("expected original prompt then a continue message, got %v", inputs)
+	}
+}
+
+func TestRunLoop_FailsWhenResumeCapExhaustedWhileStillCompacting(t *testing.T) {
+	// Every run ends on a threshold compaction, so the task never finishes.
+	var lastInput string
+	run := func(_ context.Context, _ []string, _, input string) (string, bool, error) {
+		lastInput = input
+		return "partial", true, nil
+	}
+
+	got, err := runLoop(context.Background(), run, nil, "", "do the task")
+	if err == nil {
+		t.Fatalf("expected an error when the resume cap is exhausted mid-task, got result %q", got)
+	}
+	if got != "" {
+		t.Fatalf("expected no partial result on cap exhaustion, got %q", got)
+	}
+	if lastInput != continueMessage {
+		t.Fatalf("expected resumes to use the continue message, last input was %q", lastInput)
 	}
 }
 

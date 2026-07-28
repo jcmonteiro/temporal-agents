@@ -299,8 +299,15 @@ func runLoop(ctx context.Context, run runOnceFunc, args []string, workDir, promp
 		// working with the freshly compacted context. Resuming reuses the same
 		// session id, which loads the compacted history; the continue message is
 		// appended as the next turn. Bounded by maxResumes.
-		if !thresholdCompacted || i >= maxResumes {
+		if !thresholdCompacted {
 			break
+		}
+		// The run ended mid-task on a threshold compaction. If the resume cap is
+		// exhausted, the task is known to be unfinished: fail rather than return
+		// partial output as success, so Temporal does not mark the activity
+		// complete and let downstream workflows proceed with a truncated result.
+		if i >= maxResumes {
+			return "", fmt.Errorf("pi resume cap (%d) exhausted while the run still ended in a threshold compaction; task unfinished", maxResumes)
 		}
 		input = continueMessage
 	}
