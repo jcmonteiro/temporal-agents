@@ -275,6 +275,64 @@ func TestPilotWorkflow_Chain_CarriesTokenUsageForward(t *testing.T) {
 	require.Equal(t, 1000, next.TokensSoFar)
 }
 
+func TestPilotWorkflow_ChainSummary_CarriesSummaryForwardOnAddressingPass(t *testing.T) {
+	env := newEnv(t)
+	pr := PullRequest{Number: 7}
+	threads := []ReviewThread{{ID: "t1", Body: "fix"}}
+
+	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
+	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
+		Return(LoadCommentsResult{Threads: threads}, nil)
+	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
+		Return(Checkpoint{HeadSHA: "base"}, nil)
+	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
+	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnActivity(a.PushBranch, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.ReplyAndResolve, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.RequestCopilotReview, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.SummarizeLastRun, mock.Anything, mock.Anything).Return("addressed-pass summary", nil)
+
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Chain: true, Summary: true})
+
+	require.True(t, env.IsWorkflowCompleted())
+	var canErr *workflow.ContinueAsNewError
+	require.ErrorAs(t, env.GetWorkflowError(), &canErr)
+	// With --chain --summary, an addressing pass summarizes its own (live) Pi
+	// session and carries the text forward so the later no-comments pass, which
+	// runs no agent under a fresh RunID, can still attach it.
+	var next PilotInput
+	require.NoError(t, converter.GetDefaultDataConverter().FromPayloads(canErr.Input, &next))
+	require.Equal(t, "addressed-pass summary", next.ChainSummary)
+}
+
+func TestPilotWorkflow_ChainSummary_TerminalPassUsesCarriedSummary(t *testing.T) {
+	env := newEnv(t)
+	pr := PullRequest{Number: 7, URL: "https://github.com/acme/widgets/pull/7"}
+
+	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
+	// No unresolved comments: this terminal pass runs no agent and ends the chain.
+	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
+		Return(LoadCommentsResult{Threads: nil}, nil)
+	var got notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { got = args.Get(1).(notification.Notification) }).Return(nil)
+
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{
+		WorkDir: "/repo", Chain: true, Summary: true, ChainSummary: "carried summary",
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	// The terminal no-comments pass ran no agent, so it must not summarize a
+	// fresh, empty session; it attaches the summary preserved from the last
+	// addressed pass to the completion webhook instead.
+	env.AssertNotCalled(t, activityName(a.SummarizeLastRun), mock.Anything, mock.Anything)
+	require.Equal(t, "carried summary", got.WebhookBody)
+	require.Equal(t, "Copilot review chain complete", got.Title)
+}
+
 func TestPilotWorkflow_Failure_SendsFailureNotification(t *testing.T) {
 	env := newEnv(t)
 
@@ -357,6 +415,37 @@ func TestPilotWorkflow_Summary_SetsWebhookBodyOnAddressingPassBeforeChaining(t *
 	// plain Body (used by other channels) keeps the pass text.
 	require.Equal(t, "short summary for webhook", got.WebhookBody)
 	require.Contains(t, got.Body, "PR #7")
+}
+
+func TestPilotWorkflow_Summary_CancellationDuringSummary_FailsInsteadOfCompleting(t *testing.T) {
+	env := newEnv(t)
+	pr := PullRequest{Number: 7, URL: "https://github.com/acme/widgets/pull/7"}
+	threads := []ReviewThread{{ID: "t1", Body: "fix"}}
+
+	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
+	env.OnActivity(a.CheckOngoingReview, mock.Anything, mock.Anything).Return(false, nil)
+	env.OnActivity(a.LoadUnresolvedComments, mock.Anything, mock.Anything).
+		Return(LoadCommentsResult{Threads: threads}, nil)
+	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).
+		Return(Checkpoint{HeadSHA: "base"}, nil)
+	env.OnActivity(a.RunAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
+	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnActivity(a.PushBranch, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.ReplyAndResolve, mock.Anything, mock.Anything).Return(nil)
+	env.OnActivity(a.RequestCopilotReview, mock.Anything, mock.Anything).Return(nil)
+	// A workflow cancellation while the terminal summary step is running surfaces
+	// as a cancellation error on its Get. It must propagate as a workflow failure
+	// rather than being swallowed into a successful completion.
+	env.OnActivity(a.SummarizeLastRun, mock.Anything, mock.Anything).
+		Return("", temporal.NewCanceledError())
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Summary: true})
+
+	require.True(t, env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	require.Error(t, err)
+	require.True(t, temporal.IsCanceledError(err), "expected cancellation to propagate, got %v", err)
 }
 
 func TestPilotWorkflow_Summary_SetsWebhookBodyOnFailureAfterAgentRan(t *testing.T) {
