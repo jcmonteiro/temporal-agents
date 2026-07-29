@@ -2,6 +2,7 @@ package codereview
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -217,6 +218,15 @@ func (a *Activities) CreateBranch(ctx context.Context, req CreateBranchRequest) 
 	}
 
 	if err := a.Git.CreateBranch(ctx, req.WorkDir, branch); err != nil {
+		// An explicit branch that already exists cannot be fixed by retrying, so
+		// fail fast with a clear message instead of burning the branch step's
+		// attempts on the same error. A generated alias keeps the retryable path:
+		// its next attempt regenerates a fresh name and can succeed.
+		if req.Branch != "" && errors.Is(err, ErrBranchOrWorktreeExists) {
+			return CreateBranchResult{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("branch %s already exists; choose a new branch name", branch),
+				errBranchExists, nil)
+		}
 		return CreateBranchResult{}, fmt.Errorf("create branch %s: %w", branch, err)
 	}
 	head, err := a.Git.Head(ctx, req.WorkDir)
@@ -274,6 +284,16 @@ func (a *Activities) createWorktree(ctx context.Context, req CreateBranchRequest
 	}
 
 	if err := a.Git.AddWorktree(ctx, req.WorkDir, worktreePath, branch); err != nil {
+		// An explicit branch or worktree path that already exists (e.g. a stale
+		// directory, or a branch ref with no worktree — states the probe above
+		// cannot detect) cannot be fixed by retrying; fail fast rather than
+		// exhausting attempts on the same error. A generated alias stays retryable
+		// so its next attempt picks a fresh name (and thus a fresh path).
+		if req.Branch != "" && errors.Is(err, ErrBranchOrWorktreeExists) {
+			return CreateBranchResult{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("branch %s or worktree path %s already exists; choose a new branch name", branch, worktreePath),
+				errBranchExists, nil)
+		}
 		return CreateBranchResult{}, fmt.Errorf("create worktree for branch %s: %w", branch, err)
 	}
 	head, err := a.Git.Head(ctx, worktreePath)

@@ -29,6 +29,7 @@ type fakeGit struct {
 	currentBranch map[string]string
 	head          string
 	addErr        error
+	createErr     error
 
 	worktreeAdded bool
 	addWorktreeAt string
@@ -49,11 +50,12 @@ func (f *fakeGit) AddWorktree(_ context.Context, _, worktreePath, _ string) erro
 
 func (f *fakeGit) Head(context.Context, string) (string, error) { return f.head, nil }
 
-// The remaining Git methods are unused by CreateBranch's worktree path.
-func (f *fakeGit) CreateBranch(context.Context, string, string) error { return nil }
-func (f *fakeGit) HasChanges(context.Context, string) (bool, error)   { return false, nil }
-func (f *fakeGit) Stash(context.Context, string) error                { return nil }
-func (f *fakeGit) StashPop(context.Context, string) error             { return nil }
+func (f *fakeGit) CreateBranch(context.Context, string, string) error { return f.createErr }
+
+// The remaining Git methods are unused by CreateBranch's paths under test.
+func (f *fakeGit) HasChanges(context.Context, string) (bool, error) { return false, nil }
+func (f *fakeGit) Stash(context.Context, string) error              { return nil }
+func (f *fakeGit) StashPop(context.Context, string) error           { return nil }
 func (f *fakeGit) CommitsSince(context.Context, string, string) ([]string, error) {
 	return nil, nil
 }
@@ -105,4 +107,57 @@ func TestCreateBranch_Worktree_ExistingWorktreeOnFirstAttempt_Rejected(t *testin
 	require.True(t, errors.As(err, &appErr), "want an ApplicationError, got %T", err)
 	require.Equal(t, errBranchExists, appErr.Type())
 	require.False(t, fg.worktreeAdded, "no worktree should be added when rejecting")
+}
+
+func TestCreateBranch_Worktree_AddReportsAlreadyExists_NonRetryable(t *testing.T) {
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestActivityEnvironment()
+	// The probe finds nothing at the target path (e.g. a stale directory or a
+	// branch ref with no worktree — states the probe cannot detect), so the
+	// activity attempts to create the worktree and git reports it already exists.
+	// That is permanent for an explicit branch, so the activity must fail
+	// non-retryably rather than burning all its attempts on the same error.
+	fg := &fakeGit{
+		currentBranch: map[string]string{},
+		head:          "base-sha",
+		addErr:        fmt.Errorf("git worktree add: %w: fatal: already exists", ErrBranchOrWorktreeExists),
+	}
+	act := &Activities{Git: fg}
+	env.RegisterActivity(act)
+
+	_, err := env.ExecuteActivity(act.CreateBranch, CreateBranchRequest{
+		WorkDir: "/repo", Branch: "feat/x", WorktreesDir: "/wt",
+	})
+	require.Error(t, err)
+
+	var appErr *temporal.ApplicationError
+	require.True(t, errors.As(err, &appErr), "want an ApplicationError, got %T", err)
+	require.True(t, appErr.NonRetryable(), "an already-exists failure must be non-retryable")
+	require.Equal(t, errBranchExists, appErr.Type())
+}
+
+func TestCreateBranch_InPlace_ExplicitBranchAlreadyExists_NonRetryable(t *testing.T) {
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestActivityEnvironment()
+	// In-place mode (no WorktreesDir). The current branch differs from the
+	// requested one and the tree is clean, so the activity attempts to create the
+	// branch; git reports it already exists (a branch ref that is not checked
+	// out). Retrying cannot fix an explicit name, so the failure is non-retryable.
+	fg := &fakeGit{
+		currentBranch: map[string]string{"/repo": "main"},
+		head:          "base-sha",
+		createErr:     fmt.Errorf("git checkout -b: %w: fatal: a branch named 'feat/x' already exists", ErrBranchOrWorktreeExists),
+	}
+	act := &Activities{Git: fg}
+	env.RegisterActivity(act)
+
+	_, err := env.ExecuteActivity(act.CreateBranch, CreateBranchRequest{
+		WorkDir: "/repo", Branch: "feat/x",
+	})
+	require.Error(t, err)
+
+	var appErr *temporal.ApplicationError
+	require.True(t, errors.As(err, &appErr), "want an ApplicationError, got %T", err)
+	require.True(t, appErr.NonRetryable(), "an already-exists failure must be non-retryable")
+	require.Equal(t, errBranchExists, appErr.Type())
 }

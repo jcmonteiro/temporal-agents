@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"temporal-agents/internal/codereview"
 )
 
 // Git runs local git operations against a repository directory.
@@ -28,13 +30,29 @@ func (g Git) CurrentBranch(ctx context.Context, dir string) (string, error) {
 // CreateBranch creates and checks out a new branch at the current HEAD in dir.
 func (g Git) CreateBranch(ctx context.Context, dir, branch string) error {
 	_, err := run(ctx, dir, "checkout", "-b", branch)
-	return err
+	return classifyExists(err)
 }
 
 // AddWorktree creates a new worktree at worktreePath checked out on a new
 // branch created at the current HEAD of the repository in dir.
 func (g Git) AddWorktree(ctx context.Context, dir, worktreePath, branch string) error {
 	_, err := run(ctx, dir, "worktree", "add", worktreePath, "-b", branch)
+	return classifyExists(err)
+}
+
+// classifyExists wraps err with codereview.ErrBranchOrWorktreeExists when git's
+// failure reports that the branch or worktree path already exists, so the
+// activity layer can treat it as a permanent (non-retryable) condition rather
+// than exhausting retries on an error the same name can never fix. git phrases
+// both cases with the "already exists" substring ("a branch named '...' already
+// exists", "'<path>' already exists").
+func classifyExists(err error) error {
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(err.Error(), "already exists") {
+		return fmt.Errorf("%w: %v", codereview.ErrBranchOrWorktreeExists, err)
+	}
 	return err
 }
 
