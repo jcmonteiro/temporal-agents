@@ -19,8 +19,11 @@
 package codereview
 
 import (
+	"fmt"
+	"math/rand"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // PromptMode selects how the caller-provided prompt text combines with the
@@ -284,6 +287,44 @@ type DevelopInput struct {
 type OpenPRInput struct {
 	// WorkDir is the repository directory the CLI was invoked from.
 	WorkDir string
+}
+
+// branchAdjectives and branchAnimals seed the auto-generated branch alias used
+// when `code develop` is run without an explicit --branch. A name is composed as
+// <adjective>-<animal>-<date> (e.g. "flaming-duck-2026-jul-29"). With 15 of each
+// there are 225 adjective/animal pairs per day, so a same-day collision is
+// unlikely; when one does happen CreateBranch simply fails and its retry picks a
+// fresh alias.
+var (
+	branchAdjectives = []string{
+		"dramatic", "squishy", "jittery", "befuddled", "overcaffeinated",
+		"wonky", "peculiar", "sneezy", "bumbling", "ridiculous",
+		"flabbergasted", "flaming", "waddling", "grumpy", "sparkly",
+	}
+	branchAnimals = []string{
+		"badger", "pangolin", "ferret", "octopus", "capybara",
+		"gecko", "raven", "narwhal", "mongoose", "yak",
+		"salamander", "fox", "moose", "jellyfish", "duck",
+	}
+)
+
+// FormatBranchAlias renders a branch alias from its parts as
+// <adjective>-<animal>-<date>, with the date lower-cased as "2006-jan-02"
+// (e.g. FormatBranchAlias("flaming", "duck", ...jul 29 2026) ->
+// "flaming-duck-2026-jul-29").
+func FormatBranchAlias(adjective, animal string, date time.Time) string {
+	return fmt.Sprintf("%s-%s-%s", adjective, animal, strings.ToLower(date.Format("2006-Jan-02")))
+}
+
+// RandomBranchAlias picks a random adjective/animal pair and combines it with
+// now's date into a branch alias. It is intentionally impure (uses the default
+// math/rand source): each call, including a CreateBranch retry after a name
+// collision, yields an independently chosen alias. The pure formatting lives in
+// FormatBranchAlias.
+func RandomBranchAlias(now time.Time) string {
+	adjective := branchAdjectives[rand.Intn(len(branchAdjectives))]
+	animal := branchAnimals[rand.Intn(len(branchAnimals))]
+	return FormatBranchAlias(adjective, animal, now)
 }
 
 // BuildDevelopPrompt renders the instruction that has the Pi agent implement

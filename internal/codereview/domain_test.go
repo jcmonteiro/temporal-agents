@@ -1,8 +1,10 @@
 package codereview
 
 import (
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuildPrompt_DefaultIncludesBuiltInPromptDescriptionAndComments(t *testing.T) {
@@ -83,6 +85,30 @@ func TestBuildDevelopPrompt_EmbedsPromptAndAsksToCommit(t *testing.T) {
 	}
 	if !strings.Contains(got, "commit") {
 		t.Fatalf("develop prompt should ask the agent to commit:\n%s", got)
+	}
+}
+
+func TestFormatBranchAlias_ComposesAdjectiveAnimalAndLowercasedDate(t *testing.T) {
+	date := time.Date(2026, time.July, 29, 13, 45, 0, 0, time.UTC)
+
+	if got, want := FormatBranchAlias("flaming", "duck", date), "flaming-duck-2026-jul-29"; got != want {
+		t.Fatalf("FormatBranchAlias = %q, want %q", got, want)
+	}
+}
+
+func TestRandomBranchAlias_MatchesAdjectiveAnimalDateShape(t *testing.T) {
+	date := time.Date(2026, time.July, 29, 0, 0, 0, 0, time.UTC)
+
+	got := RandomBranchAlias(date)
+
+	// The alias always ends with the day's date, regardless of which random pair
+	// was chosen.
+	if !strings.HasSuffix(got, "-2026-jul-29") {
+		t.Fatalf("RandomBranchAlias = %q, want it to end with the date", got)
+	}
+	// <adjective>-<animal>-<year>-<month>-<day>: lowercase words then the date.
+	if !regexp.MustCompile(`^[a-z]+-[a-z]+-2026-jul-29$`).MatchString(got) {
+		t.Fatalf("RandomBranchAlias = %q, want <adjective>-<animal>-<date> shape", got)
 	}
 }
 
