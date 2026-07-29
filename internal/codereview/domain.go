@@ -19,8 +19,12 @@
 package codereview
 
 import (
+	"fmt"
+	"math/rand"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // PromptMode selects how the caller-provided prompt text combines with the
@@ -263,8 +267,13 @@ const SummarizePrompt = "Summarize the work performed in this session in a few s
 type DevelopInput struct {
 	// WorkDir is the repository directory the CLI was invoked from.
 	WorkDir string
-	// Branch is the new branch to create and develop on.
+	// Branch is the new branch to create and develop on. When empty, the workflow
+	// generates a random alias (see RandomBranchAlias).
 	Branch string
+	// WorktreesDir, when non-empty, makes the workflow develop in a fresh git
+	// worktree created under this directory (at <WorktreesDir>/<branch>) instead of
+	// switching the branch in WorkDir, leaving WorkDir untouched.
+	WorktreesDir string
 	// Prompt is the caller's instruction describing what to implement.
 	Prompt string
 	// Summary, when true, runs a final activity before the workflow returns
@@ -284,6 +293,159 @@ type DevelopInput struct {
 type OpenPRInput struct {
 	// WorkDir is the repository directory the CLI was invoked from.
 	WorkDir string
+}
+
+// branchAdjectives and branchAnimals seed the auto-generated branch alias used
+// when `code develop` is run without an explicit --branch. A name is composed as
+// <adjective>-<animal>-<date> (e.g. "flaming-duck-2026-jul-29"). With 15 of each
+// there are 225 adjective/animal pairs per day, so a same-day collision is
+// unlikely; when one does happen CreateBranch simply fails and its retry picks a
+// fresh alias.
+var (
+	branchAdjectives = []string{
+		"dramatic", "squishy", "jittery", "befuddled", "overcaffeinated",
+		"wonky", "peculiar", "sneezy", "bumbling", "ridiculous",
+		"flabbergasted", "flaming", "waddling", "grumpy", "sparkly",
+	}
+	branchAnimals = []string{
+		"badger", "pangolin", "ferret", "octopus", "capybara",
+		"gecko", "raven", "narwhal", "mongoose", "yak",
+		"salamander", "fox", "moose", "jellyfish", "duck",
+	}
+)
+
+// FormatBranchAlias renders a branch alias from its parts as
+// <adjective>-<animal>-<date>, with the date lower-cased as "2006-jan-02"
+// (e.g. FormatBranchAlias("flaming", "duck", ...jul 29 2026) ->
+// "flaming-duck-2026-jul-29").
+func FormatBranchAlias(adjective, animal string, date time.Time) string {
+	return fmt.Sprintf("%s-%s-%s", adjective, animal, strings.ToLower(date.Format("2006-Jan-02")))
+}
+
+// RandomBranchAlias picks a random adjective/animal pair and combines it with
+// now's date into a branch alias. It is intentionally impure (uses the default
+// math/rand source): each call yields an independently chosen alias, so a
+// CreateBranch retry after a name collision (which regenerates via this) gets a
+// fresh name. The alias CreateBranch settles on is then persisted across retries
+// (see generatedAlias) rather than regenerated on every attempt. The pure
+// formatting lives in FormatBranchAlias.
+func RandomBranchAlias(now time.Time) string {
+	adjective := branchAdjectives[rand.Intn(len(branchAdjectives))]
+	animal := branchAnimals[rand.Intn(len(branchAnimals))]
+	return FormatBranchAlias(adjective, animal, now)
+}
+
+// ValidateBranchName rejects explicit branch names that are unsafe to use
+// verbatim as a filesystem path or a git argument, and names git itself would
+// refuse. In worktree mode CreateBranch joins <WorktreesDir>/<branch>, so a
+// traversing or absolute name could escape the worktrees base directory; and a
+// name beginning with "-" can be mistaken for a flag by git's argument parsing.
+// Beyond those, the value must satisfy git's own branch-name contract (the same
+// rules `git check-ref-format --branch` enforces): otherwise a malformed name
+// like "feature name", "topic~1", "foo@{bar", or "name.lock" would pass here only
+// for git to reject it, and the activity would retry that permanent error until
+// its attempts are exhausted. Validating it up front fails such names
+// immediately (as InvalidBranch). An empty name is allowed and means "generate
+// an alias" (see RandomBranchAlias); it never reaches git or the filesystem
+// verbatim.
+func ValidateBranchName(branch string) error {
+	if branch == "" {
+		return nil
+	}
+	if strings.HasPrefix(branch, "-") {
+		return fmt.Errorf("branch name %q may not start with '-'", branch)
+	}
+	if filepath.IsAbs(branch) {
+		return fmt.Errorf("branch name %q may not be an absolute path", branch)
+	}
+	return validateGitRefName(branch)
+}
+
+// validateGitRefName enforces the branch-name rules of `git check-ref-format
+// --branch` (see `git help check-ref-format`) in pure Go, so a name git would
+// reject is caught before it reaches the filesystem or git. Keeping this a pure
+// domain check (rather than shelling out through the Git port) lets the CLI and
+// the activity both validate without invoking git.
+func validateGitRefName(branch string) error {
+	if strings.HasPrefix(branch, "/") || strings.HasSuffix(branch, "/") {
+		return fmt.Errorf("branch name %q may not begin or end with '/'", branch)
+	}
+	if strings.Contains(branch, "//") {
+		return fmt.Errorf("branch name %q may not contain consecutive slashes", branch)
+	}
+	if strings.HasSuffix(branch, ".") {
+		return fmt.Errorf("branch name %q may not end with '.'", branch)
+	}
+	if strings.Contains(branch, "..") {
+		return fmt.Errorf("branch name %q may not contain '..'", branch)
+	}
+	if strings.Contains(branch, "@{") {
+		return fmt.Errorf("branch name %q may not contain '@{'", branch)
+	}
+	if branch == "@" {
+		return fmt.Errorf("branch name %q may not be the single character '@'", branch)
+	}
+	// Disallowed characters anywhere: ASCII control chars and DEL, space, and the
+	// git-special characters ~ ^ : ? * [ \.
+	for _, r := range branch {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("branch name %q may not contain control characters", branch)
+		}
+		switch r {
+		case ' ', '~', '^', ':', '?', '*', '[', '\\':
+			return fmt.Errorf("branch name %q may not contain %q", branch, r)
+		}
+	}
+	// No slash-separated component may be empty, begin with '.', or end with
+	// ".lock".
+	for _, comp := range strings.Split(branch, "/") {
+		if comp == "" {
+			return fmt.Errorf("branch name %q may not contain an empty path component", branch)
+		}
+		if strings.HasPrefix(comp, ".") {
+			return fmt.Errorf("branch name %q path component %q may not begin with '.'", branch, comp)
+		}
+		if strings.HasSuffix(comp, ".lock") {
+			return fmt.Errorf("branch name %q path component %q may not end with '.lock'", branch, comp)
+		}
+	}
+	return nil
+}
+
+// worktreeStep is the action createWorktree takes for a requested branch
+// worktree, decided purely from the retry attempt and whether a worktree for
+// the branch already exists on disk.
+type worktreeStep int
+
+const (
+	// createWorktreeStep means no worktree exists yet for the branch; create it.
+	createWorktreeStep worktreeStep = iota
+	// adoptWorktreeStep means a prior attempt already created the worktree
+	// (attempt > 1); reuse it rather than failing on git's "already exists" error.
+	adoptWorktreeStep
+	// rejectWorktreeStep means a stable-named branch's worktree already exists on
+	// the first attempt, i.e. the caller asked to develop on a branch that is
+	// already checked out somewhere; reject it (mirrors the in-place BranchExists
+	// guard).
+	rejectWorktreeStep
+)
+
+// planWorktree decides how createWorktree should handle a requested branch
+// worktree. It mirrors CreateBranch's in-place idempotency for the worktree
+// path. adoptable is true for a name that is stable across retries — an
+// explicit branch, or a generated alias recovered from a prior attempt — so its
+// worktree may be the residue of an earlier attempt: it is rejected on the first
+// attempt (indistinguishable from asking to develop on a pre-existing branch)
+// but adopted on a Temporal retry (attempt > 1). A freshly generated alias
+// (adoptable false) has a brand-new path, so it never adopts and always creates.
+func planWorktree(adoptable bool, attempt int, worktreeExists bool) worktreeStep {
+	if !adoptable || !worktreeExists {
+		return createWorktreeStep
+	}
+	if attempt > 1 {
+		return adoptWorktreeStep
+	}
+	return rejectWorktreeStep
 }
 
 // BuildDevelopPrompt renders the instruction that has the Pi agent implement

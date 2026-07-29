@@ -41,8 +41,8 @@ func codeCmd(args []string) {
 			developHelp(os.Stdout)
 			return
 		}
-		prompt, branch, summary, withRemote := parseDevelopFlags(args[1:])
-		startDevelop(prompt, branch, summary, withRemote)
+		prompt, branch, worktree, summary, withRemote := parseDevelopFlags(args[1:])
+		startDevelop(prompt, branch, worktree, summary, withRemote)
 	default:
 		fatalf("unknown code subcommand %q (try: pilot, review, develop)", args[0])
 	}
@@ -90,9 +90,10 @@ func startReview(summary bool) {
 }
 
 // parseDevelopFlags reads the develop command's arguments: a required prompt
-// (positional), a required branch name (--branch <name> or --branch=<name>),
-// and the optional --summary and --with-remote flags.
-func parseDevelopFlags(args []string) (prompt, branch string, summary, withRemote bool) {
+// (positional), an optional branch name (--branch <name> or --branch=<name>;
+// defaults to a generated alias when omitted), and the optional --worktree,
+// --summary and --with-remote flags.
+func parseDevelopFlags(args []string) (prompt, branch string, worktree, summary, withRemote bool) {
 	setPrompt := func(v string) {
 		if prompt != "" {
 			fatalf("unexpected argument %q", v)
@@ -106,6 +107,8 @@ func parseDevelopFlags(args []string) (prompt, branch string, summary, withRemot
 			summary = true
 		case a == "--with-remote":
 			withRemote = true
+		case a == "--worktree":
+			worktree = true
 		case a == "--branch":
 			if i+1 >= len(args) {
 				fatalf("--branch requires a branch name")
@@ -121,37 +124,61 @@ func parseDevelopFlags(args []string) (prompt, branch string, summary, withRemot
 	if strings.TrimSpace(prompt) == "" {
 		fatalf("develop requires a prompt")
 	}
-	if strings.TrimSpace(branch) == "" {
-		fatalf("develop requires a branch name (--branch <name>)")
+	if err := codereview.ValidateBranchName(branch); err != nil {
+		fatalf("invalid branch name: %v", err)
 	}
-	return prompt, branch, summary, withRemote
+	return prompt, branch, worktree, summary, withRemote
 }
 
-// startDevelop launches the DevelopWorkflow for the current repository.
-func startDevelop(prompt, branch string, summary, withRemote bool) {
+// startDevelop launches the DevelopWorkflow for the current repository. When
+// worktree is set the workflow develops in a fresh git worktree created under
+// the user config directory instead of switching the branch in the current
+// working directory.
+func startDevelop(prompt, branch string, worktree, summary, withRemote bool) {
 	c := dial()
 	defer c.Close()
+
+	var wtDir string
+	if worktree {
+		d, err := worktreesDir()
+		if err != nil {
+			fatalf("Could not locate worktrees directory: %v", err)
+		}
+		wtDir = d
+	}
 
 	id := "develop-" + uuid.NewString()
 	we, err := c.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{
 		ID:        id,
 		TaskQueue: TaskQueue,
 	}, codereview.DevelopWorkflow, codereview.DevelopInput{
-		WorkDir:    cwd(),
-		Branch:     branch,
-		Prompt:     prompt,
-		Summary:    summary,
-		WithRemote: withRemote,
+		WorkDir:      cwd(),
+		Branch:       branch,
+		WorktreesDir: wtDir,
+		Prompt:       prompt,
+		Summary:      summary,
+		WithRemote:   withRemote,
 	})
 	if err != nil {
 		fatalf("Could not start workflow: %v", err)
 	}
 
+	// The branch name is resolved by the workflow when omitted; report it as
+	// auto-generated rather than printing an empty value.
+	branchLabel := branch
+	if branchLabel == "" {
+		branchLabel = "(auto-generated)"
+	}
+
 	fmt.Println("Develop started.")
 	fmt.Printf("  id:      %s\n", we.GetID())
-	fmt.Printf("  branch:  %s\n", branch)
+	fmt.Printf("  branch:  %s\n", branchLabel)
 	fmt.Printf("  prompt:  %s\n", truncate(prompt, 60))
-	fmt.Printf("  workdir: %s\n", cwd())
+	if worktree {
+		fmt.Printf("  workdir: %s (a new worktree is created here)\n", wtDir)
+	} else {
+		fmt.Printf("  workdir: %s\n", cwd())
+	}
 	if summary {
 		fmt.Printf("  summary: on (webhook message summarizes the last Pi run)\n")
 	}
@@ -244,7 +271,7 @@ func codeHelp(w io.Writer) {
 USAGE
   temporal-agents code pilot [--append <prompt> | --replace <prompt>]
   temporal-agents code review
-  temporal-agents code develop "<prompt>" --branch <name>
+  temporal-agents code develop "<prompt>" [--branch <name>] [--worktree]
 
 SUBCOMMANDS
   pilot    Address the unresolved review comments on the current branch's PR
@@ -268,8 +295,13 @@ func developHelp(w io.Writer) {
 
 Runs a workflow that develops a change end to end on the current machine:
 
-  - Creates the requested branch off the current HEAD. This requires a clean
-    working tree; commit or stash local changes first.
+  - Creates the branch to develop on off the current HEAD. Without --branch the
+    name is auto-generated as <adjective>-<animal>-<date> (e.g.
+    flaming-duck-2026-jul-29). By default the branch is checked out in the
+    current working tree, which must be clean; commit or stash local changes
+    first. With --worktree the branch is created in a fresh git worktree under
+    your user config directory instead, so the current working tree is left
+    untouched and need not be clean.
   - Runs a Pi agent to implement your prompt and commit its work.
   - Confirms the agent advanced HEAD and left no uncommitted changes.
   - Triggers the local review loop (the same one as "code review") on the new
@@ -283,10 +315,16 @@ or the Copilot request already exists), then the pilot loop (the same one as
 "code pilot", which loops until Copilot has no unresolved comments left).
 
 USAGE
-  temporal-agents code develop "<prompt>" --branch <name> [--summary] [--with-remote]
+  temporal-agents code develop "<prompt>" [--branch <name>] [--worktree] [--summary] [--with-remote]
 
 FLAGS
-  --branch <name>   Name of the new branch to create and develop on (required)
+  --branch <name>   Name of the new branch to create and develop on. Optional;
+                    defaults to a generated <adjective>-<animal>-<date> alias
+                    (e.g. flaming-duck-2026-jul-29).
+  --worktree        Develop in a fresh git worktree created under your user
+                    config directory (<config>/temporal-agents/worktrees/<branch>)
+                    instead of switching the branch in the current directory, so
+                    the current working tree is left untouched.
   --summary         Before returning (on success or failure), summarize the last
                     Pi execution and send it as the webhook message (only the
                     webhook). Also propagated to the review loop this starts, so
@@ -302,6 +340,8 @@ FLAGS
 
 EXAMPLES
   temporal-agents code develop "add a rate limiter to the API client" --branch feat/rate-limit
+  temporal-agents code develop "add a rate limiter"
+  temporal-agents code develop "add a rate limiter" --worktree
   temporal-agents code develop "add a rate limiter" --branch feat/rate-limit --with-remote
   temporal-agents watch <workflow-id>
 `)
