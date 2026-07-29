@@ -112,6 +112,33 @@ func TestRandomBranchAlias_MatchesAdjectiveAnimalDateShape(t *testing.T) {
 	}
 }
 
+func TestValidateBranchName(t *testing.T) {
+	tests := []struct {
+		name    string
+		branch  string
+		wantErr bool
+	}{
+		{"empty is allowed (generate an alias)", "", false},
+		{"plain name", "feat/rate-limit", false},
+		{"slashed name", "feat/x", false},
+		{"traversal escapes the worktrees base dir", "../../foo", true},
+		{"embedded traversal", "feat/../../foo", true},
+		{"leading dash looks like a flag", "-force", true},
+		{"absolute path", "/etc/evil", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateBranchName(tt.branch)
+			if tt.wantErr && err == nil {
+				t.Fatalf("ValidateBranchName(%q) = nil, want error", tt.branch)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("ValidateBranchName(%q) = %v, want nil", tt.branch, err)
+			}
+		})
+	}
+}
+
 func TestPlanWorktree_MirrorsInPlaceRetryIdempotency(t *testing.T) {
 	tests := []struct {
 		name           string

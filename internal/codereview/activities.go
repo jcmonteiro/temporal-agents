@@ -142,6 +142,11 @@ const errDirtyWorktree = "DirtyWorktree"
 // develop on an existing branch rather than a fresh one.
 const errBranchExists = "BranchExists"
 
+// errInvalidBranch is the error type returned (non-retryable) when an explicit
+// branch name fails ValidateBranchName, i.e. it is unsafe to use verbatim as a
+// filesystem path or a git argument. Retrying cannot fix a malformed name.
+const errInvalidBranch = "InvalidBranch"
+
 // CreateBranch creates the branch to develop on and returns the branch name,
 // the working directory the rest of the flow should use, and the HEAD SHA the
 // branch starts from (so a later step can confirm the agent advanced it).
@@ -164,6 +169,10 @@ const errBranchExists = "BranchExists"
 // skipping the clean-tree check there would let unrelated local changes be
 // committed by the agent.
 func (a *Activities) CreateBranch(ctx context.Context, req CreateBranchRequest) (CreateBranchResult, error) {
+	if err := ValidateBranchName(req.Branch); err != nil {
+		return CreateBranchResult{}, temporal.NewNonRetryableApplicationError(
+			err.Error(), errInvalidBranch, nil)
+	}
 	if req.WorktreesDir != "" {
 		return a.createWorktree(ctx, req)
 	}

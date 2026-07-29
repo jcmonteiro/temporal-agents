@@ -124,6 +124,9 @@ func parseDevelopFlags(args []string) (prompt, branch string, worktree, summary,
 	if strings.TrimSpace(prompt) == "" {
 		fatalf("develop requires a prompt")
 	}
+	if err := codereview.ValidateBranchName(branch); err != nil {
+		fatalf("invalid branch name: %v", err)
+	}
 	return prompt, branch, worktree, summary, withRemote
 }
 

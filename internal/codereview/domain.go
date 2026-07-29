@@ -21,6 +21,7 @@ package codereview
 import (
 	"fmt"
 	"math/rand"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -330,6 +331,29 @@ func RandomBranchAlias(now time.Time) string {
 	adjective := branchAdjectives[rand.Intn(len(branchAdjectives))]
 	animal := branchAnimals[rand.Intn(len(branchAnimals))]
 	return FormatBranchAlias(adjective, animal, now)
+}
+
+// ValidateBranchName rejects explicit branch names that would be unsafe once
+// they are used verbatim as a filesystem path or a git argument. In worktree
+// mode CreateBranch joins <WorktreesDir>/<branch>, so a traversing or absolute
+// name could escape the worktrees base directory; and a name beginning with
+// "-" can be mistaken for a flag by git's argument parsing. An empty name is
+// allowed and means "generate an alias" (see RandomBranchAlias); it never
+// reaches git or the filesystem verbatim.
+func ValidateBranchName(branch string) error {
+	if branch == "" {
+		return nil
+	}
+	if strings.HasPrefix(branch, "-") {
+		return fmt.Errorf("branch name %q may not start with '-'", branch)
+	}
+	if filepath.IsAbs(branch) {
+		return fmt.Errorf("branch name %q may not be an absolute path", branch)
+	}
+	if strings.Contains(branch, "..") {
+		return fmt.Errorf("branch name %q may not contain '..'", branch)
+	}
+	return nil
 }
 
 // worktreeStep is the action createWorktree takes for a requested branch
