@@ -332,6 +332,41 @@ func RandomBranchAlias(now time.Time) string {
 	return FormatBranchAlias(adjective, animal, now)
 }
 
+// worktreeStep is the action createWorktree takes for a requested branch
+// worktree, decided purely from the retry attempt and whether a worktree for
+// the branch already exists on disk.
+type worktreeStep int
+
+const (
+	// createWorktreeStep means no worktree exists yet for the branch; create it.
+	createWorktreeStep worktreeStep = iota
+	// adoptWorktreeStep means a prior attempt already created the worktree
+	// (attempt > 1); reuse it rather than failing on git's "already exists" error.
+	adoptWorktreeStep
+	// rejectWorktreeStep means an explicit branch's worktree already exists on the
+	// first attempt, i.e. the caller asked to develop on a branch that is already
+	// checked out somewhere; reject it (mirrors the in-place BranchExists guard).
+	rejectWorktreeStep
+)
+
+// planWorktree decides how createWorktree should handle a requested branch
+// worktree. It mirrors CreateBranch's in-place idempotency for the worktree
+// path: an explicit branch whose worktree already exists is rejected on the
+// first attempt (indistinguishable from asking to develop on a pre-existing
+// branch) but adopted on a Temporal retry (attempt > 1), where the existing
+// worktree is the residue of an earlier attempt that created it before failing.
+// A generated alias (explicitBranch false) is regenerated on every invocation,
+// so it never adopts and always creates.
+func planWorktree(explicitBranch bool, attempt int, worktreeExists bool) worktreeStep {
+	if !explicitBranch || !worktreeExists {
+		return createWorktreeStep
+	}
+	if attempt > 1 {
+		return adoptWorktreeStep
+	}
+	return rejectWorktreeStep
+}
+
 // BuildDevelopPrompt renders the instruction that has the Pi agent implement
 // the caller's task on the freshly created branch. It asks the agent to commit
 // all its work so the workflow's HEAD-advanced check can confirm the change

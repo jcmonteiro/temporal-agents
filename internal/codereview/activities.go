@@ -83,6 +83,11 @@ type CreateBranchRequest struct {
 	// checking it out in WorkDir, leaving WorkDir untouched. The worktree lives at
 	// <WorktreesDir>/<branch> and becomes the working directory for the rest of
 	// the develop flow.
+	//
+	// Worktrees are intentionally left in place after the flow finishes (for
+	// inspection and follow-up pushes); this activity never runs `git worktree
+	// remove`/`prune`, so they accumulate under WorktreesDir and must be pruned
+	// manually.
 	WorktreesDir string
 }
 
@@ -211,12 +216,47 @@ func (a *Activities) CreateBranch(ctx context.Context, req CreateBranchRequest) 
 // Because it never mutates WorkDir there is no clean-tree requirement. An empty
 // request branch is generated fresh on every invocation, so a retry after a
 // branch/path collision picks a new alias (and thus a new worktree path).
+//
+// It mirrors the in-place path's Temporal-retry idempotency (see planWorktree):
+// when an explicit branch's worktree already exists it is rejected on the first
+// attempt but adopted on a retry (attempt > 1), where the existing worktree is
+// the residue of an earlier attempt that added it before the activity failed.
+// Adopting on retry avoids failing permanently on git's "already exists" error
+// and leaving the worktree orphaned. The worktree itself is never removed by
+// this activity; see CreateBranchRequest.WorktreesDir for the (deliberate)
+// lack of automatic cleanup.
 func (a *Activities) createWorktree(ctx context.Context, req CreateBranchRequest) (CreateBranchResult, error) {
 	branch := req.Branch
 	if branch == "" {
 		branch = RandomBranchAlias(time.Now())
 	}
 	worktreePath := filepath.Join(req.WorktreesDir, branch)
+
+	// Only an explicit branch can be adopted or rejected on retry; a generated
+	// alias is regenerated on every invocation, so its worktree path is fresh.
+	// Probe whether a worktree for the branch already exists at the target path:
+	// CurrentBranch errors when the path is not yet a worktree, which is the
+	// normal first-attempt case.
+	worktreeExists := false
+	if req.Branch != "" {
+		if current, err := a.Git.CurrentBranch(ctx, worktreePath); err == nil {
+			worktreeExists = current == branch
+		}
+	}
+
+	switch planWorktree(req.Branch != "", int(activity.GetInfo(ctx).Attempt), worktreeExists) {
+	case adoptWorktreeStep:
+		head, err := a.Git.Head(ctx, worktreePath)
+		if err != nil {
+			return CreateBranchResult{}, fmt.Errorf("read HEAD: %w", err)
+		}
+		return CreateBranchResult{Branch: branch, WorkDir: worktreePath, BaseSHA: head}, nil
+	case rejectWorktreeStep:
+		return CreateBranchResult{}, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("branch %s already has a worktree at %s; choose a new branch name", branch, worktreePath),
+			errBranchExists, nil)
+	}
+
 	if err := a.Git.AddWorktree(ctx, req.WorkDir, worktreePath, branch); err != nil {
 		return CreateBranchResult{}, fmt.Errorf("create worktree for branch %s: %w", branch, err)
 	}

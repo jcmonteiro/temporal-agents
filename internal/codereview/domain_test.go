@@ -112,6 +112,31 @@ func TestRandomBranchAlias_MatchesAdjectiveAnimalDateShape(t *testing.T) {
 	}
 }
 
+func TestPlanWorktree_MirrorsInPlaceRetryIdempotency(t *testing.T) {
+	tests := []struct {
+		name           string
+		explicitBranch bool
+		attempt        int
+		worktreeExists bool
+		want           worktreeStep
+	}{
+		{"explicit branch, no worktree yet, first attempt", true, 1, false, createWorktreeStep},
+		{"explicit branch, worktree exists, first attempt -> reject", true, 1, true, rejectWorktreeStep},
+		{"explicit branch, worktree exists, retry -> adopt", true, 2, true, adoptWorktreeStep},
+		{"explicit branch, no worktree, retry -> create", true, 3, false, createWorktreeStep},
+		{"generated alias never adopts even if a path exists", false, 4, true, createWorktreeStep},
+		{"generated alias, no worktree", false, 1, false, createWorktreeStep},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := planWorktree(tt.explicitBranch, tt.attempt, tt.worktreeExists); got != tt.want {
+				t.Fatalf("planWorktree(%v, %d, %v) = %v, want %v",
+					tt.explicitBranch, tt.attempt, tt.worktreeExists, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFormatReplyBody(t *testing.T) {
 	tests := []struct {
 		name string
