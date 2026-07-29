@@ -125,6 +125,16 @@ func TestValidateBranchName(t *testing.T) {
 		{"embedded traversal", "feat/../../foo", true},
 		{"leading dash looks like a flag", "-force", true},
 		{"absolute path", "/etc/evil", true},
+		{"space is not a valid ref char", "feature name", true},
+		{"tilde is git-special", "topic~1", true},
+		{"open at-brace is git-special", "foo@{bar", true},
+		{"component ending in .lock", "name.lock", true},
+		{"trailing dot", "feat/x.", true},
+		{"component beginning with a dot", "feat/.hidden", true},
+		{"caret is git-special", "feat^1", true},
+		{"colon is git-special", "feat:x", true},
+		{"trailing slash", "feat/", true},
+		{"consecutive slashes", "feat//x", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

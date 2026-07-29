@@ -350,8 +350,56 @@ func ValidateBranchName(branch string) error {
 	if filepath.IsAbs(branch) {
 		return fmt.Errorf("branch name %q may not be an absolute path", branch)
 	}
+	return validateGitRefName(branch)
+}
+
+// validateGitRefName enforces the branch-name rules of `git check-ref-format
+// --branch` (see `git help check-ref-format`) in pure Go, so a name git would
+// reject is caught before it reaches the filesystem or git. Keeping this a pure
+// domain check (rather than shelling out through the Git port) lets the CLI and
+// the activity both validate without invoking git.
+func validateGitRefName(branch string) error {
+	if strings.HasPrefix(branch, "/") || strings.HasSuffix(branch, "/") {
+		return fmt.Errorf("branch name %q may not begin or end with '/'", branch)
+	}
+	if strings.Contains(branch, "//") {
+		return fmt.Errorf("branch name %q may not contain consecutive slashes", branch)
+	}
+	if strings.HasSuffix(branch, ".") {
+		return fmt.Errorf("branch name %q may not end with '.'", branch)
+	}
 	if strings.Contains(branch, "..") {
 		return fmt.Errorf("branch name %q may not contain '..'", branch)
+	}
+	if strings.Contains(branch, "@{") {
+		return fmt.Errorf("branch name %q may not contain '@{'", branch)
+	}
+	if branch == "@" {
+		return fmt.Errorf("branch name %q may not be the single character '@'", branch)
+	}
+	// Disallowed characters anywhere: ASCII control chars and DEL, space, and the
+	// git-special characters ~ ^ : ? * [ \.
+	for _, r := range branch {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("branch name %q may not contain control characters", branch)
+		}
+		switch r {
+		case ' ', '~', '^', ':', '?', '*', '[', '\\':
+			return fmt.Errorf("branch name %q may not contain %q", branch, r)
+		}
+	}
+	// No slash-separated component may be empty, begin with '.', or end with
+	// ".lock".
+	for _, comp := range strings.Split(branch, "/") {
+		if comp == "" {
+			return fmt.Errorf("branch name %q may not contain an empty path component", branch)
+		}
+		if strings.HasPrefix(comp, ".") {
+			return fmt.Errorf("branch name %q path component %q may not begin with '.'", branch, comp)
+		}
+		if strings.HasSuffix(comp, ".lock") {
+			return fmt.Errorf("branch name %q path component %q may not end with '.lock'", branch, comp)
+		}
 	}
 	return nil
 }
