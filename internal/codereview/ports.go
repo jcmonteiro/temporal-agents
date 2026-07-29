@@ -10,6 +10,10 @@ type Git interface {
 	// CreateBranch creates and checks out a new branch at the current HEAD in
 	// dir.
 	CreateBranch(ctx context.Context, dir, branch string) error
+	// AddWorktree creates a new worktree at worktreePath checked out on a new
+	// branch created at the current HEAD of the repository in dir. It fails when
+	// the branch or the worktree path already exists.
+	AddWorktree(ctx context.Context, dir, worktreePath, branch string) error
 	// Head returns the commit SHA that HEAD points at in dir.
 	Head(ctx context.Context, dir string) (string, error)
 	// HasChanges reports whether dir has uncommitted changes (tracked or

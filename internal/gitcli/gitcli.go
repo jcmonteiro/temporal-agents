@@ -31,6 +31,13 @@ func (g Git) CreateBranch(ctx context.Context, dir, branch string) error {
 	return err
 }
 
+// AddWorktree creates a new worktree at worktreePath checked out on a new
+// branch created at the current HEAD of the repository in dir.
+func (g Git) AddWorktree(ctx context.Context, dir, worktreePath, branch string) error {
+	_, err := run(ctx, dir, "worktree", "add", worktreePath, "-b", branch)
+	return err
+}
+
 // Head returns the commit SHA that HEAD points at in dir.
 func (g Git) Head(ctx context.Context, dir string) (string, error) {
 	out, err := run(ctx, dir, "rev-parse", "HEAD")
