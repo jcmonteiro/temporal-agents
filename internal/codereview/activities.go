@@ -95,6 +95,13 @@ type CreateBranchRequest struct {
 // created (which may be a generated alias), the directory the rest of the flow
 // should run in (the original WorkDir, or the new worktree path in worktree
 // mode), and the HEAD the branch starts from.
+//
+// Note: CreateBranch previously returned a bare branch string. Switching its
+// result to this struct is not backward compatible across a worker upgrade: a
+// DevelopWorkflow whose CreateBranch already completed recorded a JSON string in
+// history, which fails to deserialize into this struct on replay. GetVersion
+// cannot gate an activity result payload type, so deploy this change only when
+// no develop workflows are in flight (they are short-lived personal tooling).
 type CreateBranchResult struct {
 	Branch  string
 	WorkDir string
