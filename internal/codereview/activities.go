@@ -3,6 +3,8 @@ package codereview
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"time"
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
@@ -72,7 +74,26 @@ type RestoreStashRequest struct {
 // CreateBranchRequest is the input to CreateBranch.
 type CreateBranchRequest struct {
 	WorkDir string
+	// Branch is the branch to create. When empty, a random alias is generated
+	// (see RandomBranchAlias), so a retry after a name collision picks a fresh
+	// one.
+	Branch string
+	// WorktreesDir, when non-empty, switches CreateBranch into worktree mode: it
+	// creates the branch in a fresh git worktree under this directory instead of
+	// checking it out in WorkDir, leaving WorkDir untouched. The worktree lives at
+	// <WorktreesDir>/<branch> and becomes the working directory for the rest of
+	// the develop flow.
+	WorktreesDir string
+}
+
+// CreateBranchResult is the output of CreateBranch: the branch that was actually
+// created (which may be a generated alias), the directory the rest of the flow
+// should run in (the original WorkDir, or the new worktree path in worktree
+// mode), and the HEAD the branch starts from.
+type CreateBranchResult struct {
 	Branch  string
+	WorkDir string
+	BaseSHA string
 }
 
 // RunDevelopRequest is the input to RunDevelopAgent.
@@ -109,52 +130,101 @@ const errDirtyWorktree = "DirtyWorktree"
 // develop on an existing branch rather than a fresh one.
 const errBranchExists = "BranchExists"
 
-// CreateBranch creates and checks out req.Branch at the current HEAD, returning
-// the HEAD SHA the branch starts from so a later step can confirm the agent
-// advanced it. It requires a clean working tree (no local changes).
+// CreateBranch creates the branch to develop on and returns the branch name,
+// the working directory the rest of the flow should use, and the HEAD SHA the
+// branch starts from (so a later step can confirm the agent advanced it).
 //
-// It is idempotent across Temporal retries: when req.Branch is already the
-// checked-out branch on a retry (attempt > 1, i.e. this activity already
-// switched before being retried), it skips the clean-tree check and branch
-// creation and simply reports the current HEAD. On the first attempt an
-// already-checked-out branch is instead rejected: it is indistinguishable from
-// a caller asking to develop on an existing branch, and skipping the clean-tree
-// check there would let unrelated local changes be committed by the agent.
-func (a *Activities) CreateBranch(ctx context.Context, req CreateBranchRequest) (string, error) {
+// req.Branch may be empty, in which case a random alias is generated (see
+// RandomBranchAlias); the returned CreateBranchResult.Branch reports whichever
+// name was used.
+//
+// When req.WorktreesDir is set it works in a fresh git worktree under that
+// directory (see createWorktree), leaving req.WorkDir untouched and requiring no
+// clean tree. Otherwise it creates and checks out the branch in req.WorkDir at
+// the current HEAD, which requires a clean working tree (no local changes).
+//
+// The in-place path is idempotent across Temporal retries: when an explicit
+// req.Branch is already the checked-out branch on a retry (attempt > 1, i.e.
+// this activity already switched before being retried), it skips the clean-tree
+// check and branch creation and simply reports the current HEAD. On the first
+// attempt an already-checked-out explicit branch is instead rejected: it is
+// indistinguishable from a caller asking to develop on an existing branch, and
+// skipping the clean-tree check there would let unrelated local changes be
+// committed by the agent.
+func (a *Activities) CreateBranch(ctx context.Context, req CreateBranchRequest) (CreateBranchResult, error) {
+	if req.WorktreesDir != "" {
+		return a.createWorktree(ctx, req)
+	}
+
+	// An empty request branch means "pick one for me": generate a fresh alias on
+	// every invocation so a retry after a name collision does not keep colliding.
+	branch := req.Branch
+	if branch == "" {
+		branch = RandomBranchAlias(time.Now())
+	}
+
 	current, err := a.Git.CurrentBranch(ctx, req.WorkDir)
 	if err != nil {
-		return "", fmt.Errorf("determine current branch: %w", err)
+		return CreateBranchResult{}, fmt.Errorf("determine current branch: %w", err)
 	}
-	if current == req.Branch {
+	if current == branch {
+		if req.Branch == "" {
+			// A generated alias collided with the current branch (astronomically
+			// unlikely). Fail retryably so the retry generates a different alias
+			// rather than developing on the pre-existing branch.
+			return CreateBranchResult{}, fmt.Errorf("generated branch %s is already checked out; retrying", branch)
+		}
 		if activity.GetInfo(ctx).Attempt <= 1 {
-			return "", temporal.NewNonRetryableApplicationError(
-				fmt.Sprintf("branch %s is already checked out; choose a new branch name", req.Branch),
+			return CreateBranchResult{}, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("branch %s is already checked out; choose a new branch name", branch),
 				errBranchExists, nil)
 		}
 		head, err := a.Git.Head(ctx, req.WorkDir)
 		if err != nil {
-			return "", fmt.Errorf("read HEAD: %w", err)
+			return CreateBranchResult{}, fmt.Errorf("read HEAD: %w", err)
 		}
-		return head, nil
+		return CreateBranchResult{Branch: branch, WorkDir: req.WorkDir, BaseSHA: head}, nil
 	}
 
 	dirty, err := a.Git.HasChanges(ctx, req.WorkDir)
 	if err != nil {
-		return "", fmt.Errorf("check for local changes: %w", err)
+		return CreateBranchResult{}, fmt.Errorf("check for local changes: %w", err)
 	}
 	if dirty {
-		return "", temporal.NewNonRetryableApplicationError(
+		return CreateBranchResult{}, temporal.NewNonRetryableApplicationError(
 			"working tree has local changes; commit or stash them first", errDirtyWorktree, nil)
 	}
 
-	if err := a.Git.CreateBranch(ctx, req.WorkDir, req.Branch); err != nil {
-		return "", fmt.Errorf("create branch %s: %w", req.Branch, err)
+	if err := a.Git.CreateBranch(ctx, req.WorkDir, branch); err != nil {
+		return CreateBranchResult{}, fmt.Errorf("create branch %s: %w", branch, err)
 	}
 	head, err := a.Git.Head(ctx, req.WorkDir)
 	if err != nil {
-		return "", fmt.Errorf("read HEAD: %w", err)
+		return CreateBranchResult{}, fmt.Errorf("read HEAD: %w", err)
 	}
-	return head, nil
+	return CreateBranchResult{Branch: branch, WorkDir: req.WorkDir, BaseSHA: head}, nil
+}
+
+// createWorktree handles CreateBranch's worktree mode: it creates the branch in
+// a fresh git worktree under req.WorktreesDir, leaving req.WorkDir untouched, and
+// reports that worktree as the working directory for the rest of the flow.
+// Because it never mutates WorkDir there is no clean-tree requirement. An empty
+// request branch is generated fresh on every invocation, so a retry after a
+// branch/path collision picks a new alias (and thus a new worktree path).
+func (a *Activities) createWorktree(ctx context.Context, req CreateBranchRequest) (CreateBranchResult, error) {
+	branch := req.Branch
+	if branch == "" {
+		branch = RandomBranchAlias(time.Now())
+	}
+	worktreePath := filepath.Join(req.WorktreesDir, branch)
+	if err := a.Git.AddWorktree(ctx, req.WorkDir, worktreePath, branch); err != nil {
+		return CreateBranchResult{}, fmt.Errorf("create worktree for branch %s: %w", branch, err)
+	}
+	head, err := a.Git.Head(ctx, worktreePath)
+	if err != nil {
+		return CreateBranchResult{}, fmt.Errorf("read HEAD: %w", err)
+	}
+	return CreateBranchResult{Branch: branch, WorkDir: worktreePath, BaseSHA: head}, nil
 }
 
 // RunDevelopAgent drives the Pi agent to implement the caller's prompt on the

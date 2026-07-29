@@ -266,8 +266,13 @@ const SummarizePrompt = "Summarize the work performed in this session in a few s
 type DevelopInput struct {
 	// WorkDir is the repository directory the CLI was invoked from.
 	WorkDir string
-	// Branch is the new branch to create and develop on.
+	// Branch is the new branch to create and develop on. When empty, the workflow
+	// generates a random alias (see RandomBranchAlias).
 	Branch string
+	// WorktreesDir, when non-empty, makes the workflow develop in a fresh git
+	// worktree created under this directory (at <WorktreesDir>/<branch>) instead of
+	// switching the branch in WorkDir, leaving WorkDir untouched.
+	WorktreesDir string
 	// Prompt is the caller's instruction describing what to implement.
 	Prompt string
 	// Summary, when true, runs a final activity before the workflow returns

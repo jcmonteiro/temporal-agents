@@ -377,8 +377,12 @@ func OpenPRWorkflow(ctx workflow.Context, in OpenPRInput) (result string, err er
 
 // DevelopWorkflow drives the "code develop" flow. In sequence it:
 //
-//   - Creates the requested branch off a clean working tree (CreateBranch fails
-//     when there are uncommitted local changes) and records the starting HEAD.
+//   - Creates the branch to develop on and records the starting HEAD. The branch
+//     is in.Branch, or a generated alias when that is empty. By default the
+//     branch is checked out off a clean working tree (CreateBranch fails when
+//     there are uncommitted local changes); when in.WorktreesDir is set it is
+//     instead created in a fresh worktree under that directory and the rest of
+//     the flow runs there, leaving the original WorkDir untouched.
 //   - Has the Pi agent implement the caller's prompt on that branch.
 //   - Confirms the agent advanced HEAD and left a clean working tree
 //     (EnsureDeveloped fails when nothing was committed or changes remain).
@@ -422,6 +426,13 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 		StartToCloseTimeout: 2 * time.Minute,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
 	})
+	// Branch creation gets extra attempts: an auto-generated branch alias can, very
+	// rarely, collide with an existing branch, and each retry regenerates a fresh
+	// alias, so a handful of attempts makes a collision self-healing.
+	branchCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 2 * time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 5},
+	})
 	// The agent step is long-running and streams heartbeats.
 	agentCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: time.Hour,
@@ -431,11 +442,19 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 
 	var a *Activities
 
-	var base string
-	if err := workflow.ExecuteActivity(quick, a.CreateBranch,
-		CreateBranchRequest{WorkDir: in.WorkDir, Branch: in.Branch}).Get(quick, &base); err != nil {
+	var created CreateBranchResult
+	if err := workflow.ExecuteActivity(branchCtx, a.CreateBranch,
+		CreateBranchRequest{WorkDir: in.WorkDir, Branch: in.Branch, WorktreesDir: in.WorktreesDir}).Get(branchCtx, &created); err != nil {
 		return "", err
 	}
+	// Adopt the actual branch and working directory for the rest of the flow: the
+	// branch may be a generated alias, and in worktree mode the working directory
+	// is the new worktree rather than the original WorkDir. Reassigning in's fields
+	// keeps every downstream step (and the failure notifier's WorkDir) pointed at
+	// the right place.
+	in.Branch = created.Branch
+	in.WorkDir = created.WorkDir
+	base := created.BaseSHA
 
 	var agentResult AgentResult
 	if err := workflow.ExecuteActivity(agentCtx, a.RunDevelopAgent,

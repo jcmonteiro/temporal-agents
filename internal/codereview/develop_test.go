@@ -30,7 +30,7 @@ func newDevelopEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 func TestDevelopWorkflow_HappyPath_DevelopsThenTriggersReview(t *testing.T) {
 	env := newDevelopEnv(t)
 
-	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return("base", nil)
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1", "sha2"}, nil)
 	// The review loop is triggered as a child workflow; mock it so the child
@@ -48,10 +48,60 @@ func TestDevelopWorkflow_HappyPath_DevelopsThenTriggersReview(t *testing.T) {
 	env.AssertExpectations(t)
 }
 
+func TestDevelopWorkflow_Worktree_PassesWorktreesDirAndDevelopsInReturnedWorktree(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	// In worktree mode the CLI passes a worktrees base directory; CreateBranch
+	// creates a worktree under it and reports that path as the working directory.
+	const worktree = "/cfg/worktrees/flaming-duck-2026-jul-29"
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.MatchedBy(func(req CreateBranchRequest) bool {
+		return req.WorktreesDir == "/cfg/worktrees"
+	})).Return(CreateBranchResult{Branch: "flaming-duck-2026-jul-29", WorkDir: worktree, BaseSHA: "base"}, nil)
+	// Every downstream step must run in the worktree, not the original WorkDir.
+	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.MatchedBy(func(req RunDevelopRequest) bool {
+		return req.WorkDir == worktree
+	})).Return(AgentResult{Output: "done"}, nil)
+	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.MatchedBy(func(req EnsureDevelopedRequest) bool {
+		return req.WorkDir == worktree
+	})).Return([]string{"sha1"}, nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.MatchedBy(func(in ReviewInput) bool {
+		return in.WorkDir == worktree
+	})).Return("reviewed", nil)
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", WorktreesDir: "/cfg/worktrees", Prompt: "do the thing"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	env.AssertExpectations(t)
+}
+
+func TestDevelopWorkflow_GeneratedBranch_ReportsResolvedBranchName(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	// With no explicit branch the workflow passes an empty branch to CreateBranch,
+	// which resolves it to a generated alias and reports that name back.
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.MatchedBy(func(req CreateBranchRequest) bool {
+		return req.Branch == ""
+	})).Return(CreateBranchResult{Branch: "flaming-duck-2026-jul-29", WorkDir: "/repo", BaseSHA: "base"}, nil)
+	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
+	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Prompt: "do the thing"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	var out string
+	require.NoError(t, env.GetWorkflowResult(&out))
+	// The generated branch name (not the empty input) is reported.
+	require.Contains(t, out, "flaming-duck-2026-jul-29")
+	env.AssertExpectations(t)
+}
+
 func TestDevelopWorkflow_SeedsReviewWithDevelopTokenUsageAndReportsItInResult(t *testing.T) {
 	env := newDevelopEnv(t)
 
-	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return("base", nil)
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).
 		Return(AgentResult{Output: "done", Tokens: 4200}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
@@ -75,7 +125,7 @@ func TestDevelopWorkflow_SeedsReviewWithDevelopTokenUsageAndReportsItInResult(t 
 func TestDevelopWorkflow_Complete_NotifiesReviewWillCommence(t *testing.T) {
 	env := newDevelopEnv(t)
 
-	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return("base", nil)
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
 	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
@@ -97,7 +147,7 @@ func TestDevelopWorkflow_Complete_NotifiesReviewWillCommence(t *testing.T) {
 func TestDevelopWorkflow_Summary_SetsWebhookBodyAndPropagatesToReview(t *testing.T) {
 	env := newDevelopEnv(t)
 
-	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return("base", nil)
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
 	// --summary is propagated to the review loop this workflow spawns.
@@ -121,7 +171,7 @@ func TestDevelopWorkflow_Summary_SetsWebhookBodyAndPropagatesToReview(t *testing
 func TestDevelopWorkflow_NoSummaryFlag_DoesNotSummarize(t *testing.T) {
 	env := newDevelopEnv(t)
 
-	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return("base", nil)
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
 	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
@@ -144,7 +194,7 @@ func TestDevelopWorkflow_DirtyWorktree_FailsBeforeRunningAgent(t *testing.T) {
 
 	// CreateBranch refuses to proceed on a dirty working tree.
 	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
-		Return("", temporal.NewNonRetryableApplicationError("dirty", errDirtyWorktree, nil))
+		Return(CreateBranchResult{}, temporal.NewNonRetryableApplicationError("dirty", errDirtyWorktree, nil))
 
 	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing"})
 
@@ -161,7 +211,7 @@ func TestDevelopWorkflow_Failure_SendsFailureNotification(t *testing.T) {
 	// Simulate CreateBranch failing; the specific cause is immaterial here — this
 	// test only asserts that a failure produces a notification.
 	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
-		Return("", temporal.NewNonRetryableApplicationError("dirty", errDirtyWorktree, nil))
+		Return(CreateBranchResult{}, temporal.NewNonRetryableApplicationError("dirty", errDirtyWorktree, nil))
 	var got notification.Notification
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
@@ -179,7 +229,7 @@ func TestDevelopWorkflow_Failure_SendsFailureNotification(t *testing.T) {
 func TestDevelopWorkflow_WithRemote_OrchestratesReviewOpenPRAndPilot(t *testing.T) {
 	env := newDevelopEnv(t)
 
-	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return("base", nil)
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
 	// The full remote pipeline runs as supervised children this workflow waits on.
@@ -206,7 +256,7 @@ func TestDevelopWorkflow_WithRemote_OrchestratesReviewOpenPRAndPilot(t *testing.
 func TestDevelopWorkflow_WithRemote_SeedsReviewTokensAndPropagatesSummary(t *testing.T) {
 	env := newDevelopEnv(t)
 
-	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return("base", nil)
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).
 		Return(AgentResult{Output: "done", Tokens: 4200}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
@@ -247,7 +297,7 @@ func TestDevelopWorkflow_WithRemote_SeedsReviewTokensAndPropagatesSummary(t *tes
 func TestDevelopWorkflow_WithRemote_OpenPRFailure_StopsBeforePilot(t *testing.T) {
 	env := newDevelopEnv(t)
 
-	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return("base", nil)
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
 	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
@@ -265,7 +315,7 @@ func TestDevelopWorkflow_WithRemote_OpenPRFailure_StopsBeforePilot(t *testing.T)
 func TestDevelopWorkflow_WithRemote_PipelineFailure_NotifiesPipelineNotDevelopment(t *testing.T) {
 	env := newDevelopEnv(t)
 
-	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return("base", nil)
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
 	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
@@ -294,7 +344,7 @@ func TestDevelopWorkflow_WithRemote_PipelineFailure_NotifiesPipelineNotDevelopme
 func TestDevelopWorkflow_NoCommits_FailsWithoutTriggeringReview(t *testing.T) {
 	env := newDevelopEnv(t)
 
-	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return("base", nil)
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "nothing"}, nil)
 	// The agent produced no commits: the develop pass has nothing to review.
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).
