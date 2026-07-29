@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -119,6 +120,10 @@ func parseRevList(out string) []string {
 func run(ctx context.Context, dir string, args ...string) (string, error) {
 	full := append([]string{"-C", dir}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
+	// Pin the locale to C so git emits stable, English stderr. classifyExists
+	// matches the "already exists" substring, which would silently stop matching
+	// under a localized LANG/LC_ALL and degrade the fast-fail path to opaque retry.
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
