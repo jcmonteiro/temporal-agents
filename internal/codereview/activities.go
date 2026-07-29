@@ -76,8 +76,9 @@ type RestoreStashRequest struct {
 type CreateBranchRequest struct {
 	WorkDir string
 	// Branch is the branch to create. When empty, a random alias is generated
-	// (see RandomBranchAlias), so a retry after a name collision picks a fresh
-	// one.
+	// (see RandomBranchAlias) and persisted across Temporal retries (see
+	// generatedAlias), so a retry after a non-collision failure reuses the same
+	// alias while a retry after an actual name collision picks a fresh one.
 	Branch string
 	// WorktreesDir, when non-empty, switches CreateBranch into worktree mode: it
 	// creates the branch in a fresh git worktree under this directory instead of
@@ -154,8 +155,8 @@ const errInvalidBranch = "InvalidBranch"
 // branch starts from (so a later step can confirm the agent advanced it).
 //
 // req.Branch may be empty, in which case a random alias is generated (see
-// RandomBranchAlias); the returned CreateBranchResult.Branch reports whichever
-// name was used.
+// RandomBranchAlias) and persisted across retries (see generatedAlias); the
+// returned CreateBranchResult.Branch reports whichever name was used.
 //
 // When req.WorktreesDir is set it works in a fresh git worktree under that
 // directory (see createWorktree), leaving req.WorkDir untouched and requiring no
@@ -179,11 +180,14 @@ func (a *Activities) CreateBranch(ctx context.Context, req CreateBranchRequest) 
 		return a.createWorktree(ctx, req)
 	}
 
-	// An empty request branch means "pick one for me": generate a fresh alias on
-	// every invocation so a retry after a name collision does not keep colliding.
+	// An empty request branch means "pick one for me". The alias is persisted
+	// across Temporal retries (see generatedAlias) so a retry after a
+	// non-collision failure reuses the same branch instead of orphaning it.
+	generated := req.Branch == ""
 	branch := req.Branch
-	if branch == "" {
-		branch = RandomBranchAlias(time.Now())
+	recovered := false
+	if generated {
+		branch, recovered = generatedAlias(ctx)
 	}
 
 	current, err := a.Git.CurrentBranch(ctx, req.WorkDir)
@@ -191,17 +195,21 @@ func (a *Activities) CreateBranch(ctx context.Context, req CreateBranchRequest) 
 		return CreateBranchResult{}, fmt.Errorf("determine current branch: %w", err)
 	}
 	if current == branch {
-		if req.Branch == "" {
-			// A generated alias collided with the current branch (astronomically
-			// unlikely). Fail retryably so the retry generates a different alias
-			// rather than developing on the pre-existing branch.
-			return CreateBranchResult{}, fmt.Errorf("generated branch %s is already checked out; retrying", branch)
+		if generated && !recovered {
+			// A freshly generated alias collided with the current branch
+			// (astronomically unlikely). Persist a new alias and fail retryably so the
+			// retry uses it rather than developing on the pre-existing branch.
+			replaceGeneratedAlias(ctx)
+			return CreateBranchResult{}, fmt.Errorf("generated branch %s is already checked out; retrying with a new name", branch)
 		}
-		if activity.GetInfo(ctx).Attempt <= 1 {
+		if !generated && activity.GetInfo(ctx).Attempt <= 1 {
 			return CreateBranchResult{}, temporal.NewNonRetryableApplicationError(
 				fmt.Sprintf("branch %s is already checked out; choose a new branch name", branch),
 				errBranchExists, nil)
 		}
+		// Adopt the already-checked-out branch: either an explicit branch a prior
+		// attempt already switched to, or a recovered generated alias whose branch a
+		// prior attempt created before failing. Report the current HEAD.
 		head, err := a.Git.Head(ctx, req.WorkDir)
 		if err != nil {
 			return CreateBranchResult{}, fmt.Errorf("read HEAD: %w", err)
@@ -219,11 +227,17 @@ func (a *Activities) CreateBranch(ctx context.Context, req CreateBranchRequest) 
 	}
 
 	if err := a.Git.CreateBranch(ctx, req.WorkDir, branch); err != nil {
-		// An explicit branch that already exists cannot be fixed by retrying, so
-		// fail fast with a clear message instead of burning the branch step's
-		// attempts on the same error. A generated alias keeps the retryable path:
-		// its next attempt regenerates a fresh name and can succeed.
-		if req.Branch != "" && errors.Is(err, ErrBranchOrWorktreeExists) {
+		if errors.Is(err, ErrBranchOrWorktreeExists) {
+			if generated {
+				// The generated alias collided with an existing branch ref. Persist a
+				// fresh alias and retry with it; retrying the same name can never
+				// succeed.
+				replaceGeneratedAlias(ctx)
+				return CreateBranchResult{}, fmt.Errorf("generated branch %s already exists; retrying with a new name", branch)
+			}
+			// An explicit branch that already exists cannot be fixed by retrying, so
+			// fail fast with a clear message instead of burning the branch step's
+			// attempts on the same error.
 			return CreateBranchResult{}, temporal.NewNonRetryableApplicationError(
 				fmt.Sprintf("branch %s already exists; choose a new branch name", branch),
 				errBranchExists, nil)
@@ -237,41 +251,80 @@ func (a *Activities) CreateBranch(ctx context.Context, req CreateBranchRequest) 
 	return CreateBranchResult{Branch: branch, WorkDir: req.WorkDir, BaseSHA: head}, nil
 }
 
+// generatedAlias returns the branch alias to use for a "generate one for me"
+// (empty req.Branch) invocation and persists that choice across Temporal
+// retries via heartbeat details. Recording the alias before any branch or
+// worktree is created means a retry after a non-collision failure — the later
+// Head call failing, or the whole completion being lost after the branch was
+// created — recovers the same alias and adopts the branch already created,
+// instead of generating a new name and orphaning the first branch. recovered
+// reports whether the alias came from a prior attempt (true) or was generated
+// fresh now (false); only a fresh alias that turns out to collide is replaced
+// (see replaceGeneratedAlias).
+func generatedAlias(ctx context.Context) (alias string, recovered bool) {
+	if activity.HasHeartbeatDetails(ctx) {
+		var saved string
+		if err := activity.GetHeartbeatDetails(ctx, &saved); err == nil && saved != "" {
+			return saved, true
+		}
+	}
+	alias = RandomBranchAlias(time.Now())
+	activity.RecordHeartbeat(ctx, alias)
+	return alias, false
+}
+
+// replaceGeneratedAlias persists a freshly generated alias as the retained
+// choice after a name collision, so the next retry uses the new name rather
+// than recovering the colliding one. A collision is the only failure a retry
+// cannot fix by reusing the same name, so it is the only case that replaces the
+// persisted alias.
+func replaceGeneratedAlias(ctx context.Context) {
+	activity.RecordHeartbeat(ctx, RandomBranchAlias(time.Now()))
+}
+
 // createWorktree handles CreateBranch's worktree mode: it creates the branch in
 // a fresh git worktree under req.WorktreesDir, leaving req.WorkDir untouched, and
 // reports that worktree as the working directory for the rest of the flow.
 // Because it never mutates WorkDir there is no clean-tree requirement. An empty
-// request branch is generated fresh on every invocation, so a retry after a
-// branch/path collision picks a new alias (and thus a new worktree path).
+// request branch generates an alias that is persisted across retries (see
+// generatedAlias): a retry after a non-collision failure reuses it (and thus the
+// same worktree path, which it adopts), while a retry after a branch/path
+// collision picks a new alias (and thus a new worktree path).
 //
 // It mirrors the in-place path's Temporal-retry idempotency (see planWorktree):
-// when an explicit branch's worktree already exists it is rejected on the first
-// attempt but adopted on a retry (attempt > 1), where the existing worktree is
-// the residue of an earlier attempt that added it before the activity failed.
-// Adopting on retry avoids failing permanently on git's "already exists" error
+// when a stable-named branch's worktree already exists it is rejected on the
+// first attempt but adopted on a retry (attempt > 1), where the existing
+// worktree is the residue of an earlier attempt that added it before the
+// activity failed. Adopting on retry avoids failing permanently on git's
+// "already exists" error
 // and leaving the worktree orphaned. The worktree itself is never removed by
 // this activity; see CreateBranchRequest.WorktreesDir for the (deliberate)
 // lack of automatic cleanup.
 func (a *Activities) createWorktree(ctx context.Context, req CreateBranchRequest) (CreateBranchResult, error) {
+	generated := req.Branch == ""
 	branch := req.Branch
-	if branch == "" {
-		branch = RandomBranchAlias(time.Now())
+	recovered := false
+	if generated {
+		branch, recovered = generatedAlias(ctx)
 	}
 	worktreePath := filepath.Join(req.WorktreesDir, branch)
 
-	// Only an explicit branch can be adopted or rejected on retry; a generated
-	// alias is regenerated on every invocation, so its worktree path is fresh.
-	// Probe whether a worktree for the branch already exists at the target path:
-	// CurrentBranch errors when the path is not yet a worktree, which is the
-	// normal first-attempt case.
+	// A stable name — an explicit branch, or a generated alias recovered from a
+	// prior attempt (see generatedAlias) — may already have a worktree that a
+	// prior attempt created before failing, so it can be adopted or rejected on
+	// retry. A freshly generated alias always has a brand-new path, so there is
+	// nothing to probe. Probe whether a worktree for the branch already exists at
+	// the target path: CurrentBranch errors when the path is not yet a worktree,
+	// which is the normal first-attempt case.
+	stable := !generated || recovered
 	worktreeExists := false
-	if req.Branch != "" {
+	if stable {
 		if current, err := a.Git.CurrentBranch(ctx, worktreePath); err == nil {
 			worktreeExists = current == branch
 		}
 	}
 
-	switch planWorktree(req.Branch != "", int(activity.GetInfo(ctx).Attempt), worktreeExists) {
+	switch planWorktree(stable, int(activity.GetInfo(ctx).Attempt), worktreeExists) {
 	case adoptWorktreeStep:
 		head, err := a.Git.Head(ctx, worktreePath)
 		if err != nil {
@@ -285,12 +338,16 @@ func (a *Activities) createWorktree(ctx context.Context, req CreateBranchRequest
 	}
 
 	if err := a.Git.AddWorktree(ctx, req.WorkDir, worktreePath, branch); err != nil {
-		// An explicit branch or worktree path that already exists (e.g. a stale
-		// directory, or a branch ref with no worktree — states the probe above
-		// cannot detect) cannot be fixed by retrying; fail fast rather than
-		// exhausting attempts on the same error. A generated alias stays retryable
-		// so its next attempt picks a fresh name (and thus a fresh path).
-		if req.Branch != "" && errors.Is(err, ErrBranchOrWorktreeExists) {
+		if errors.Is(err, ErrBranchOrWorktreeExists) {
+			if generated {
+				// The generated alias' branch or worktree path already exists (e.g. a
+				// stale directory, or a branch ref with no worktree — states the probe
+				// above cannot detect). Persist a fresh alias and retry with it.
+				replaceGeneratedAlias(ctx)
+				return CreateBranchResult{}, fmt.Errorf("generated branch %s or worktree path %s already exists; retrying with a new name", branch, worktreePath)
+			}
+			// An explicit branch or worktree path that already exists cannot be fixed
+			// by retrying; fail fast rather than exhausting attempts on the same error.
 			return CreateBranchResult{}, temporal.NewNonRetryableApplicationError(
 				fmt.Sprintf("branch %s or worktree path %s already exists; choose a new branch name", branch, worktreePath),
 				errBranchExists, nil)

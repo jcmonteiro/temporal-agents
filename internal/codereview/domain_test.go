@@ -152,23 +152,23 @@ func TestValidateBranchName(t *testing.T) {
 func TestPlanWorktree_MirrorsInPlaceRetryIdempotency(t *testing.T) {
 	tests := []struct {
 		name           string
-		explicitBranch bool
+		adoptable      bool
 		attempt        int
 		worktreeExists bool
 		want           worktreeStep
 	}{
-		{"explicit branch, no worktree yet, first attempt", true, 1, false, createWorktreeStep},
-		{"explicit branch, worktree exists, first attempt -> reject", true, 1, true, rejectWorktreeStep},
-		{"explicit branch, worktree exists, retry -> adopt", true, 2, true, adoptWorktreeStep},
-		{"explicit branch, no worktree, retry -> create", true, 3, false, createWorktreeStep},
-		{"generated alias never adopts even if a path exists", false, 4, true, createWorktreeStep},
-		{"generated alias, no worktree", false, 1, false, createWorktreeStep},
+		{"adoptable branch, no worktree yet, first attempt", true, 1, false, createWorktreeStep},
+		{"adoptable branch, worktree exists, first attempt -> reject", true, 1, true, rejectWorktreeStep},
+		{"adoptable branch, worktree exists, retry -> adopt", true, 2, true, adoptWorktreeStep},
+		{"adoptable branch, no worktree, retry -> create", true, 3, false, createWorktreeStep},
+		{"fresh generated alias never adopts even if a path exists", false, 4, true, createWorktreeStep},
+		{"fresh generated alias, no worktree", false, 1, false, createWorktreeStep},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := planWorktree(tt.explicitBranch, tt.attempt, tt.worktreeExists); got != tt.want {
+			if got := planWorktree(tt.adoptable, tt.attempt, tt.worktreeExists); got != tt.want {
 				t.Fatalf("planWorktree(%v, %d, %v) = %v, want %v",
-					tt.explicitBranch, tt.attempt, tt.worktreeExists, got, tt.want)
+					tt.adoptable, tt.attempt, tt.worktreeExists, got, tt.want)
 			}
 		})
 	}

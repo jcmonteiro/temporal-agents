@@ -324,22 +324,30 @@ func FormatBranchAlias(adjective, animal string, date time.Time) string {
 
 // RandomBranchAlias picks a random adjective/animal pair and combines it with
 // now's date into a branch alias. It is intentionally impure (uses the default
-// math/rand source): each call, including a CreateBranch retry after a name
-// collision, yields an independently chosen alias. The pure formatting lives in
-// FormatBranchAlias.
+// math/rand source): each call yields an independently chosen alias, so a
+// CreateBranch retry after a name collision (which regenerates via this) gets a
+// fresh name. The alias CreateBranch settles on is then persisted across retries
+// (see generatedAlias) rather than regenerated on every attempt. The pure
+// formatting lives in FormatBranchAlias.
 func RandomBranchAlias(now time.Time) string {
 	adjective := branchAdjectives[rand.Intn(len(branchAdjectives))]
 	animal := branchAnimals[rand.Intn(len(branchAnimals))]
 	return FormatBranchAlias(adjective, animal, now)
 }
 
-// ValidateBranchName rejects explicit branch names that would be unsafe once
-// they are used verbatim as a filesystem path or a git argument. In worktree
-// mode CreateBranch joins <WorktreesDir>/<branch>, so a traversing or absolute
-// name could escape the worktrees base directory; and a name beginning with
-// "-" can be mistaken for a flag by git's argument parsing. An empty name is
-// allowed and means "generate an alias" (see RandomBranchAlias); it never
-// reaches git or the filesystem verbatim.
+// ValidateBranchName rejects explicit branch names that are unsafe to use
+// verbatim as a filesystem path or a git argument, and names git itself would
+// refuse. In worktree mode CreateBranch joins <WorktreesDir>/<branch>, so a
+// traversing or absolute name could escape the worktrees base directory; and a
+// name beginning with "-" can be mistaken for a flag by git's argument parsing.
+// Beyond those, the value must satisfy git's own branch-name contract (the same
+// rules `git check-ref-format --branch` enforces): otherwise a malformed name
+// like "feature name", "topic~1", "foo@{bar", or "name.lock" would pass here only
+// for git to reject it, and the activity would retry that permanent error until
+// its attempts are exhausted. Validating it up front fails such names
+// immediately (as InvalidBranch). An empty name is allowed and means "generate
+// an alias" (see RandomBranchAlias); it never reaches git or the filesystem
+// verbatim.
 func ValidateBranchName(branch string) error {
 	if branch == "" {
 		return nil
@@ -415,22 +423,23 @@ const (
 	// adoptWorktreeStep means a prior attempt already created the worktree
 	// (attempt > 1); reuse it rather than failing on git's "already exists" error.
 	adoptWorktreeStep
-	// rejectWorktreeStep means an explicit branch's worktree already exists on the
-	// first attempt, i.e. the caller asked to develop on a branch that is already
-	// checked out somewhere; reject it (mirrors the in-place BranchExists guard).
+	// rejectWorktreeStep means a stable-named branch's worktree already exists on
+	// the first attempt, i.e. the caller asked to develop on a branch that is
+	// already checked out somewhere; reject it (mirrors the in-place BranchExists
+	// guard).
 	rejectWorktreeStep
 )
 
 // planWorktree decides how createWorktree should handle a requested branch
 // worktree. It mirrors CreateBranch's in-place idempotency for the worktree
-// path: an explicit branch whose worktree already exists is rejected on the
-// first attempt (indistinguishable from asking to develop on a pre-existing
-// branch) but adopted on a Temporal retry (attempt > 1), where the existing
-// worktree is the residue of an earlier attempt that created it before failing.
-// A generated alias (explicitBranch false) is regenerated on every invocation,
-// so it never adopts and always creates.
-func planWorktree(explicitBranch bool, attempt int, worktreeExists bool) worktreeStep {
-	if !explicitBranch || !worktreeExists {
+// path. adoptable is true for a name that is stable across retries — an
+// explicit branch, or a generated alias recovered from a prior attempt — so its
+// worktree may be the residue of an earlier attempt: it is rejected on the first
+// attempt (indistinguishable from asking to develop on a pre-existing branch)
+// but adopted on a Temporal retry (attempt > 1). A freshly generated alias
+// (adoptable false) has a brand-new path, so it never adopts and always creates.
+func planWorktree(adoptable bool, attempt int, worktreeExists bool) worktreeStep {
+	if !adoptable || !worktreeExists {
 		return createWorktreeStep
 	}
 	if attempt > 1 {

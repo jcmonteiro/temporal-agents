@@ -427,8 +427,10 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
 	})
 	// Branch creation gets extra attempts: an auto-generated branch alias can, very
-	// rarely, collide with an existing branch, and each retry regenerates a fresh
-	// alias, so a handful of attempts makes a collision self-healing.
+	// rarely, collide with an existing branch, and a retry after a collision
+	// regenerates a fresh alias, so a handful of attempts makes a collision
+	// self-healing. (A retry after a non-collision failure instead reuses the
+	// persisted alias; see generatedAlias.)
 	branchCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 2 * time.Minute,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 5},
