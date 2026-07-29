@@ -32,6 +32,10 @@ type PullRequests interface {
 	// FindOpen locates the single open PR whose head is branch in the repo at
 	// dir. It returns an error when there is no open PR or more than one.
 	FindOpen(ctx context.Context, dir, branch string) (PullRequest, error)
+	// EnsureOpen returns the open PR whose head is branch, creating it when none
+	// exists yet. It is idempotent: an already-open PR is returned unchanged
+	// rather than opening a duplicate.
+	EnsureOpen(ctx context.Context, dir, branch string) (PullRequest, error)
 	// ReviewOngoing reports whether a requested Copilot review is still pending
 	// (i.e. requested but not yet delivered).
 	ReviewOngoing(ctx context.Context, pr PullRequest) (bool, error)

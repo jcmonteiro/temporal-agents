@@ -379,7 +379,7 @@ func TestPilotWorkflow_Chain_DoesNotSendFailureNotification(t *testing.T) {
 	env.AssertNotCalled(t, activityName(na.Notify), mock.Anything, mock.Anything)
 }
 
-func TestPilotWorkflow_Summary_SetsWebhookBodyFromLastRunSummaryOnSuccess(t *testing.T) {
+func TestPilotWorkflow_Summary_SetsWebhookBodyOnAddressingPassBeforeChaining(t *testing.T) {
 	env := newEnv(t)
 	pr := PullRequest{Number: 7, URL: "https://github.com/acme/widgets/pull/7"}
 	threads := []ReviewThread{{ID: "t1", Body: "fix"}}
@@ -400,13 +400,19 @@ func TestPilotWorkflow_Summary_SetsWebhookBodyFromLastRunSummaryOnSuccess(t *tes
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { got = args.Get(1).(notification.Notification) }).Return(nil)
 
-	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Summary: true})
+	// Chain: true is the only production shape (every caller sets it). On that
+	// path a pass that addresses comments continues as new, so the summary must be
+	// delivered on the addressing pass rather than at a terminal step that never
+	// summarizes.
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Chain: true, Summary: true})
 
 	require.True(t, env.IsWorkflowCompleted())
-	require.NoError(t, env.GetWorkflowError())
-	// The agent ran (comments were addressed), so its session is summarized and
-	// delivered to the webhook only: it is the WebhookBody, while the plain Body
-	// (used by other channels) keeps the completion text.
+	// The pass addressed comments, so the loop continues as new.
+	var canErr *workflow.ContinueAsNewError
+	require.ErrorAs(t, env.GetWorkflowError(), &canErr)
+	// Even though it continues as new, --summary makes the addressing pass emit a
+	// webhook body summarizing the agent's work: it is the WebhookBody, while the
+	// plain Body (used by other channels) keeps the pass text.
 	require.Equal(t, "short summary for webhook", got.WebhookBody)
 	require.Contains(t, got.Body, "PR #7")
 }
@@ -464,7 +470,7 @@ func TestPilotWorkflow_Summary_SetsWebhookBodyOnFailureAfterAgentRan(t *testing.
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { got = args.Get(1).(notification.Notification) }).Return(nil)
 
-	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Summary: true})
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Chain: true, Summary: true})
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.Error(t, env.GetWorkflowError())
@@ -487,7 +493,10 @@ func TestPilotWorkflow_Summary_NoAgentRan_DoesNotSummarizeOnCompletion(t *testin
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { got = args.Get(1).(notification.Notification) }).Return(nil)
 
-	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Summary: true})
+	// No comments means addressed is false, so even on the always-chained
+	// production path this reaches the terminal completion (no continue-as-new)
+	// with no agent having run—nothing to summarize.
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Chain: true, Summary: true})
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
@@ -507,7 +516,7 @@ func TestPilotWorkflow_Summary_NoAgentRan_DoesNotSummarizeOnFailure(t *testing.T
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { got = args.Get(1).(notification.Notification) }).Return(nil)
 
-	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Summary: true})
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Chain: true, Summary: true})
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.Error(t, env.GetWorkflowError())

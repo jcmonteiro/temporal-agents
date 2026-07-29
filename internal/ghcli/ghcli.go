@@ -5,6 +5,7 @@ package ghcli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -41,6 +42,40 @@ func (h GitHub) FindOpen(ctx context.Context, dir, branch string) (codereview.Pu
 		return codereview.PullRequest{}, err
 	}
 	return selectOpenPR(prs, branch)
+}
+
+// EnsureOpen returns the open PR whose head is branch, creating it when none
+// exists yet. It first tries to locate an existing open PR (returning it
+// unchanged so the operation is idempotent). Only when FindOpen reports the
+// specific "no open PR" case (errNoOpenPR) does it create one with
+// `gh pr create --fill`, then locate the freshly opened PR. If create itself
+// fails — the expected outcome when a retried or concurrent run already opened
+// the PR (`gh pr create` reports "a pull request already exists") — it re-runs
+// FindOpen and returns any PR now present before surfacing the create error, so
+// the method stays idempotent under Temporal's at-least-once execution. Any
+// other FindOpen failure — more than one open PR, or a transient/auth `gh`
+// error — is returned as-is rather than masked by a spurious create attempt.
+func (h GitHub) EnsureOpen(ctx context.Context, dir, branch string) (codereview.PullRequest, error) {
+	pr, err := h.FindOpen(ctx, dir, branch)
+	if err == nil {
+		return pr, nil
+	}
+	if !errors.Is(err, errNoOpenPR) {
+		return codereview.PullRequest{}, err
+	}
+	if _, err := runDir(ctx, dir, "pr", "create", "--head", branch, "--fill"); err != nil {
+		// Create is not idempotent under Temporal's at-least-once activity
+		// execution: if a prior attempt created the PR but its result was lost, or
+		// two runs race after both observed no open PR, `gh pr create` fails with
+		// "a pull request already exists". Re-check for an open PR and return it
+		// before surfacing the create error, so a retry/concurrent creator converges
+		// on the existing PR instead of failing.
+		if pr, findErr := h.FindOpen(ctx, dir, branch); findErr == nil {
+			return pr, nil
+		}
+		return codereview.PullRequest{}, err
+	}
+	return h.FindOpen(ctx, dir, branch)
 }
 
 // baseRepo returns the owner and name of the repository in dir.

@@ -44,8 +44,12 @@ type PilotInput struct {
 	PromptMode PromptMode
 	// PromptText is the caller-supplied prompt text for append/replace modes.
 	PromptText string
-	// Chain, when true, spawns a delayed child run after a successful pass so
-	// the loop keeps addressing new review feedback indefinitely.
+	// Chain, when true, continues the loop as new after a successful pass that
+	// addressed comments so it keeps folding in new review feedback until a
+	// pass finds nothing left to address. Every caller enables it: the pilot
+	// loop always chains (the standalone `code pilot` command and the pilot
+	// stage of `develop --with-remote` both set it), so a pass that addresses
+	// comments always loops rather than stopping after one pass.
 	Chain bool
 	// TokensSoFar carries the accumulated total token usage from prior passes of
 	// a chained run, so the terminal result reports the whole chain's usage.
@@ -174,6 +178,16 @@ func withTokenTotal(summary string, total int) string {
 	return summary + "\n\n" + FormatTokenTotal(total)
 }
 
+// withDevelopStepTokens appends a develop-step-scoped token-usage line to a
+// summary. It is used by the supervised `develop --with-remote` terminal summary,
+// where the review and pilot children run in their own sessions and report their
+// own totals separately; no single figure the parent holds covers all sessions,
+// so "across all sessions" wording would over-claim.
+func withDevelopStepTokens(summary string, total int) string {
+	return summary + "\n\nDevelop step token usage: " + groupThousands(total) +
+		" tokens. The review and pilot stages report their own token totals separately."
+}
+
 // groupThousands formats n with comma thousands separators (1234567 ->
 // "1,234,567").
 func groupThousands(n int) string {
@@ -258,6 +272,18 @@ type DevelopInput struct {
 	// that summary as the webhook notification's body (only the webhook). It is
 	// also propagated to the review loop this workflow spawns.
 	Summary bool
+	// WithRemote, when true, extends the flow past the local review loop onto
+	// GitHub: after development and review converge, this workflow supervises an
+	// open-PR-and-Copilot-request stage and then the pilot loop, waiting for each
+	// to complete before returning. When false the workflow keeps its original
+	// behavior: it starts the review loop as an abandoned child and returns.
+	WithRemote bool
+}
+
+// OpenPRInput is the input to OpenPRWorkflow.
+type OpenPRInput struct {
+	// WorkDir is the repository directory the CLI was invoked from.
+	WorkDir string
 }
 
 // BuildDevelopPrompt renders the instruction that has the Pi agent implement

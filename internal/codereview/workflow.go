@@ -142,6 +142,17 @@ func notifyFailure(ctx workflow.Context, title, workDir string, summaryEnabled, 
 // found no unresolved comments ends the chain instead of looping forever. This
 // mirrors PromptWorkflow: continue-as-new restarts the run with a fresh,
 // bounded event history under the same workflow ID.
+//
+// When chaining (the develop --with-remote pipeline always sets Chain; a
+// standalone `code pilot` opts in with --chain), the only terminal step is the
+// no-comments pass, where no agent ran and there is nothing to summarize. A
+// chained pilot's meaningful work therefore lives entirely in the passes that
+// address comments and then continue as new, so when in.Summary is set each
+// addressing pass summarizes its own Pi session and delivers that summary
+// (webhook body) before continuing—otherwise --summary would produce no webhook
+// body at all on the chained path. Without chaining the workflow runs a single
+// pass and, when in.Summary is set, that one pass is summarized in the terminal
+// completion notification below.
 func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err error) {
 	// Notify best-effort when the pilot loop fails. Continue-as-new is a control
 	// signal (chained passes), not a failure, so NotifyFailureBestEffort excludes
@@ -160,18 +171,53 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 	// Fold this pass's usage into the running total carried across chained runs.
 	total := in.TokensSoFar + tokens
 	if in.Chain && addressed {
-		next := in
-		next.TokensSoFar = total
-		// Preserve this addressed pass's webhook summary across continue-as-new.
-		// The terminal no-comments pass runs no agent and lands under a new RunID,
-		// so it cannot summarize the real work itself; summarize now, while this
-		// pass's Pi session is still live, and carry the durable text forward. Only
+		// This pass addressed comments, so the loop continues as new and never
+		// reaches the terminal notifyComplete below. Continue-as-new is normally a
+		// silent control signal, but --summary explicitly asks for a webhook summary
+		// of the agent's work, and on the always-chained production path every
+		// meaningful pass is one that addressed comments and chains. So when
+		// --summary is set, summarize this pass's Pi session and deliver it as the
+		// webhook-only body before continuing. The summary runs synchronously here
+		// because continue-as-new cancels any in-flight activity; without --summary
+		// the chain stays silent exactly as before.
+		//
+		// This notify-and-summarize sequence was added after the chained path
+		// already shipped, when the addressing pass emitted only the continue-as-new
+		// command. Gate it behind a workflow version so histories recorded before it
+		// replay their original command order: without the gate, replaying an
+		// in-flight chained --summary pass after deploying this code would insert
+		// notification and summary activity commands the recorded history lacks and
+		// fail nondeterministically. GetVersion is evaluated whenever this branch is
+		// reached (not just under --summary) so the version marker is recorded
+		// consistently for every chained addressing pass.
+		summarizeBeforeChain := workflow.GetVersion(
+			ctx, "pilot-summarize-before-continue-as-new", workflow.DefaultVersion, 1) == 1
+		// Summarize this addressed pass once, while its Pi session is still live, and
+		// reuse the durable text for both the pre-chain notification and the summary
+		// carried across continue-as-new. summarizeForWebhook returns "" without
+		// running an activity when --summary is off, so this is a no-op there.
+		//
+		// The terminal no-comments pass runs no agent and lands under a new RunID, so
+		// it cannot summarize the real work itself; summarizing now and carrying the
+		// text forward is what lets the terminal notification report this pass. Only
 		// the last addressed pass's summary survives to the terminal notification;
 		// with --chain --summary this means one (billable) summary run per addressed
 		// pass, all but the last discarded — the cost of the opt-in flag combination.
-		if next.ChainSummary, err = summarizeForWebhook(ctx, in.Summary, agentRan, in.WorkDir, completeSummaryTimeout); err != nil {
+		var webhookBody string
+		if webhookBody, err = summarizeForWebhook(ctx, in.Summary, agentRan, in.WorkDir, completeSummaryTimeout); err != nil {
 			return "", err
 		}
+		if in.Summary && summarizeBeforeChain {
+			wfnotify.NotifyBestEffort(ctx, notification.Notification{
+				Title:       "Copilot review pass complete",
+				Body:        summary,
+				URL:         prURL,
+				WebhookBody: webhookBody,
+			})
+		}
+		next := in
+		next.TokensSoFar = total
+		next.ChainSummary = webhookBody
 		return "", workflow.NewContinueAsNewError(ctx, PilotWorkflow, next)
 	}
 	summary = withTokenTotal(summary, total)
@@ -290,6 +336,45 @@ func runPilotOnce(ctx workflow.Context, in PilotInput, agentRan *bool) (string, 
 		len(loaded.Threads), pr.Number, len(commits)), true, agentResult.Tokens, pr.URL, nil
 }
 
+// OpenPRWorkflow publishes the current branch, ensures an open pull request
+// exists for it, and requests a fresh Copilot review. Both steps are
+// idempotent, so re-running over an already-published branch or an already-open
+// PR simply succeeds. It is used as a supervised stage of the
+// `develop --with-remote` pipeline but is a standalone workflow in its own
+// right.
+func OpenPRWorkflow(ctx workflow.Context, in OpenPRInput) (result string, err error) {
+	// No agent runs here, so there is never a Pi session to summarize; pass
+	// summaryEnabled/agentRan false so the notification simply carries the plain
+	// body.
+	defer func() { notifyFailure(ctx, "Opening the pull request failed", in.WorkDir, false, false, err) }()
+
+	// Quick, deterministic git/GitHub steps. Idempotent enough to retry, but
+	// should not run forever.
+	quick := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 2 * time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
+	})
+
+	var a *Activities
+
+	var pr PullRequest
+	if err := workflow.ExecuteActivity(quick, a.OpenPR, in).Get(quick, &pr); err != nil {
+		return "", err
+	}
+	if err := workflow.ExecuteActivity(quick, a.RequestCopilotReview, pr).Get(quick, nil); err != nil {
+		return "", err
+	}
+
+	// OpenPR is idempotent: it returns an already-open PR unchanged rather than
+	// creating one, so a supported retry/re-run reaches here without necessarily
+	// having opened anything. Use outcome-neutral wording that holds whether the PR
+	// was just created or already existed.
+	summary := fmt.Sprintf("PR #%d is open and a Copilot review was requested.", pr.Number)
+	notifyComplete(ctx, false, false, in.WorkDir, notification.Notification{
+		Title: "Pull request ready", Body: summary, URL: pr.URL}, "")
+	return summary, nil
+}
+
 // DevelopWorkflow drives the "code develop" flow. In sequence it:
 //
 //   - Creates the requested branch off a clean working tree (CreateBranch fails
@@ -297,18 +382,39 @@ func runPilotOnce(ctx workflow.Context, in PilotInput, agentRan *bool) (string, 
 //   - Has the Pi agent implement the caller's prompt on that branch.
 //   - Confirms the agent advanced HEAD and left a clean working tree
 //     (EnsureDeveloped fails when nothing was committed or changes remain).
-//   - Triggers the local review loop (ReviewWorkflow) on the new branch as an
-//     abandoned child, so it keeps running—and notifies on completion—after
-//     this workflow returns, exactly like a standalone "code review" run.
 //
-// It returns once the review has been started, reporting the review workflow's
-// ID so the caller can watch it.
+// What happens next depends on in.WithRemote:
+//
+//   - When false (the default), it triggers the local review loop
+//     (ReviewWorkflow) on the new branch as an abandoned child, so it keeps
+//     running—and notifies on completion—after this workflow returns, exactly
+//     like a standalone "code review" run. It returns once the review has been
+//     started, reporting the review workflow's ID so the caller can watch it.
+//   - When true, it instead supervises the full remote pipeline as a sequence
+//     of waited-on children: the review loop, then OpenPRWorkflow (open the PR
+//     and request Copilot), then the pilot loop. Each child still continues as
+//     new internally, but a parent's child future resolves only when the whole
+//     continue-as-new chain converges, so this workflow stays alive and
+//     oversees the pipeline end to end, returning only once the pilot loop has
+//     finished folding in Copilot feedback.
 func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err error) {
 	// Notify best-effort when development fails before the review loop is started.
 	// agentRan gates summarizing the last run: a failure before the develop agent
 	// runs has no Pi session to resume.
+	//
+	// remoteOwned is set once development has landed and ownership passes to the
+	// supervised remote pipeline (developWithRemote). From that point a child
+	// failure is a pipeline failure, not a development failure: developWithRemote
+	// emits its own stage-specific failure notification, so this defer stands down
+	// to avoid a second, misleading "Development failed" heads-up.
 	var agentRan bool
-	defer func() { notifyFailure(ctx, "Development failed", in.WorkDir, in.Summary, agentRan, err) }()
+	var remoteOwned bool
+	defer func() {
+		if remoteOwned {
+			return
+		}
+		notifyFailure(ctx, "Development failed", in.WorkDir, in.Summary, agentRan, err)
+	}()
 
 	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
 	// should not run forever.
@@ -357,6 +463,11 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 		return "", err
 	}
 
+	if in.WithRemote {
+		remoteOwned = true
+		return developWithRemote(ctx, in, commits, agentResult.Tokens, webhookBody)
+	}
+
 	// Trigger the review loop as an abandoned child so it outlives this workflow.
 	reviewID := "review-" + workflow.GetInfo(ctx).WorkflowExecution.ID
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
@@ -386,6 +497,96 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 		Body: fmt.Sprintf("Developed branch %s with %d commit(s) successfully. The review cycle will now commence.",
 			in.Branch, len(commits)),
 		WebhookBody: webhookBody,
+	})
+	return summary, nil
+}
+
+// developWithRemote runs the `develop --with-remote` tail: after development has
+// landed its commits, it supervises the remote pipeline as a sequence of
+// waited-on children—the local review loop, then OpenPRWorkflow (open the PR
+// and request Copilot), then the pilot loop—returning only once the pilot loop
+// has finished. Each child continues as new internally; a parent's child future
+// resolves only when the whole continue-as-new chain converges, so waiting on
+// each in turn keeps this workflow alive and overseeing the pipeline end to end
+// rather than continuing as new itself.
+//
+// The children are supervised (not abandoned) so this workflow stays their
+// parent for the pipeline's lifetime. Each still emits its own completion
+// notification. This workflow emits two of its own: a "Development complete"
+// notification up front (carrying the develop step's --summary webhook body,
+// since that summary describes the develop step and would be stale by the time
+// the pipeline converges) and a final "Remote pipeline complete" once the whole
+// pipeline has converged (with no summary body, so the terminal notification is
+// not misattributed the oldest, develop-only summary).
+func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, tokens int, webhookBody string) (result string, err error) {
+	// Development has already landed, so a failure here belongs to the remote
+	// pipeline, not the develop step. Emit a pipeline-specific failure heads-up (the
+	// parent DevelopWorkflow defer stands down for the remote path). summaryEnabled
+	// and agentRan are false: the develop summary was already delivered up front, and
+	// the review/pilot children summarize their own sessions, so this terminal
+	// notification carries only the plain failure body.
+	defer func() { notifyFailure(ctx, "Remote pipeline failed", in.WorkDir, false, false, err) }()
+
+	id := workflow.GetInfo(ctx).WorkflowExecution.ID
+
+	// Deliver the develop-completion notification now, before the pipeline spawns.
+	// webhookBody summarizes *this develop step*, computed against the quiescent
+	// tree in DevelopWorkflow; attaching it here (rather than to the terminal
+	// pipeline notification below) keeps the summary matched to the step it
+	// describes. The review and pilot children emit their own, fresher summaries as
+	// they complete.
+	wfnotify.NotifyBestEffort(ctx, notification.Notification{
+		Title: "Development complete",
+		Body: fmt.Sprintf("Developed branch %s with %d commit(s) successfully. The review, pull request, and Copilot pilot stages will now commence.",
+			in.Branch, len(commits)),
+		WebhookBody: webhookBody,
+	})
+
+	// The local review loop. Seed it with this develop session's token usage so
+	// its own result reports the whole tree's usage, and propagate --summary so it
+	// summarizes its own run for its completion webhook. Combined with the develop
+	// summary attached above and the pilot summaries below, a single
+	// `develop --with-remote --summary` therefore triggers at least three
+	// independent, billable summary runs (develop, review, and one per pilot pass
+	// that addresses comments)—at least one more than the non-remote path's two
+	// (develop plus review). The pilot summarizes on every addressing pass, so a
+	// pilot loop that iterates N times bills N pilot summaries, not one.
+	reviewCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "review-" + id})
+	if err := workflow.ExecuteChildWorkflow(reviewCtx, ReviewWorkflow,
+		ReviewInput{WorkDir: in.WorkDir, TokensSoFar: tokens, Summary: in.Summary}).Get(ctx, nil); err != nil {
+		return "", fmt.Errorf("review workflow: %w", err)
+	}
+
+	// Open the PR and request a Copilot review.
+	openCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "open-pr-" + id})
+	if err := workflow.ExecuteChildWorkflow(openCtx, OpenPRWorkflow,
+		OpenPRInput{WorkDir: in.WorkDir}).Get(ctx, nil); err != nil {
+		return "", fmt.Errorf("open PR workflow: %w", err)
+	}
+
+	// The pilot loop. It always chains (Chain: true), so waiting on it here blocks
+	// until a pass finds no unresolved comments left to address and the loop
+	// converges.
+	pilotCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "pilot-" + id})
+	if err := workflow.ExecuteChildWorkflow(pilotCtx, PilotWorkflow,
+		PilotInput{WorkDir: in.WorkDir, Chain: true, Summary: in.Summary}).Get(ctx, nil); err != nil {
+		return "", fmt.Errorf("pilot workflow: %w", err)
+	}
+
+	// Report only the develop step's own token usage: the review and pilot children
+	// run in their own sessions (their results are discarded via .Get(ctx, nil)) and
+	// emit their own totals, so a "across all sessions" figure computed from develop
+	// tokens alone would under-report and mislead.
+	summary := withDevelopStepTokens(fmt.Sprintf(
+		"Developed branch %s with %d commit(s); ran the review loop, opened the PR, and completed the Copilot pilot loop.",
+		in.Branch, len(commits)), tokens)
+	// The terminal pipeline notification carries no summary body: the develop
+	// summary was delivered up front with the develop-completion notification, and
+	// the review and pilot children have since emitted their own fresher summaries.
+	wfnotify.NotifyBestEffort(ctx, notification.Notification{
+		Title: "Remote pipeline complete",
+		Body: fmt.Sprintf("Developed branch %s with %d commit(s); the review, pull request, and Copilot pilot stages have all completed.",
+			in.Branch, len(commits)),
 	})
 	return summary, nil
 }

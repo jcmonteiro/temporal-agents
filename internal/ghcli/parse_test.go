@@ -1,6 +1,9 @@
 package ghcli
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestParseRepo(t *testing.T) {
 	owner, repo, err := parseRepo([]byte(`{"owner":{"login":"acme"},"name":"widgets"}`))
@@ -34,16 +37,28 @@ func TestSelectOpenPR(t *testing.T) {
 		}
 	})
 
-	t.Run("none is an error", func(t *testing.T) {
-		if _, err := selectOpenPR(nil, "feat"); err == nil {
+	// The none case reports the errNoOpenPR sentinel so EnsureOpen can safely
+	// distinguish it (create a PR) from every other failure (surface as-is).
+	t.Run("none is the errNoOpenPR sentinel", func(t *testing.T) {
+		_, err := selectOpenPR(nil, "feat")
+		if err == nil {
 			t.Fatal("expected error for no open PR")
+		}
+		if !errors.Is(err, errNoOpenPR) {
+			t.Fatalf("expected errNoOpenPR, got %v", err)
 		}
 	})
 
-	t.Run("multiple is an error", func(t *testing.T) {
+	// A multi-PR branch is a distinct failure: it must NOT match errNoOpenPR, so
+	// EnsureOpen surfaces it instead of attempting a spurious create.
+	t.Run("multiple is a non-sentinel error", func(t *testing.T) {
 		many, _ := parsePRList([]byte(`[{"number":7},{"number":8}]`), "acme", "widgets")
-		if _, err := selectOpenPR(many, "feat"); err == nil {
+		_, err := selectOpenPR(many, "feat")
+		if err == nil {
 			t.Fatal("expected error for multiple open PRs")
+		}
+		if errors.Is(err, errNoOpenPR) {
+			t.Fatalf("multiple-PR error must not match errNoOpenPR, got %v", err)
 		}
 	})
 }

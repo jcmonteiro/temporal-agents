@@ -2,12 +2,19 @@ package ghcli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"temporal-agents/internal/codereview"
 )
+
+// errNoOpenPR is the sentinel returned when a branch has no open PR. It lets
+// EnsureOpen distinguish the genuine "none exists yet" case (where creating one
+// is correct) from other FindOpen failures such as more-than-one open PR or a
+// transient/auth `gh` error (where creating one would be spurious).
+var errNoOpenPR = errors.New("no open pull request found for branch")
 
 // parseRepo extracts owner and name from `gh repo view --json owner,name`.
 func parseRepo(data []byte) (owner, repo string, err error) {
@@ -52,11 +59,12 @@ func parsePRList(data []byte, owner, repo string) ([]codereview.PullRequest, err
 	return prs, nil
 }
 
-// selectOpenPR enforces exactly one open PR for the branch.
+// selectOpenPR enforces exactly one open PR for the branch. When none exist it
+// returns errNoOpenPR (wrapped) so callers can react specifically to that case.
 func selectOpenPR(prs []codereview.PullRequest, branch string) (codereview.PullRequest, error) {
 	switch len(prs) {
 	case 0:
-		return codereview.PullRequest{}, fmt.Errorf("no open pull request found for branch %q", branch)
+		return codereview.PullRequest{}, fmt.Errorf("%w %q", errNoOpenPR, branch)
 	case 1:
 		return prs[0], nil
 	default:
