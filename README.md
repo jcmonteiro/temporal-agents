@@ -1,6 +1,6 @@
 # temporal-agents
 
-A thin [Temporal](https://temporal.io) worker that runs a Pi coding agent. Kick off one-off prompts, schedule recurring runs, or drive full code workflows (develop → review → PR) against the current repo — all durable and observable via Temporal.
+A thin [Temporal](https://temporal.io) worker that runs a [Pi](https://pi.dev/) coding agent. Kick off one-off prompts, schedule recurring runs, or drive full code workflows (develop → review → PR → review w/ Copilot) against the current repo — all durable and observable via Temporal.
 
 ## Requirements
 
