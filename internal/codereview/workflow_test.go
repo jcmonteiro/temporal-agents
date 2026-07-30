@@ -298,7 +298,7 @@ func TestPilotWorkflow_ChainSummary_CarriesSummaryForwardOnAddressingPass(t *tes
 	require.True(t, env.IsWorkflowCompleted())
 	var canErr *workflow.ContinueAsNewError
 	require.ErrorAs(t, env.GetWorkflowError(), &canErr)
-	// With --chain --summary, an addressing pass summarizes its own (live) Pi
+	// When chaining with --summary, an addressing pass summarizes its own (live) Pi
 	// session and carries the text forward so the later no-comments pass, which
 	// runs no agent under a fresh RunID, can still attach it.
 	var next PilotInput
@@ -400,10 +400,9 @@ func TestPilotWorkflow_Summary_SetsWebhookBodyOnAddressingPassBeforeChaining(t *
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { got = args.Get(1).(notification.Notification) }).Return(nil)
 
-	// Chain: true is the only production shape (every caller sets it). On that
-	// path a pass that addresses comments continues as new, so the summary must be
-	// delivered on the addressing pass rather than at a terminal step that never
-	// summarizes.
+	// The chained path (Chain: true) is what this test exercises: a pass that
+	// addresses comments continues as new, so the summary must be delivered on the
+	// addressing pass rather than at a terminal step that never summarizes.
 	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo", Chain: true, Summary: true})
 
 	require.True(t, env.IsWorkflowCompleted())

@@ -26,13 +26,13 @@ func TestParsePilotFlags_Summary(t *testing.T) {
 }
 
 func TestParsePilotFlags_Chain(t *testing.T) {
-	if _, _, chain, _ := parsePilotFlags([]string{"--chain"}); !chain {
-		t.Fatal("--chain should set chain = true")
+	if _, _, chain, _ := parsePilotFlags([]string{"--no-chain"}); chain {
+		t.Fatal("--no-chain should set chain = false")
 	}
 
-	// Chain is opt-in: a standalone pilot defaults to a single pass.
-	if _, _, chain, _ := parsePilotFlags(nil); chain {
-		t.Fatal("chain should default to false")
+	// Chaining is the default: a standalone pilot loops unless --no-chain is given.
+	if _, _, chain, _ := parsePilotFlags(nil); !chain {
+		t.Fatal("chain should default to true")
 	}
 }
 
