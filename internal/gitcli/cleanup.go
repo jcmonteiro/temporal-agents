@@ -13,11 +13,16 @@ import (
 )
 
 // List returns the worktrees under baseDir that belong to the repository at
-// repoDir. It parses `git worktree list --porcelain` and keeps only the entries
-// whose path lives under baseDir, i.e. the ones temporal-agents created with
-// `code develop --worktree`. It implements the cleanup.Git port.
+// repoDir. It parses `git worktree list --porcelain -z` and keeps only the
+// entries whose path lives under baseDir, i.e. the ones temporal-agents created
+// with `code develop --worktree`. It implements the cleanup.Git port.
+//
+// The -z flag is required: without it git C-quotes pathnames containing unusual
+// bytes (non-ASCII, spaces, control chars), which a non-ASCII user/config path
+// triggers, so the parsed path would carry quotes and escapes and underDir
+// would wrongly reject a genuine worktree. -z emits paths verbatim.
 func (g Git) List(ctx context.Context, repoDir, baseDir string) ([]cleanup.Worktree, error) {
-	out, err := run(ctx, repoDir, "worktree", "list", "--porcelain")
+	out, err := run(ctx, repoDir, "worktree", "list", "--porcelain", "-z")
 	if err != nil {
 		return nil, err
 	}
@@ -83,10 +88,13 @@ func (g Git) Remove(ctx context.Context, repoDir string, wt cleanup.Worktree, fo
 	return nil
 }
 
-// parseWorktrees extracts the worktrees under baseDir from the porcelain output
-// of `git worktree list`. Each record is a blank-line-separated block whose
-// first line is "worktree <path>" and whose branch line is "branch
+// parseWorktrees extracts the worktrees under baseDir from the NUL-delimited
+// porcelain output of `git worktree list --porcelain -z`. Each attribute is
+// terminated by a NUL and records are separated by an extra NUL; a record's
+// first attribute is "worktree <path>" and its branch attribute is "branch
 // refs/heads/<name>" (detached or bare entries have no branch and are skipped).
+// Parsing the NUL stream keeps paths verbatim so pathnames with unusual bytes
+// are not C-quoted.
 //
 // This is not a pure function: the underDir filter resolves symlinks via
 // filepath.EvalSymlinks, so it reads the filesystem. Paths that do not exist on
@@ -100,14 +108,14 @@ func parseWorktrees(out, baseDir string) []cleanup.Worktree {
 		}
 		path, branch = "", ""
 	}
-	for _, line := range strings.Split(out, "\n") {
+	for _, field := range strings.Split(out, "\x00") {
 		switch {
-		case strings.HasPrefix(line, "worktree "):
-			// A new block begins; commit the previous one first.
+		case strings.HasPrefix(field, "worktree "):
+			// A new record begins; commit the previous one first.
 			flush()
-			path = strings.TrimPrefix(line, "worktree ")
-		case strings.HasPrefix(line, "branch "):
-			branch = strings.TrimPrefix(strings.TrimPrefix(line, "branch "), "refs/heads/")
+			path = strings.TrimPrefix(field, "worktree ")
+		case strings.HasPrefix(field, "branch "):
+			branch = strings.TrimPrefix(strings.TrimPrefix(field, "branch "), "refs/heads/")
 		}
 	}
 	flush()

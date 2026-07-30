@@ -10,26 +10,28 @@ import (
 	"temporal-agents/internal/cleanup"
 )
 
-// TestParseWorktrees pins the porcelain parsing and baseDir filtering: only
-// branch-backed worktrees nested under baseDir are returned, while the main
-// checkout, detached entries, and unrelated worktrees are dropped.
+// TestParseWorktrees pins the NUL-delimited porcelain parsing and baseDir
+// filtering: only branch-backed worktrees nested under baseDir are returned,
+// while the main checkout, detached entries, and unrelated worktrees are
+// dropped. The input mirrors `git worktree list --porcelain -z`: each attribute
+// is NUL-terminated and records are separated by an extra NUL.
 func TestParseWorktrees(t *testing.T) {
 	out := "" +
-		"worktree /home/me/repo\n" +
-		"HEAD 1111111111111111111111111111111111111111\n" +
-		"branch refs/heads/main\n" +
-		"\n" +
-		"worktree /cfg/temporal-agents/worktrees/feat/x\n" +
-		"HEAD 2222222222222222222222222222222222222222\n" +
-		"branch refs/heads/feat/x\n" +
-		"\n" +
-		"worktree /cfg/temporal-agents/worktrees/flaming-duck\n" +
-		"HEAD 3333333333333333333333333333333333333333\n" +
-		"branch refs/heads/flaming-duck\n" +
-		"\n" +
-		"worktree /cfg/temporal-agents/worktrees/detached\n" +
-		"HEAD 4444444444444444444444444444444444444444\n" +
-		"detached\n"
+		"worktree /home/me/repo\x00" +
+		"HEAD 1111111111111111111111111111111111111111\x00" +
+		"branch refs/heads/main\x00" +
+		"\x00" +
+		"worktree /cfg/temporal-agents/worktrees/feat/x\x00" +
+		"HEAD 2222222222222222222222222222222222222222\x00" +
+		"branch refs/heads/feat/x\x00" +
+		"\x00" +
+		"worktree /cfg/temporal-agents/worktrees/flaming-duck\x00" +
+		"HEAD 3333333333333333333333333333333333333333\x00" +
+		"branch refs/heads/flaming-duck\x00" +
+		"\x00" +
+		"worktree /cfg/temporal-agents/worktrees/detached\x00" +
+		"HEAD 4444444444444444444444444444444444444444\x00" +
+		"detached\x00"
 
 	got := parseWorktrees(out, "/cfg/temporal-agents/worktrees")
 
