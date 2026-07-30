@@ -4,7 +4,7 @@ A thin [Temporal](https://temporal.io) worker that runs a Pi coding agent. Kick 
 
 ## Requirements
 
-- Go 1.25+
+- Go 1.25.4+
 - `pi` CLI on your `PATH` (the agent the worker runs)
 - Docker (for the local Temporal server)
 
