@@ -48,13 +48,13 @@ The CLI connects to `localhost:17233` by default. Override with `TEMPORAL_ADDRES
 | `run "<prompt>" [--save <name>] [--chain]` | Start a workflow and return immediately. |
 | `schedule "<interval\|cron>" "<prompt>" [--save <name>] [--chain]` | Run a workflow on a schedule (overlaps skipped). Interval = Go duration (`1h`, `30m`); or a 5-field cron. |
 | `template <list\|show\|run\|delete> [name]` | Manage/run prompts saved via `--save`. |
-| `code pilot [--append\|--replace <prompt>] [--chain]` | Address unresolved review comments on the current branch's PR. |
+| `code pilot [--append\|--replace <prompt>] [--chain] [--summary]` | Address unresolved review comments on the current branch's PR. |
 | `code review [--summary]` | Review the current branch locally, then implement + re-review in a loop. |
-| `code develop "<prompt>" [--branch <name>] [--worktree] [--with-remote]` | Create a branch, implement the prompt, then run the review loop (and PR + pilot with `--with-remote`). |
+| `code develop "<prompt>" [--branch <name>] [--worktree] [--summary] [--with-remote]` | Create a branch, implement the prompt, then run the review loop (and PR + pilot with `--with-remote`). |
 | `watch <workflow-id>` | Stream a workflow's live Pi progress, then its result. |
 | `list` | List running workflows and schedules. |
 
-Common flags: `--save <name>` stores the invocation as a reusable template; `--chain` re-triggers on each success; `--summary` sends a Pi-generated summary as the webhook body.
+Common flags: `--save <name>` stores the invocation as a reusable template; `--chain` re-triggers on each success; `--summary` (code subcommands only) sends a Pi-generated summary as the webhook body.
 
 Run any command with `--help` for details, e.g. `temporal-agents code develop --help`.
 
