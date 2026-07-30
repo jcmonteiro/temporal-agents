@@ -7,6 +7,7 @@ package cleanup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -64,10 +65,16 @@ func (c *Cleaner) Run(ctx context.Context, repoDir, baseDir string) (int, error)
 	}
 
 	removed := 0
+	var errs []error
 	for _, wt := range worktrees {
 		done, err := c.handle(ctx, repoDir, wt)
 		if err != nil {
-			return removed, err
+			// A single failure (e.g. a branch that will not delete) should not
+			// abandon the remaining worktrees; report it and keep going so the
+			// batch and its closing summary still complete.
+			fmt.Fprintf(c.Out, "Error on %s: %v\n", wt.Path, err)
+			errs = append(errs, err)
+			continue
 		}
 		if done {
 			removed++
@@ -75,7 +82,7 @@ func (c *Cleaner) Run(ctx context.Context, repoDir, baseDir string) (int, error)
 	}
 
 	fmt.Fprintf(c.Out, "\nDone. %d of %d worktree(s) removed.\n", removed, len(worktrees))
-	return removed, nil
+	return removed, errors.Join(errs...)
 }
 
 // handle runs the delete decision for a single worktree, returning whether it

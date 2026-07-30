@@ -15,6 +15,7 @@ type fakeGit struct {
 	worktrees []Worktree
 	merged    map[string]bool
 	listErr   error
+	mergedErr error
 	removeErr error
 
 	removed []removeCall
@@ -30,6 +31,9 @@ func (f *fakeGit) List(context.Context, string, string) ([]Worktree, error) {
 }
 
 func (f *fakeGit) Merged(_ context.Context, _, branch string) (bool, error) {
+	if f.mergedErr != nil {
+		return false, f.mergedErr
+	}
 	return f.merged[branch], nil
 }
 
@@ -47,10 +51,14 @@ type scriptedPrompter struct {
 	answers      []bool
 	i            int
 	defaultsSeen []bool
+	err          error
 }
 
 func (p *scriptedPrompter) Confirm(_ string, defaultYes bool) (bool, error) {
 	p.defaultsSeen = append(p.defaultsSeen, defaultYes)
+	if p.err != nil {
+		return false, p.err
+	}
 	ans := p.answers[p.i]
 	p.i++
 	return ans, nil
@@ -164,4 +172,62 @@ func TestRun_ListError_IsReported(t *testing.T) {
 	_, err := newCleaner(g, p).Run(context.Background(), "/repo", "/wt")
 
 	require.ErrorContains(t, err, "list worktrees")
+}
+
+func TestRun_MergedError_IsWrappedAndReported(t *testing.T) {
+	g := &fakeGit{
+		worktrees: []Worktree{{Path: "/wt/feat-x", Branch: "feat/x"}},
+		mergedErr: errors.New("boom"),
+	}
+	p := &scriptedPrompter{answers: []bool{true}}
+
+	removed, err := newCleaner(g, p).Run(context.Background(), "/repo", "/wt")
+
+	require.Zero(t, removed)
+	require.Empty(t, g.removed)
+	require.ErrorContains(t, err, "check merge status of feat/x")
+}
+
+func TestRun_RemoveError_IsWrappedAndReported(t *testing.T) {
+	g := &fakeGit{
+		worktrees: []Worktree{{Path: "/wt/feat-x", Branch: "feat/x"}},
+		merged:    map[string]bool{"feat/x": true},
+		removeErr: errors.New("boom"),
+	}
+	p := &scriptedPrompter{answers: []bool{true}}
+
+	removed, err := newCleaner(g, p).Run(context.Background(), "/repo", "/wt")
+
+	require.Zero(t, removed)
+	require.ErrorContains(t, err, "remove worktree /wt/feat-x")
+}
+
+func TestRun_PromptError_IsReported(t *testing.T) {
+	g := &fakeGit{worktrees: []Worktree{{Path: "/wt/feat-x", Branch: "feat/x"}}}
+	p := &scriptedPrompter{err: errors.New("boom")}
+
+	removed, err := newCleaner(g, p).Run(context.Background(), "/repo", "/wt")
+
+	require.Zero(t, removed)
+	require.Empty(t, g.removed)
+	require.Error(t, err)
+}
+
+func TestRun_ErrorOnOneWorktree_ContinuesWithTheRest(t *testing.T) {
+	g := &fakeGit{
+		worktrees: []Worktree{
+			{Path: "/wt/a", Branch: "feat/a"}, // remove fails
+			{Path: "/wt/b", Branch: "feat/b"}, // still processed
+		},
+		merged:    map[string]bool{"feat/a": true, "feat/b": true},
+		removeErr: errors.New("boom"),
+	}
+	// Both worktrees are confirmed for deletion.
+	p := &scriptedPrompter{answers: []bool{true, true}}
+
+	_, err := newCleaner(g, p).Run(context.Background(), "/repo", "/wt")
+
+	require.Error(t, err)
+	// The loop reached the second worktree despite the first failing.
+	require.Equal(t, 2, p.i)
 }
