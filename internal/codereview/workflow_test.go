@@ -298,7 +298,7 @@ func TestPilotWorkflow_ChainSummary_CarriesSummaryForwardOnAddressingPass(t *tes
 	require.True(t, env.IsWorkflowCompleted())
 	var canErr *workflow.ContinueAsNewError
 	require.ErrorAs(t, env.GetWorkflowError(), &canErr)
-	// With --chain --summary, an addressing pass summarizes its own (live) Pi
+	// When chaining with --summary, an addressing pass summarizes its own (live) Pi
 	// session and carries the text forward so the later no-comments pass, which
 	// runs no agent under a fresh RunID, can still attach it.
 	var next PilotInput
