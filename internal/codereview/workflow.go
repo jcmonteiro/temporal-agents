@@ -145,15 +145,14 @@ func notifyFailure(ctx workflow.Context, title, workDir string, summaryEnabled, 
 //
 // When chaining (the develop --with-remote pipeline always sets Chain; a
 // standalone `code pilot` chains by default, opting out with --no-chain), the
-// only terminal step is the
-// no-comments pass, where no agent ran and there is nothing to summarize. A
-// chained pilot's meaningful work therefore lives entirely in the passes that
-// address comments and then continue as new, so when in.Summary is set each
-// addressing pass summarizes its own Pi session and delivers that summary
-// (webhook body) before continuing—otherwise --summary would produce no webhook
-// body at all on the chained path. Without chaining the workflow runs a single
-// pass and, when in.Summary is set, that one pass is summarized in the terminal
-// completion notification below.
+// only terminal step is the no-comments pass, where no agent ran and there is
+// nothing to summarize. A chained pilot's meaningful work therefore lives
+// entirely in the passes that address comments and then continue as new, so
+// when in.Summary is set each addressing pass summarizes its own Pi session
+// and delivers that summary (webhook body) before continuing—otherwise
+// --summary would produce no webhook body at all on the chained path. Without
+// chaining the workflow runs a single pass and, when in.Summary is set, that
+// one pass is summarized in the terminal completion notification below.
 func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err error) {
 	// Notify best-effort when the pilot loop fails. Continue-as-new is a control
 	// signal (chained passes), not a failure, so NotifyFailureBestEffort excludes
