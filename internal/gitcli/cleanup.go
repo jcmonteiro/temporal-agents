@@ -87,6 +87,10 @@ func (g Git) Remove(ctx context.Context, repoDir string, wt cleanup.Worktree, fo
 // of `git worktree list`. Each record is a blank-line-separated block whose
 // first line is "worktree <path>" and whose branch line is "branch
 // refs/heads/<name>" (detached or bare entries have no branch and are skipped).
+//
+// This is not a pure function: the underDir filter resolves symlinks via
+// filepath.EvalSymlinks, so it reads the filesystem. Paths that do not exist on
+// disk fall back to filepath.Clean, which keeps the string-only cases working.
 func parseWorktrees(out, baseDir string) []cleanup.Worktree {
 	var worktrees []cleanup.Worktree
 	var path, branch string

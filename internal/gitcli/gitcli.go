@@ -1,5 +1,5 @@
 // Package gitcli is a driven adapter over the `git` command line. It implements
-// the codereview.Git port.
+// the codereview.Git port and the cleanup.Git port (the latter in cleanup.go).
 package gitcli
 
 import (
