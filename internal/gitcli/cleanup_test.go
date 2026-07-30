@@ -1,0 +1,78 @@
+package gitcli
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"temporal-agents/internal/cleanup"
+)
+
+// TestParseWorktrees pins the NUL-delimited porcelain parsing and baseDir
+// filtering: only branch-backed worktrees nested under baseDir are returned,
+// while the main checkout, detached entries, and unrelated worktrees are
+// dropped. The input mirrors `git worktree list --porcelain -z`: each attribute
+// is NUL-terminated and records are separated by an extra NUL.
+func TestParseWorktrees(t *testing.T) {
+	out := "" +
+		"worktree /home/me/repo\x00" +
+		"HEAD 1111111111111111111111111111111111111111\x00" +
+		"branch refs/heads/main\x00" +
+		"\x00" +
+		"worktree /cfg/temporal-agents/worktrees/feat/x\x00" +
+		"HEAD 2222222222222222222222222222222222222222\x00" +
+		"branch refs/heads/feat/x\x00" +
+		"\x00" +
+		"worktree /cfg/temporal-agents/worktrees/flaming-duck\x00" +
+		"HEAD 3333333333333333333333333333333333333333\x00" +
+		"branch refs/heads/flaming-duck\x00" +
+		"\x00" +
+		"worktree /cfg/temporal-agents/worktrees/detached\x00" +
+		"HEAD 4444444444444444444444444444444444444444\x00" +
+		"detached\x00"
+
+	got := parseWorktrees(out, "/cfg/temporal-agents/worktrees")
+
+	require.Equal(t, []cleanup.Worktree{
+		{Path: "/cfg/temporal-agents/worktrees/feat/x", Branch: "feat/x"},
+		{Path: "/cfg/temporal-agents/worktrees/flaming-duck", Branch: "flaming-duck"},
+	}, got)
+}
+
+func TestUnderDir(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		baseDir string
+		want    bool
+	}{
+		{"nested", "/wt/feat/x", "/wt", true},
+		{"nested with trailing slash base", "/wt/feat/x", "/wt/", true},
+		{"sibling prefix is not under", "/wt-other/x", "/wt", false},
+		{"outside", "/somewhere/else", "/wt", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, underDir(tt.path, tt.baseDir))
+		})
+	}
+}
+
+// TestUnderDirResolvesSymlinks pins that a worktree reported under the
+// symlink-resolved base is recognized even when the caller passes the
+// unresolved base path, mirroring the os.UserConfigDir vs `git worktree list`
+// divergence on macOS.
+func TestUnderDirResolvesSymlinks(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "base-link")
+	require.NoError(t, os.Symlink(real, link))
+
+	wt := filepath.Join(real, "feat", "x")
+	require.NoError(t, os.MkdirAll(wt, 0o755))
+
+	// Base passed as the symlink, worktree reported at its real path: must
+	// still be recognized as nested.
+	require.True(t, underDir(wt, link))
+}
