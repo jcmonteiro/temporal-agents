@@ -79,11 +79,12 @@ func (c *Cleaner) Run(ctx context.Context, repoDir, baseDir string) (int, error)
 }
 
 // handle runs the delete decision for a single worktree, returning whether it
-// was removed. The user is asked before anything happens; only then is the
-// merge status checked, and an unmerged branch requires a second, force
-// confirmation that defaults to "no".
+// was removed. The user is asked before anything happens, defaulting to "no"
+// so a stray Enter never deletes; only then is the merge status checked, and an
+// unmerged branch requires a second, force confirmation that also defaults to
+// "no".
 func (c *Cleaner) handle(ctx context.Context, repoDir string, wt Worktree) (bool, error) {
-	ok, err := c.Prompt.Confirm(fmt.Sprintf("Delete worktree %s (branch %s)?", wt.Path, wt.Branch), true)
+	ok, err := c.Prompt.Confirm(fmt.Sprintf("Delete worktree %s (branch %s)?", wt.Path, wt.Branch), false)
 	if err != nil {
 		return false, err
 	}

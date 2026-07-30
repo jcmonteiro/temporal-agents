@@ -84,8 +84,8 @@ func TestRun_MergedBranch_ConfirmedYes_RemovesWithoutForce(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, removed)
 	require.Equal(t, []removeCall{{branch: "feat/x", force: false}}, g.removed)
-	// A merged branch asks exactly once, defaulting to yes.
-	require.Equal(t, []bool{true}, p.defaultsSeen)
+	// A merged branch asks exactly once, defaulting to no.
+	require.Equal(t, []bool{false}, p.defaultsSeen)
 }
 
 func TestRun_DeclinedAtFirstPrompt_SkipsAndDoesNotCheckMerge(t *testing.T) {
@@ -116,8 +116,8 @@ func TestRun_UnmergedBranch_ForceConfirmed_RemovesWithForce(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, removed)
 	require.Equal(t, []removeCall{{branch: "feat/x", force: true}}, g.removed)
-	// The delete prompt defaults to yes, the force prompt defaults to no.
-	require.Equal(t, []bool{true, false}, p.defaultsSeen)
+	// Both prompts default to no: the delete prompt and the force prompt.
+	require.Equal(t, []bool{false, false}, p.defaultsSeen)
 }
 
 func TestRun_UnmergedBranch_ForceDeclined_SkipsWithoutRemoving(t *testing.T) {
