@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -48,14 +49,30 @@ func (g Git) Merged(ctx context.Context, repoDir, branch string) (bool, error) {
 // Remove deletes the worktree and its branch. When force is set it removes a
 // worktree that still has local changes and force-deletes an unmerged branch;
 // otherwise git refuses both. It implements the cleanup.Git port.
+//
+// Remove is idempotent about an already-gone worktree directory: when the path
+// no longer exists it prunes the stale registration and proceeds straight to
+// the branch delete. This matters for the force-retry path in cleanup, where an
+// earlier attempt removed the worktree but failed to delete the branch; without
+// this a retried `worktree remove` would fail on the missing path ("not a
+// working tree") and the orphaned branch would be left behind.
 func (g Git) Remove(ctx context.Context, repoDir string, wt cleanup.Worktree, force bool) error {
-	removeArgs := []string{"worktree", "remove", wt.Path}
 	branchFlag := "-d"
 	if force {
-		removeArgs = []string{"worktree", "remove", "--force", wt.Path}
 		branchFlag = "-D"
 	}
-	if _, err := run(ctx, repoDir, removeArgs...); err != nil {
+	if _, err := os.Stat(wt.Path); err == nil {
+		removeArgs := []string{"worktree", "remove", wt.Path}
+		if force {
+			removeArgs = []string{"worktree", "remove", "--force", wt.Path}
+		}
+		if _, err := run(ctx, repoDir, removeArgs...); err != nil {
+			return err
+		}
+	} else if _, err := run(ctx, repoDir, "worktree", "prune"); err != nil {
+		// The directory is already gone. Prune the stale registration so the branch
+		// delete below is not refused for a branch still recorded as checked out in
+		// a worktree that no longer exists.
 		return err
 	}
 	// The worktree is gone at this point; if only the branch delete fails, say so
