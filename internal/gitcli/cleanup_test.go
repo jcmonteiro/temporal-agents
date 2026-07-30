@@ -1,6 +1,8 @@
 package gitcli
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -54,4 +56,21 @@ func TestUnderDir(t *testing.T) {
 			require.Equal(t, tt.want, underDir(tt.path, tt.baseDir))
 		})
 	}
+}
+
+// TestUnderDirResolvesSymlinks pins that a worktree reported under the
+// symlink-resolved base is recognized even when the caller passes the
+// unresolved base path, mirroring the os.UserConfigDir vs `git worktree list`
+// divergence on macOS.
+func TestUnderDirResolvesSymlinks(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "base-link")
+	require.NoError(t, os.Symlink(real, link))
+
+	wt := filepath.Join(real, "feat", "x")
+	require.NoError(t, os.MkdirAll(wt, 0o755))
+
+	// Base passed as the symlink, worktree reported at its real path: must
+	// still be recognized as nested.
+	require.True(t, underDir(wt, link))
 }

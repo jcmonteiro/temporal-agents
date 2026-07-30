@@ -93,12 +93,27 @@ func parseWorktrees(out, baseDir string) []cleanup.Worktree {
 	return worktrees
 }
 
-// underDir reports whether path is baseDir itself or nested inside it, using
-// cleaned paths so trailing slashes and "." segments do not cause false misses.
+// underDir reports whether path is baseDir itself or nested inside it. Both
+// sides are symlink-resolved first because baseDir comes from os.UserConfigDir
+// (unresolved) while `git worktree list` reports real paths; on macOS these
+// diverge (e.g. /var vs /private/var, symlinked Application Support), which
+// would otherwise make filepath.Rel yield a ".." and silently exclude a genuine
+// temporal-agents worktree. Cleaned paths keep trailing slashes and "."
+// segments from causing false misses.
 func underDir(path, baseDir string) bool {
-	rel, err := filepath.Rel(filepath.Clean(baseDir), filepath.Clean(path))
+	rel, err := filepath.Rel(resolveSymlinks(baseDir), resolveSymlinks(path))
 	if err != nil {
 		return false
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// resolveSymlinks returns p with symlinks resolved, falling back to the cleaned
+// path when p does not exist (or cannot be resolved) so comparisons still work
+// for paths that are not present on disk.
+func resolveSymlinks(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return filepath.Clean(p)
 }
