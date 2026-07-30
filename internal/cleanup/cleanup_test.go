@@ -210,6 +210,25 @@ func TestRun_RemoveError_IsWrappedAndReported(t *testing.T) {
 	require.ErrorContains(t, err, "remove worktree /wt/feat-x")
 }
 
+func TestRun_ForcedRemovalFails_DoesNotOfferSecondRetry(t *testing.T) {
+	g := &fakeGit{
+		worktrees: []Worktree{{Path: "/wt/feat-x", Branch: "feat/x"}},
+		merged:    map[string]bool{"feat/x": false},
+		removeErr: errors.New("boom"),
+	}
+	// Delete? yes; branch unmerged so force? yes. The forced removal fails, but
+	// because this is already the force path the retry block is skipped, so no
+	// third prompt is offered.
+	p := &scriptedPrompter{answers: []bool{true, true}}
+
+	removed, err := newCleaner(g, p).Run(context.Background(), "/repo", "/wt")
+
+	require.Zero(t, removed)
+	require.Empty(t, g.removed)
+	require.ErrorContains(t, err, "remove worktree /wt/feat-x")
+	require.Equal(t, 2, p.i, "the force path must not offer a second retry prompt")
+}
+
 func TestRun_MergedWorktreeDirty_ForceRetryConfirmed_RemovesWithForce(t *testing.T) {
 	g := &fakeGit{
 		worktrees:        []Worktree{{Path: "/wt/feat-x", Branch: "feat/x"}},
