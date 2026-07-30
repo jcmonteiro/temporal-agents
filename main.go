@@ -62,6 +62,8 @@ func main() {
 		templateCmd(os.Args[2:])
 	case "code":
 		codeCmd(os.Args[2:])
+	case "cleanup":
+		cleanupCmd(os.Args[2:])
 	case "watch":
 		requireArgs(1, "watch <workflow-id>")
 		watchRun(os.Args[2])
@@ -82,6 +84,7 @@ COMMANDS
   worker [--no-desktop] [--webhook <url>]
                                          Start the Temporal worker
   code <subcommand>                      Agent workflows for the current repo
+  cleanup                                Remove worktrees created by 'code develop --worktree'
   run "<prompt>" [--save <name>] [--chain]
                                          Start a workflow (returns immediately)
   schedule "<interval|cron>" "<prompt>" [--save <name>] [--chain]
@@ -98,6 +101,7 @@ EXAMPLES
   temporal-agents schedule "0 9 * * *" "post the daily digest" --save digest
   temporal-agents template list
   temporal-agents template run triage
+  temporal-agents cleanup
 
 FLAGS
   --save <name>  Save the invocation as a reusable template (see 'template')
