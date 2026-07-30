@@ -89,6 +89,8 @@ func (c *Cleaner) Run(ctx context.Context, repoDir, baseDir string) (int, error)
 // was removed. The user is asked before anything happens, defaulting to "no"
 // so a stray Enter never deletes; only then is the merge status checked, and an
 // unmerged branch requires a second, force confirmation that also defaults to
+// "no". A non-force removal that fails (typically a merged branch whose
+// worktree still has local changes) offers a force retry, again defaulting to
 // "no".
 func (c *Cleaner) handle(ctx context.Context, repoDir string, wt Worktree) (bool, error) {
 	ok, err := c.Prompt.Confirm(fmt.Sprintf("Delete worktree %s (branch %s)?", wt.Path, wt.Branch), false)
@@ -117,7 +119,23 @@ func (c *Cleaner) handle(ctx context.Context, repoDir string, wt Worktree) (bool
 		}
 	}
 
-	if err := c.Git.Remove(ctx, repoDir, wt, force); err != nil {
+	err = c.Git.Remove(ctx, repoDir, wt, force)
+	if err != nil && !force {
+		// A non-force removal only happens for a merged branch; the most likely
+		// failure is a worktree that still has local changes (a stray build
+		// artifact in a branch you are otherwise done with). Rather than give up,
+		// surface the error and offer a force retry, defaulting to "no".
+		retry, perr := c.Prompt.Confirm(fmt.Sprintf("Removing %s failed (%v). Force removal?", wt.Path, err), false)
+		if perr != nil {
+			return false, perr
+		}
+		if !retry {
+			fmt.Fprintf(c.Out, "Skipped %s.\n", wt.Path)
+			return false, nil
+		}
+		err = c.Git.Remove(ctx, repoDir, wt, true)
+	}
+	if err != nil {
 		return false, fmt.Errorf("remove worktree %s: %w", wt.Path, err)
 	}
 	fmt.Fprintf(c.Out, "Removed %s.\n", wt.Path)

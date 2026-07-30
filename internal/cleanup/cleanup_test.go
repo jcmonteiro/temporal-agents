@@ -17,6 +17,9 @@ type fakeGit struct {
 	listErr   error
 	mergedErr error
 	removeErr error
+	// worktreeDirtyErr fails a removal only when force is false, modelling a
+	// merged branch whose worktree still has local changes.
+	worktreeDirtyErr error
 
 	removed []removeCall
 }
@@ -40,6 +43,9 @@ func (f *fakeGit) Merged(_ context.Context, _, branch string) (bool, error) {
 func (f *fakeGit) Remove(_ context.Context, _ string, wt Worktree, force bool) error {
 	if f.removeErr != nil {
 		return f.removeErr
+	}
+	if f.worktreeDirtyErr != nil && !force {
+		return f.worktreeDirtyErr
 	}
 	f.removed = append(f.removed, removeCall{branch: wt.Branch, force: force})
 	return nil
@@ -194,12 +200,48 @@ func TestRun_RemoveError_IsWrappedAndReported(t *testing.T) {
 		merged:    map[string]bool{"feat/x": true},
 		removeErr: errors.New("boom"),
 	}
-	p := &scriptedPrompter{answers: []bool{true}}
+	// Delete? yes; the force retry offered after the failure is also yes, and the
+	// forced removal fails too, so the wrapped error still surfaces.
+	p := &scriptedPrompter{answers: []bool{true, true}}
 
 	removed, err := newCleaner(g, p).Run(context.Background(), "/repo", "/wt")
 
 	require.Zero(t, removed)
 	require.ErrorContains(t, err, "remove worktree /wt/feat-x")
+}
+
+func TestRun_MergedWorktreeDirty_ForceRetryConfirmed_RemovesWithForce(t *testing.T) {
+	g := &fakeGit{
+		worktrees:        []Worktree{{Path: "/wt/feat-x", Branch: "feat/x"}},
+		merged:           map[string]bool{"feat/x": true},
+		worktreeDirtyErr: errors.New("worktree contains modified files"),
+	}
+	// Delete? yes; non-force removal fails, force retry? yes.
+	p := &scriptedPrompter{answers: []bool{true, true}}
+
+	removed, err := newCleaner(g, p).Run(context.Background(), "/repo", "/wt")
+
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+	require.Equal(t, []removeCall{{branch: "feat/x", force: true}}, g.removed)
+	// Delete prompt and force-retry prompt both default to no.
+	require.Equal(t, []bool{false, false}, p.defaultsSeen)
+}
+
+func TestRun_MergedWorktreeDirty_ForceRetryDeclined_SkipsWithoutRemoving(t *testing.T) {
+	g := &fakeGit{
+		worktrees:        []Worktree{{Path: "/wt/feat-x", Branch: "feat/x"}},
+		merged:           map[string]bool{"feat/x": true},
+		worktreeDirtyErr: errors.New("worktree contains modified files"),
+	}
+	// Delete? yes; force retry? no.
+	p := &scriptedPrompter{answers: []bool{true, false}}
+
+	removed, err := newCleaner(g, p).Run(context.Background(), "/repo", "/wt")
+
+	require.NoError(t, err)
+	require.Zero(t, removed)
+	require.Empty(t, g.removed)
 }
 
 func TestRun_PromptError_IsReported(t *testing.T) {
@@ -222,12 +264,14 @@ func TestRun_ErrorOnOneWorktree_ContinuesWithTheRest(t *testing.T) {
 		merged:    map[string]bool{"feat/a": true, "feat/b": true},
 		removeErr: errors.New("boom"),
 	}
-	// Both worktrees are confirmed for deletion.
-	p := &scriptedPrompter{answers: []bool{true, true}}
+	// Each worktree is confirmed for deletion (answer 1) and its post-failure
+	// force retry is also confirmed (answer 2), so both worktrees consume two
+	// prompts before the forced removal fails again.
+	p := &scriptedPrompter{answers: []bool{true, true, true, true}}
 
 	_, err := newCleaner(g, p).Run(context.Background(), "/repo", "/wt")
 
 	require.Error(t, err)
 	// The loop reached the second worktree despite the first failing.
-	require.Equal(t, 2, p.i)
+	require.Equal(t, 4, p.i)
 }
