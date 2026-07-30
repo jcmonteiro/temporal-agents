@@ -63,7 +63,7 @@ type PilotInput struct {
 	// that summary as the webhook notification's body (only the webhook).
 	Summary bool
 	// ChainSummary carries the webhook summary of the most recent addressed pass
-	// across continue-as-new. With --chain --summary the terminal success is the
+	// across continue-as-new. When chaining with --summary the terminal success is the
 	// no-comments pass: it runs no agent (its own Pi session is empty) and lands
 	// under a new RunID, and because piagent keys the Pi session on the run, that
 	// pass cannot summarize the real work. So each addressing pass summarizes

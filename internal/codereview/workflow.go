@@ -144,7 +144,8 @@ func notifyFailure(ctx workflow.Context, title, workDir string, summaryEnabled, 
 // bounded event history under the same workflow ID.
 //
 // When chaining (the develop --with-remote pipeline always sets Chain; a
-// standalone `code pilot` opts in with --chain), the only terminal step is the
+// standalone `code pilot` chains by default, opting out with --no-chain), the
+// only terminal step is the
 // no-comments pass, where no agent ran and there is nothing to summarize. A
 // chained pilot's meaningful work therefore lives entirely in the passes that
 // address comments and then continue as new, so when in.Summary is set each
@@ -201,8 +202,8 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 		// it cannot summarize the real work itself; summarizing now and carrying the
 		// text forward is what lets the terminal notification report this pass. Only
 		// the last addressed pass's summary survives to the terminal notification;
-		// with --chain --summary this means one (billable) summary run per addressed
-		// pass, all but the last discarded — the cost of the opt-in flag combination.
+		// with --summary this means one (billable) summary run per addressed
+		// pass, all but the last discarded — the cost of the flag combination.
 		var webhookBody string
 		if webhookBody, err = summarizeForWebhook(ctx, in.Summary, agentRan, in.WorkDir, completeSummaryTimeout); err != nil {
 			return "", err
