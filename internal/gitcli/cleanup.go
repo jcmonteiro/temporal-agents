@@ -3,6 +3,7 @@ package gitcli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -57,8 +58,12 @@ func (g Git) Remove(ctx context.Context, repoDir string, wt cleanup.Worktree, fo
 	if _, err := run(ctx, repoDir, removeArgs...); err != nil {
 		return err
 	}
-	_, err := run(ctx, repoDir, "branch", branchFlag, wt.Branch)
-	return err
+	// The worktree is gone at this point; if only the branch delete fails, say so
+	// so the caller does not report the whole removal as failed.
+	if _, err := run(ctx, repoDir, "branch", branchFlag, wt.Branch); err != nil {
+		return fmt.Errorf("worktree removed but branch %s not deleted: %w", wt.Branch, err)
+	}
+	return nil
 }
 
 // parseWorktrees extracts the worktrees under baseDir from the porcelain output
