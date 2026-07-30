@@ -56,6 +56,12 @@ func (p stdinPrompter) Confirm(question string, defaultYes bool) (bool, error) {
 	for {
 		fmt.Fprintf(p.out, "%s %s ", question, hint)
 		line, err := p.in.ReadString('\n')
+		// A real terminal I/O failure must not be reported as a successful
+		// answer; only EOF is a benign signal (non-interactive stdin) that
+		// selects the default below.
+		if err != nil && err != io.EOF {
+			return false, fmt.Errorf("read answer: %w", err)
+		}
 		answer := strings.ToLower(strings.TrimSpace(line))
 		switch answer {
 		case "y", "yes":
@@ -68,7 +74,7 @@ func (p stdinPrompter) Confirm(question string, defaultYes bool) (bool, error) {
 			}
 			return defaultYes, nil
 		}
-		if err != nil {
+		if err == io.EOF {
 			return defaultYes, nil
 		}
 		fmt.Fprintln(p.out, `Please answer "y" or "n".`)
