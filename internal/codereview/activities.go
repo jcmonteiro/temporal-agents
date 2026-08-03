@@ -132,6 +132,14 @@ type EnsureDevelopedRequest struct {
 	BaseSHA string
 }
 
+// SeedBranchesRequest is the input to SeedBranches.
+type SeedBranchesRequest struct {
+	WorkDir string
+	// Branches are merged, in order, into the branch currently checked out in
+	// WorkDir. They are the branches of the node's dependencies.
+	Branches []string
+}
+
 // RunImplementRequest is the input to RunImplementAgent.
 type RunImplementRequest struct {
 	WorkDir string
@@ -402,6 +410,26 @@ func (a *Activities) EnsureDeveloped(ctx context.Context, req EnsureDevelopedReq
 			"agent left uncommitted changes", errDirtyWorktree, nil)
 	}
 	return commits, nil
+}
+
+// SeedBranches merges each branch in req.Branches, in order, into the branch
+// currently checked out in req.WorkDir and returns the resulting HEAD. It seeds
+// a dependent node's freshly-created branch with the committed work of the
+// branches it depends on, so the develop agent starts from its dependencies'
+// code rather than the bare base. The returned HEAD is the post-seed commit; the
+// caller uses it as the base for EnsureDeveloped so that check verifies the
+// develop agent (not these seeding merges) advanced the branch.
+func (a *Activities) SeedBranches(ctx context.Context, req SeedBranchesRequest) (string, error) {
+	for _, b := range req.Branches {
+		if err := a.Git.MergeBranch(ctx, req.WorkDir, b); err != nil {
+			return "", fmt.Errorf("merge dependency branch %q: %w", b, err)
+		}
+	}
+	head, err := a.Git.Head(ctx, req.WorkDir)
+	if err != nil {
+		return "", fmt.Errorf("read head after seeding: %w", err)
+	}
+	return head, nil
 }
 
 // OpenPR publishes the current branch and ensures an open PR exists for it,

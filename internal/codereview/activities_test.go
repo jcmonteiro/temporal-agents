@@ -34,6 +34,9 @@ type fakeGit struct {
 	worktreeAdded bool
 	addWorktreeAt string
 	branchCreated bool
+
+	mergeErr       error
+	mergedBranches []string
 }
 
 func (f *fakeGit) CurrentBranch(_ context.Context, dir string) (string, error) {
@@ -64,6 +67,10 @@ func (f *fakeGit) CommitsSince(context.Context, string, string) ([]string, error
 	return nil, nil
 }
 func (f *fakeGit) Push(context.Context, string, string) error { return nil }
+func (f *fakeGit) MergeBranch(_ context.Context, _, branch string) error {
+	f.mergedBranches = append(f.mergedBranches, branch)
+	return f.mergeErr
+}
 
 func TestCreateBranch_Worktree_CreatesWorktreeAndReportsItAsWorkDir(t *testing.T) {
 	var s testsuite.WorkflowTestSuite
@@ -190,4 +197,39 @@ func TestCreateBranch_InPlace_ExplicitBranchAlreadyExists_NonRetryable(t *testin
 	require.True(t, errors.As(err, &appErr), "want an ApplicationError, got %T", err)
 	require.True(t, appErr.NonRetryable(), "an already-exists failure must be non-retryable")
 	require.Equal(t, errBranchExists, appErr.Type())
+}
+
+func TestSeedBranches_MergesEachDependencyAndReportsPostSeedHead(t *testing.T) {
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestActivityEnvironment()
+	fg := &fakeGit{head: "seeded-head"}
+	act := &Activities{Git: fg}
+	env.RegisterActivity(act)
+
+	val, err := env.ExecuteActivity(act.SeedBranches, SeedBranchesRequest{
+		WorkDir: "/wt/node", Branches: []string{"dep-a", "dep-b"},
+	})
+	require.NoError(t, err)
+
+	var head string
+	require.NoError(t, val.Get(&head))
+	// Every dependency branch is merged in, in order, and the returned HEAD is the
+	// post-seed commit the caller validates development against.
+	require.Equal(t, []string{"dep-a", "dep-b"}, fg.mergedBranches)
+	require.Equal(t, "seeded-head", head)
+}
+
+func TestSeedBranches_MergeFailureIsReported(t *testing.T) {
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestActivityEnvironment()
+	// A conflicting (or otherwise failing) merge surfaces as an activity error so
+	// the orchestrator does not proceed to develop on a half-seeded branch.
+	fg := &fakeGit{mergeErr: errors.New("merge conflict")}
+	act := &Activities{Git: fg}
+	env.RegisterActivity(act)
+
+	_, err := env.ExecuteActivity(act.SeedBranches, SeedBranchesRequest{
+		WorkDir: "/wt/node", Branches: []string{"dep-a"},
+	})
+	require.Error(t, err)
 }

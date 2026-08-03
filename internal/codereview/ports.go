@@ -42,6 +42,11 @@ type Git interface {
 	CommitsSince(ctx context.Context, dir, sha string) ([]string, error)
 	// Push publishes HEAD to the named branch on the origin remote.
 	Push(ctx context.Context, dir, branch string) error
+	// MergeBranch merges branch into the branch currently checked out in dir
+	// (creating a merge commit or fast-forwarding). It seeds a dependent's branch
+	// with the committed work of the branches it depends on. A conflict returns an
+	// error and leaves the merge in progress for the caller to abort.
+	MergeBranch(ctx context.Context, dir, branch string) error
 }
 
 // PullRequests is the port for the GitHub operations the workflow needs.
