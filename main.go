@@ -21,6 +21,7 @@ import (
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/worker"
 	"temporal-agents/internal/codereview"
+	"temporal-agents/internal/fleet"
 	"temporal-agents/internal/ghcli"
 	"temporal-agents/internal/gitcli"
 	"temporal-agents/internal/notification"
@@ -62,6 +63,8 @@ func main() {
 		templateCmd(os.Args[2:])
 	case "code":
 		codeCmd(os.Args[2:])
+	case "fleet":
+		fleetCmd(os.Args[2:])
 	case "cleanup":
 		cleanupCmd(os.Args[2:])
 	case "watch":
@@ -84,6 +87,7 @@ COMMANDS
   worker [--no-desktop] [--webhook <url>]
                                          Start the Temporal worker
   code <subcommand>                      Agent workflows for the current repo
+  fleet <subcommand>                     Fan-out orchestration across a dependency graph
   cleanup                                Remove worktrees created by 'code develop --worktree'
   run "<prompt>" [--save <name>] [--chain]
                                          Start a workflow (returns immediately)
@@ -101,6 +105,8 @@ EXAMPLES
   temporal-agents schedule "0 9 * * *" "post the daily digest" --save digest
   temporal-agents template list
   temporal-agents template run triage
+  temporal-agents fleet plan "expose the pricing domain via REST and gRPC"
+  temporal-agents fleet execute --plan fleet-plan.json
   temporal-agents cleanup
 
 FLAGS
@@ -445,6 +451,13 @@ func runWorker(opts notifyOptions) {
 		Agent: piagent.Agent{},
 	})
 
+	// The fleet workflows fan out over a dependency graph, reusing the codereview
+	// develop workflow for each node. FleetWorkflow runs codereview.DevelopWorkflow
+	// as children, which is already registered above.
+	w.RegisterWorkflow(fleet.FleetPlanWorkflow)
+	w.RegisterWorkflow(fleet.FleetWorkflow)
+	w.RegisterActivity(&fleet.Activities{Agent: piagent.Agent{}})
+
 	// A single notification activity, shared by every workflow that notifies.
 	w.RegisterActivity(&notification.Activity{Notifier: buildNotifier(opts)})
 
@@ -555,7 +568,7 @@ func listRunning() {
 			fatalf("Could not list workflows: %v", err)
 		}
 		for _, e := range resp.Executions {
-			rows = append(rows, row{"run", e.Execution.WorkflowId})
+			rows = append(rows, row{classifyWorkflow(e.Execution.WorkflowId), e.Execution.WorkflowId})
 		}
 		next = resp.NextPageToken
 		if len(next) == 0 {
@@ -589,6 +602,30 @@ func listRunning() {
 	}
 	tw.Flush()
 	fmt.Printf("\n%d active\n", len(rows))
+}
+
+// classifyWorkflow labels a workflow row by its ID prefix so `list` surfaces
+// what each running workflow is — including fleet parents and their per-node
+// develop children ("fleet-<uuid>-<nodeid>"), which share the "fleet-" prefix.
+func classifyWorkflow(id string) string {
+	switch {
+	case strings.HasPrefix(id, "fleet-plan-"):
+		return "fleet-plan"
+	case strings.HasPrefix(id, "fleet-"):
+		return "fleet"
+	case strings.HasPrefix(id, "develop-"):
+		return "develop"
+	case strings.HasPrefix(id, "review-"):
+		return "review"
+	case strings.HasPrefix(id, "pilot-"):
+		return "pilot"
+	case strings.HasPrefix(id, "open-pr-"):
+		return "open-pr"
+	case strings.HasPrefix(id, "schedule-"):
+		return "schedule"
+	default:
+		return "run"
+	}
 }
 
 // watchRun polls the workflow and prints Pi's live progress (from activity

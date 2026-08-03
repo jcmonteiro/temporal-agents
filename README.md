@@ -51,12 +51,36 @@ The CLI connects to `localhost:17233` by default. Override with `TEMPORAL_ADDRES
 | `code pilot [--append\|--replace <prompt>] [--chain] [--summary]` | Address unresolved review comments on the current branch's PR. |
 | `code review [--summary]` | Review the current branch locally, then implement + re-review in a loop. |
 | `code develop "<prompt>" [--branch <name>] [--worktree] [--summary] [--with-remote]` | Create a branch, implement the prompt, then run the review loop (and PR + pilot with `--with-remote`). |
+| `fleet plan "<prompt>" [--out <file>]` | Have the agent decompose a change into a dependency graph, written to a file to review. |
+| `fleet execute [--plan <file>] [--summary] [--with-remote]` | Orchestrate an approved plan: a develop workflow per node, run in dependency order. |
 | `watch <workflow-id>` | Stream a workflow's live Pi progress, then its result. |
-| `list` | List running workflows and schedules. |
+| `list` | List running workflows and schedules (fleet parents and per-node children included). |
 
 Common flags: `--save <name>` stores the invocation as a reusable template; `--chain` re-triggers on each success; `--summary` (code subcommands only) sends a Pi-generated summary as the webhook body.
 
 Run any command with `--help` for details, e.g. `temporal-agents code develop --help`.
+
+### Fleet fan-out
+
+Larger changes are better delivered as several small, independently reviewable
+slices with explicit dependencies (e.g. a horizontal slice implementing a domain
+core, followed by two parallel vertical slices exposing it via REST and gRPC).
+The `fleet` command orchestrates exactly that:
+
+```sh
+# 1. Decompose the change into a dependency graph and write it to fleet-plan.json.
+temporal-agents fleet plan "expose the pricing domain via REST and gRPC"
+
+# 2. Review/edit fleet-plan.json, then run it.
+temporal-agents fleet execute --plan fleet-plan.json --with-remote
+```
+
+`fleet execute` runs a `code develop` workflow per node, processing the graph in
+dependency layers: independent nodes run in parallel, and a node starts only
+once every node it depends on has succeeded (a node whose dependency did not
+succeed is skipped). Each node develops in its own git worktree so parallel
+nodes never share a working tree. When every node settles, a single summary
+notification aggregates each node's status, PR link, and token usage.
 
 ## Docker
 
