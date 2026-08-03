@@ -260,8 +260,9 @@ func ParseTokenTotal(summary string) int {
 }
 
 // SummarizeFleet renders the single aggregated summary for a fleet run: the
-// goal, a per-node status line (with any PR link surfaced from the child's
-// detail), and the develop-step token usage summed across every node. Only the
+// goal, a per-node status line (with any PR link surfaced from a succeeded
+// child's detail, or the blocking dependency surfaced for a skipped node), and
+// the develop-step token usage summed across every node. Only the
 // develop step's usage is aggregated because that is all a child DevelopWorkflow
 // returns to the fleet (see tokenTotalPattern); the review and pilot stages
 // report their own totals separately. Results are rendered in the given order
@@ -287,10 +288,22 @@ func SummarizeFleet(goal string, results []NodeResult) string {
 			skipped++
 		}
 		b.WriteString(fmt.Sprintf("  - %s: %s", r.ID, r.Status))
-		if url := extractPRURL(r.Detail); url != "" {
+		switch {
+		case r.Status == StatusSkipped && strings.TrimSpace(r.Detail) != "":
+			// Surface why the node was skipped (its blocking dependency) so the
+			// reader does not have to reconstruct the graph. The redundant
+			// "skipped: " prefix the workflow records is trimmed since the status
+			// already says "skipped".
+			detail := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r.Detail), "skipped:"))
 			b.WriteString(" (")
-			b.WriteString(url)
+			b.WriteString(detail)
 			b.WriteString(")")
+		default:
+			if url := extractPRURL(r.Detail); url != "" {
+				b.WriteString(" (")
+				b.WriteString(url)
+				b.WriteString(")")
+			}
 		}
 		b.WriteString("\n")
 	}

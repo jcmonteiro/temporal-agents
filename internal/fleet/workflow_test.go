@@ -137,7 +137,45 @@ func TestFleetWorkflow_DependencyFailure_SkipsDependents(t *testing.T) {
 	require.NoError(t, env.GetWorkflowResult(&out))
 	require.Contains(t, out, "core: failed")
 	require.Contains(t, out, "rest: skipped")
+	// The skip line names the blocking dependency so the reader need not
+	// reconstruct the graph.
+	require.Contains(t, out, `rest: skipped (dependency "core" did not succeed)`)
 	require.Contains(t, out, "2 node(s): 0 succeeded, 1 failed, 1 skipped.")
+}
+
+func TestFleetWorkflow_TransitiveSkip_PropagatesThroughLayers(t *testing.T) {
+	env := newEnv(t)
+
+	// a -> b -> c: node a fails, so b is skipped (direct dependency failed) and c
+	// is skipped in turn because its dependency b was itself skipped, not failed.
+	// This pins that any non-succeeded status blocks a dependent, across layers.
+	plan := FleetPlan{
+		Goal: "three-layer chain",
+		Nodes: []FleetNode{
+			{ID: "a", Prompt: "a"},
+			{ID: "b", Prompt: "b", DependsOn: []string{"a"}},
+			{ID: "c", Prompt: "c", DependsOn: []string{"b"}},
+		},
+	}
+
+	// Only node a should ever start a child; b and c must be skipped without
+	// running. Mock a to fail; any other child call would be an unexpected call.
+	env.OnWorkflow(codereview.DevelopWorkflow, mock.Anything, mock.MatchedBy(func(in codereview.DevelopInput) bool {
+		return in.Prompt == "a"
+	})).Return("", errors.New("develop blew up"))
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(FleetWorkflow, FleetInput{Plan: plan, WorkDir: "/repo", WorktreesDir: "/wt"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	var out string
+	require.NoError(t, env.GetWorkflowResult(&out))
+	require.Contains(t, out, "a: failed")
+	require.Contains(t, out, `b: skipped (dependency "a" did not succeed)`)
+	// c is blocked by b, which was skipped (not failed) — the transitive case.
+	require.Contains(t, out, `c: skipped (dependency "b" did not succeed)`)
+	require.Contains(t, out, "3 node(s): 0 succeeded, 1 failed, 2 skipped.")
 }
 
 func TestFleetWorkflow_ParallelNodes_BothRun(t *testing.T) {
