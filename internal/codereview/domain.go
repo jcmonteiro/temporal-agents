@@ -280,6 +280,11 @@ type DevelopInput struct {
 	// keeping the graph's contract ordering-only even if the checkout moves while
 	// earlier layers run. Empty (the standalone default) branches from HEAD.
 	StartPoint string
+	// MergeBranches, when non-empty, are branches merged (in order) into the
+	// freshly-created branch before the develop agent runs, seeding it with their
+	// committed work. The fleet passes a dependent node's dependency branches here
+	// so a dependent is developed on top of the slices it depends on.
+	MergeBranches []string
 	// Prompt is the caller's instruction describing what to implement.
 	Prompt string
 	// Summary, when true, runs a final activity before the workflow returns
@@ -293,6 +298,13 @@ type DevelopInput struct {
 	// to complete before returning. When false the workflow keeps its original
 	// behavior: it starts the review loop as an abandoned child and returns.
 	WithRemote bool
+	// AwaitReview, when true (and WithRemote is false), makes the workflow run the
+	// local review loop as a supervised, awaited child and return only once it has
+	// converged — without opening a PR or running the pilot. It is the fleet's
+	// Phase 1 unit: it lets a dependent node be gated on its prerequisites having
+	// been both developed and reviewed. When false the workflow keeps its original
+	// behavior of starting the review loop as an abandoned child and returning.
+	AwaitReview bool
 }
 
 // OpenPRInput is the input to OpenPRWorkflow.

@@ -458,6 +458,20 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	in.WorkDir = created.WorkDir
 	base := created.BaseSHA
 
+	// Seed the fresh branch with the committed work of the branches it depends on
+	// (the fleet passes them for a dependent node), so the develop agent starts
+	// from its dependencies' code. The post-seed HEAD becomes the base for
+	// EnsureDeveloped, so that check verifies the develop agent — not these seeding
+	// merges — advanced the branch.
+	if len(in.MergeBranches) > 0 {
+		var seededHead string
+		if err := workflow.ExecuteActivity(quick, a.SeedBranches,
+			SeedBranchesRequest{WorkDir: in.WorkDir, Branches: in.MergeBranches}).Get(quick, &seededHead); err != nil {
+			return "", err
+		}
+		base = seededHead
+	}
+
 	var agentResult AgentResult
 	if err := workflow.ExecuteActivity(agentCtx, a.RunDevelopAgent,
 		RunDevelopRequest{WorkDir: in.WorkDir, Prompt: in.Prompt}).Get(agentCtx, &agentResult); err != nil {
@@ -489,6 +503,14 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 		return developWithRemote(ctx, in, commits, agentResult.Tokens, webhookBody)
 	}
 
+	if in.AwaitReview {
+		// Development has landed; ownership passes to the supervised review child,
+		// which emits its own failure notification, so stand the develop-failure
+		// defer down (as the remote path does).
+		remoteOwned = true
+		return developAndAwaitReview(ctx, in, commits, agentResult.Tokens, webhookBody)
+	}
+
 	// Trigger the review loop as an abandoned child so it outlives this workflow.
 	reviewID := "review-" + workflow.GetInfo(ctx).WorkflowExecution.ID
 	childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
@@ -516,6 +538,31 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	wfnotify.NotifyBestEffort(ctx, notification.Notification{
 		Title: "Development complete",
 		Body: fmt.Sprintf("Developed branch %s with %d commit(s) successfully. The review cycle will now commence.",
+			in.Branch, len(commits)),
+		WebhookBody: webhookBody,
+	})
+	return summary, nil
+}
+
+// developAndAwaitReview runs the Phase 1 tail the fleet uses: after development
+// has landed, it runs the local review loop as a supervised, awaited child and
+// returns only once that loop has converged — without opening a PR or running
+// the pilot. Because a parent's child future resolves only when the review
+// loop's continue-as-new chain converges, waiting on it keeps this workflow the
+// review's parent and lets the fleet gate a dependent node on its prerequisites
+// having been both developed and reviewed.
+func developAndAwaitReview(ctx workflow.Context, in DevelopInput, commits []string, tokens int, webhookBody string) (result string, err error) {
+	reviewID := "review-" + workflow.GetInfo(ctx).WorkflowExecution.ID
+	reviewCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: reviewID})
+	if err := workflow.ExecuteChildWorkflow(reviewCtx, ReviewWorkflow,
+		ReviewInput{WorkDir: in.WorkDir, TokensSoFar: tokens, Summary: in.Summary}).Get(ctx, nil); err != nil {
+		return "", fmt.Errorf("review workflow: %w", err)
+	}
+	summary := withTokenTotal(fmt.Sprintf("Developed branch %s with %d commit(s); local review converged.",
+		in.Branch, len(commits)), tokens)
+	wfnotify.NotifyBestEffort(ctx, notification.Notification{
+		Title: "Development and review complete",
+		Body: fmt.Sprintf("Developed branch %s with %d commit(s); the local review loop has converged.",
 			in.Branch, len(commits)),
 		WebhookBody: webhookBody,
 	})

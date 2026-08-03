@@ -48,6 +48,38 @@ func TestDevelopWorkflow_HappyPath_DevelopsThenTriggersReview(t *testing.T) {
 	env.AssertExpectations(t)
 }
 
+func TestDevelopWorkflow_AwaitReview_SeedsFromDependencyBranchesAndAwaitsReview(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
+		Return(CreateBranchResult{Branch: "feat/b", WorkDir: "/wt/b", BaseSHA: "base"}, nil)
+	// The dependency branches are merged into the fresh branch before development;
+	// SeedBranches reports the post-seed HEAD.
+	env.OnActivity(a.SeedBranches, mock.Anything, mock.MatchedBy(func(req SeedBranchesRequest) bool {
+		return req.WorkDir == "/wt/b" && len(req.Branches) == 1 && req.Branches[0] == "feat/a"
+	})).Return("seeded-head", nil)
+	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
+	// EnsureDeveloped validates against the post-seed HEAD, so the check confirms
+	// the develop agent (not the seeding merges) advanced the branch.
+	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.MatchedBy(func(req EnsureDevelopedRequest) bool {
+		return req.BaseSHA == "seeded-head"
+	})).Return([]string{"sha1"}, nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{
+		WorkDir: "/repo", Branch: "feat/b", WorktreesDir: "/wt", Prompt: "expose via REST",
+		MergeBranches: []string{"feat/a"}, AwaitReview: true,
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	var out string
+	require.NoError(t, env.GetWorkflowResult(&out))
+	// Phase 1 waits for the review loop to converge (not merely start it).
+	require.Contains(t, out, "local review converged")
+	env.AssertExpectations(t)
+}
+
 func TestDevelopWorkflow_Worktree_PassesWorktreesDirAndDevelopsInReturnedWorktree(t *testing.T) {
 	env := newDevelopEnv(t)
 
