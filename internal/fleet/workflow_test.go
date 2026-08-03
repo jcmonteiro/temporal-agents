@@ -240,13 +240,21 @@ func TestFleetPlanWorkflow_ReturnsGeneratedPlan(t *testing.T) {
 
 	env.OnActivity(fa.GeneratePlan, mock.Anything, mock.Anything).
 		Return(GeneratePlanResult{Plan: plan, Tokens: 1234}, nil)
-	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+	var got notification.Notification
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { got = args.Get(1).(notification.Notification) }).Return(nil)
 
 	env.ExecuteWorkflow(FleetPlanWorkflow, FleetPlanInput{Goal: "expose the core", WorkDir: "/repo"})
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	var got FleetPlan
-	require.NoError(t, env.GetWorkflowResult(&got))
-	require.Equal(t, plan, got)
+	var gotPlan FleetPlan
+	require.NoError(t, env.GetWorkflowResult(&gotPlan))
+	require.Equal(t, plan, gotPlan)
+
+	// The plan-ready notification surfaces the node count and the read-only
+	// planning token spend from GeneratePlanResult.Tokens (grouped in thousands).
+	require.Equal(t, "Fleet plan ready", got.Title)
+	require.Contains(t, got.Body, "Planned 2 node(s) for: expose the core")
+	require.Contains(t, got.Body, "Planning token usage: 1,234 tokens.")
 }
