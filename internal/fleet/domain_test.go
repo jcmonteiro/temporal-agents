@@ -132,3 +132,20 @@ func TestParsePlan_NoObject(t *testing.T) {
 	_, err := ParsePlan("no json here")
 	require.Error(t, err)
 }
+
+func TestNodeBranch_NamespacesNodeUnderRun(t *testing.T) {
+	require.Equal(t, "fleet-abc-rest", NodeBranch("fleet-abc", "rest"))
+}
+
+func TestDependencyBranches_MapsAndSortsDependencies(t *testing.T) {
+	node := FleetNode{ID: "api", DependsOn: []string{"grpc", "core"}}
+	// Dependencies are mapped to their branches and returned in sorted order so a
+	// dependent seeds deterministically regardless of DependsOn ordering.
+	require.Equal(t,
+		[]string{"fleet-abc-core", "fleet-abc-grpc"},
+		DependencyBranches("fleet-abc", node))
+}
+
+func TestDependencyBranches_NoDependencies_ReturnsEmpty(t *testing.T) {
+	require.Empty(t, DependencyBranches("fleet-abc", FleetNode{ID: "core"}))
+}

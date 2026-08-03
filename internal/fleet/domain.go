@@ -197,6 +197,33 @@ func TopoLayers(plan FleetPlan) ([][]string, error) {
 	return layers, nil
 }
 
+// NodeBranch returns the git branch a fleet node develops on: the fleet run's ID
+// suffixed with the node's ID. Deriving it deterministically from the run and
+// node IDs (rather than an auto-generated alias) means the orchestrator knows
+// every node's branch up front, so a dependent can be told to merge in the
+// branches of the slices it depends on. fleetID is the fleet workflow's
+// execution ID ("fleet-<uuid>") and nodeID a validated slug (see
+// nodeIDPattern), so the result is a safe git ref and a safe worktree path
+// component. It mirrors the "<fleetID>-<nodeID>" child workflow ID scheme.
+func NodeBranch(fleetID, nodeID string) string {
+	return fleetID + "-" + nodeID
+}
+
+// DependencyBranches returns the branches of node's dependencies, in sorted
+// order for determinism, each mapped from its dependency ID via NodeBranch. The
+// orchestrator passes them to the dependent's develop workflow to seed its
+// branch with the committed work of the slices it depends on, so a dependent is
+// developed on top of its dependencies rather than the bare base.
+func DependencyBranches(fleetID string, node FleetNode) []string {
+	deps := append([]string{}, node.DependsOn...)
+	sort.Strings(deps)
+	branches := make([]string, 0, len(deps))
+	for _, dep := range deps {
+		branches = append(branches, NodeBranch(fleetID, dep))
+	}
+	return branches
+}
+
 // NodeStatus is the terminal outcome of a node within a fleet run.
 type NodeStatus string
 

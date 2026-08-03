@@ -88,7 +88,7 @@ func TestFleetWorkflow_PropagatesInputsAndFormsChildIDs(t *testing.T) {
 
 	env.ExecuteWorkflow(FleetWorkflow, FleetInput{
 		Plan: linearPlan(), WorkDir: "/repo", WorktreesDir: "/wt",
-		Summary: true, WithRemote: true,
+		Summary: true,
 	})
 
 	require.True(t, env.IsWorkflowCompleted())
@@ -102,25 +102,31 @@ func TestFleetWorkflow_PropagatesInputsAndFormsChildIDs(t *testing.T) {
 	}
 	require.Len(t, byNode, 2)
 
+	fleetID := strings.TrimSuffix(byNode["core"].id, "-core")
+
 	// Every node's develop input carries the shared repo/worktree location, its
-	// own prompt, and the propagated --summary/--with-remote toggles.
+	// own prompt, the propagated --summary toggle, and Phase 1's await-review
+	// gate; each develops on its own run-scoped branch cut from the single base
+	// captured once at run start.
 	for node, c := range byNode {
 		require.Equal(t, "/repo", c.in.WorkDir, node)
 		require.Equal(t, "/wt", c.in.WorktreesDir, node)
 		require.True(t, c.in.Summary, node)
-		require.True(t, c.in.WithRemote, node)
-		// Every node branches from the single base captured once at run start,
-		// passed as an explicit worktree start point.
+		require.True(t, c.in.AwaitReview, node)
 		require.Equal(t, "base-sha", c.in.StartPoint, node)
+		require.Equal(t, NodeBranch(fleetID, node), c.in.Branch, node)
 	}
 	require.Equal(t, "implement the core", byNode["core"].in.Prompt)
 	require.Equal(t, "expose via REST", byNode["rest"].in.Prompt)
 
+	// The foundation has no dependencies to seed from; the dependent is seeded
+	// with the foundation's branch so it develops on top of the core's work.
+	require.Empty(t, byNode["core"].in.MergeBranches)
+	require.Equal(t, []string{NodeBranch(fleetID, "core")}, byNode["rest"].in.MergeBranches)
+
 	// Child workflow IDs are formed as "<fleetID>-<nodeid>": both share the fleet
 	// parent's ID as a prefix, differing only in the node suffix.
-	require.Equal(t,
-		strings.TrimSuffix(byNode["core"].id, "-core"),
-		strings.TrimSuffix(byNode["rest"].id, "-rest"))
+	require.Equal(t, fleetID, strings.TrimSuffix(byNode["rest"].id, "-rest"))
 }
 
 func TestFleetWorkflow_DependencyFailure_SkipsDependents(t *testing.T) {

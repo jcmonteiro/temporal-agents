@@ -60,13 +60,14 @@ type FleetInput struct {
 	// WorktreesDir is the base directory under which each node develops in its
 	// own git worktree. It is required so parallel nodes never share a working
 	// tree: each child develop workflow gets an isolated worktree keyed by its
-	// auto-generated branch.
+	// run-scoped branch (see NodeBranch).
 	WorktreesDir string
 	// Summary is propagated to each child develop workflow's --summary behavior.
 	Summary bool
-	// WithRemote is propagated to each child develop workflow: when true a node
-	// runs the full remote pipeline (review, PR, Copilot pilot) and the fleet
-	// waits for that whole pipeline before a dependent node starts.
+	// WithRemote selects the remote phase: after every node has been developed and
+	// reviewed locally, open a PR per node and track it (open/pilot/re-sync) until
+	// it merges. It is reserved for that phase; the local Phase 1 (develop + review
+	// each node in dependency order) runs regardless.
 	WithRemote bool
 }
 
@@ -79,23 +80,22 @@ type FleetInput struct {
 // node's outcome — status, develop-step token usage, and any PR link — into a
 // single summary notification.
 //
-// Each node develops in its own git worktree (WorktreesDir) on an
-// auto-generated branch cut from the repository base, so concurrent nodes never
-// contend for a working tree. The base is the repository HEAD captured once when
-// the run starts (ResolveBase) and passed to every child as an explicit
-// worktree start point, so a node started in a later layer branches from the
-// same commit as the first even if the user checks out, pulls, or merges while
-// earlier layers run. The graph therefore controls execution *ordering*, not
-// code layering: a dependent node starts only after the nodes it depends on have
-// succeeded, but it develops from the pinned base without their commits.
-// Ordering is the coordination an approved plan prescribes.
+// Each node develops in its own git worktree (WorktreesDir) on a run-scoped
+// branch (see NodeBranch), so concurrent nodes never contend for a working tree.
+// Every branch is cut from a single base — the repository HEAD captured once
+// when the run starts (ResolveBase) — and then seeded with the branches of the
+// node's dependencies (DependencyBranches), so a dependent is developed on top
+// of the committed, reviewed work of the slices it depends on rather than the
+// bare base. Pinning the base once keeps a node's start point stable even if the
+// user checks out, pulls, or merges while earlier layers run; the dependency
+// graph then controls both *ordering* and what a node builds on.
 //
-// "Succeeded" means the child DevelopWorkflow returned successfully. In the
-// default mode that is once the develop step landed its commits and the review
-// loop was *started* (an abandoned child that keeps running afterwards), so the
-// fleet releases dependents after the develop step, not after review converges.
-// Pass WithRemote when a dependent should wait for the full review+PR+pilot
-// pipeline to complete before it starts.
+// "Succeeded" means the child DevelopWorkflow returned successfully. Each node
+// runs in the AwaitReview (Phase 1) mode: it develops its seeded branch and then
+// waits for its local review loop to converge, so a dependent starts only after
+// its prerequisites have been both developed and reviewed. The remote phase
+// (open a PR per node and track it until merged, selected by WithRemote) is a
+// separate stage that runs once every node has cleared Phase 1.
 func FleetWorkflow(ctx workflow.Context, in FleetInput) (result string, err error) {
 	defer func() { wfnotify.NotifyFailureBestEffort(ctx, "Fleet run failed", err) }()
 
@@ -161,12 +161,18 @@ func FleetWorkflow(ctx workflow.Context, in FleetInput) (result string, err erro
 				WorkflowID: fleetID + "-" + id,
 			})
 			fut := workflow.ExecuteChildWorkflow(childCtx, codereview.DevelopWorkflow, codereview.DevelopInput{
-				WorkDir:      in.WorkDir,
-				WorktreesDir: in.WorktreesDir,
-				StartPoint:   base,
-				Prompt:       node.Prompt,
-				Summary:      in.Summary,
-				WithRemote:   in.WithRemote,
+				WorkDir:       in.WorkDir,
+				WorktreesDir:  in.WorktreesDir,
+				Branch:        NodeBranch(fleetID, id),
+				StartPoint:    base,
+				MergeBranches: DependencyBranches(fleetID, node),
+				Prompt:        node.Prompt,
+				Summary:       in.Summary,
+				// Phase 1: develop the node on a branch seeded from its dependencies'
+				// branches, then wait for its local review loop to converge before a
+				// dependent starts. The remote phase (open PR, pilot, track until
+				// merged) is orchestrated separately once every node has been reviewed.
+				AwaitReview: true,
 			})
 			started = append(started, pending{id: id, fut: fut})
 		}
