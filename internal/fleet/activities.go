@@ -13,10 +13,16 @@ import (
 // activity's attempts.
 const errInvalidPlan = "InvalidPlan"
 
+// errPlanningMutatedRepo is the error type returned (non-retryable) when the
+// read-only planning contract's tripwire fires: the source repository changed
+// while planning ran. Retrying cannot undo a mutation, so it fails fast.
+const errPlanningMutatedRepo = "PlanningMutatedRepo"
+
 // Activities bundles the driven adapters the fleet workflows orchestrate. It is
 // registered with the Temporal worker; each exported method is an activity.
 type Activities struct {
 	Agent Agent
+	Git   Git
 }
 
 // GeneratePlanRequest is the input to GeneratePlan.
@@ -41,13 +47,59 @@ type GeneratePlanResult struct {
 // GeneratePlan drives the Pi agent to decompose the goal into a dependency
 // graph and returns the parsed, validated plan. Parsing and validation run here
 // (rather than in the workflow) so a malformed graph is a non-retryable activity
-// failure with a clear message. The agent makes no code changes; it only reads
-// the repository to inform the decomposition.
+// failure with a clear message.
+//
+// Planning is contracted to be read-only, and that contract is enforced rather
+// than merely requested: a prompt cannot stop an agent (or one of its bash tool
+// calls) from editing or committing files. Two mechanisms enforce it. First, the
+// agent runs against a disposable, detached worktree — a throwaway copy of the
+// repository the user's working tree, branch, and index never see — created and
+// removed here. Second, the run uses a read-only tool policy (RunReadOnly) that
+// denies the file-mutating tools outright. Finally a tripwire re-reads the source
+// repository and fails non-retryably if it changed, so a plan is never returned
+// from a run that escaped the sandbox.
 func (a *Activities) GeneratePlan(ctx context.Context, req GeneratePlanRequest) (GeneratePlanResult, error) {
-	out, tokens, err := a.Agent.Run(ctx, BuildPlanPrompt(req.Goal), req.WorkDir)
+	// Snapshot the source repository up front so the tripwire below can confirm
+	// planning left it exactly where it started.
+	beforeHead, err := a.Git.Head(ctx, req.WorkDir)
+	if err != nil {
+		return GeneratePlanResult{}, fmt.Errorf("read repository HEAD: %w", err)
+	}
+	beforeDirty, err := a.Git.HasChanges(ctx, req.WorkDir)
+	if err != nil {
+		return GeneratePlanResult{}, fmt.Errorf("read repository state: %w", err)
+	}
+
+	// Run the agent against a disposable copy so it operates in isolation. Always
+	// discard it, even on failure, so a planning run leaves no worktree behind.
+	sandbox, err := a.Git.AddDisposableWorktree(ctx, req.WorkDir)
+	if err != nil {
+		return GeneratePlanResult{}, fmt.Errorf("create planning sandbox: %w", err)
+	}
+	defer func() { _ = a.Git.RemoveWorktree(ctx, req.WorkDir, sandbox) }()
+
+	out, tokens, err := a.Agent.RunReadOnly(ctx, BuildPlanPrompt(req.Goal), sandbox)
 	if err != nil {
 		return GeneratePlanResult{}, err
 	}
+
+	// Tripwire: the sandbox should have absorbed any changes, so the source repo
+	// must be where it started. A mismatch means the read-only contract was
+	// violated; fail non-retryably rather than return a plan produced by a run that
+	// touched the user's repository.
+	afterHead, err := a.Git.Head(ctx, req.WorkDir)
+	if err != nil {
+		return GeneratePlanResult{}, fmt.Errorf("verify repository HEAD: %w", err)
+	}
+	afterDirty, err := a.Git.HasChanges(ctx, req.WorkDir)
+	if err != nil {
+		return GeneratePlanResult{}, fmt.Errorf("verify repository state: %w", err)
+	}
+	if afterHead != beforeHead || afterDirty != beforeDirty {
+		return GeneratePlanResult{}, temporal.NewNonRetryableApplicationError(
+			"planning changed the repository despite its read-only contract", errPlanningMutatedRepo, nil)
+	}
+
 	plan, err := ParsePlan(out)
 	if err != nil {
 		return GeneratePlanResult{}, temporal.NewNonRetryableApplicationError(

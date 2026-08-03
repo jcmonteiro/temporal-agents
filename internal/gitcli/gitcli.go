@@ -41,6 +41,37 @@ func (g Git) AddWorktree(ctx context.Context, dir, worktreePath, branch string) 
 	return classifyExists(err)
 }
 
+// AddDisposableWorktree creates a throwaway detached-HEAD worktree of the repo
+// in dir at a fresh temporary path and returns that path. It lets a read-only
+// step (e.g. fleet planning) run against an isolated copy of the repository so
+// the step cannot touch the user's working tree, branch, or index; callers pair
+// it with RemoveWorktree to discard the copy afterward.
+func (g Git) AddDisposableWorktree(ctx context.Context, dir string) (string, error) {
+	// Reserve a unique path without leaving a directory behind: `git worktree add`
+	// wants to create the directory itself and refuses a pre-existing non-empty
+	// one. MkdirTemp is the simplest race-free way to reserve a name, so create it
+	// then immediately remove the empty directory and hand the bare path to git.
+	path, err := os.MkdirTemp("", "fleet-plan-*")
+	if err != nil {
+		return "", fmt.Errorf("reserve worktree path: %w", err)
+	}
+	if err := os.Remove(path); err != nil {
+		return "", fmt.Errorf("clear worktree path: %w", err)
+	}
+	if _, err := run(ctx, dir, "worktree", "add", "--detach", path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// RemoveWorktree discards a worktree previously created at path, including any
+// uncommitted changes in it (--force), so a disposable sandbox leaves nothing
+// behind.
+func (g Git) RemoveWorktree(ctx context.Context, dir, path string) error {
+	_, err := run(ctx, dir, "worktree", "remove", "--force", path)
+	return err
+}
+
 // classifyExists wraps err with codereview.ErrBranchOrWorktreeExists when git's
 // failure reports that the branch or worktree path already exists, so the
 // activity layer can treat it as a permanent (non-retryable) condition rather

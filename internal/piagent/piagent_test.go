@@ -165,9 +165,17 @@ func TestFormatTokenTotal_GroupsThousands(t *testing.T) {
 }
 
 func TestPiArgs_RunsNonInteractiveJSONForSession(t *testing.T) {
-	args := piArgs("session-123")
+	args := piArgs("session-123", false)
 	if want := []string{"-p", "--mode", "json", "--session-id", "session-123"}; strings.Join(args, " ") != strings.Join(want, " ") {
 		t.Fatalf("piArgs = %v, want %v", args, want)
+	}
+}
+
+func TestPiArgs_ReadOnlyDeniesMutatingTools(t *testing.T) {
+	args := piArgs("session-123", true)
+	want := []string{"-p", "--mode", "json", "--session-id", "session-123", "--exclude-tools", "edit,write"}
+	if strings.Join(args, " ") != strings.Join(want, " ") {
+		t.Fatalf("piArgs(readOnly) = %v, want %v", args, want)
 	}
 }
 

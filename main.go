@@ -456,7 +456,7 @@ func runWorker(opts notifyOptions) {
 	// as children, which is already registered above.
 	w.RegisterWorkflow(fleet.FleetPlanWorkflow)
 	w.RegisterWorkflow(fleet.FleetWorkflow)
-	w.RegisterActivity(&fleet.Activities{Agent: piagent.Agent{}})
+	w.RegisterActivity(&fleet.Activities{Agent: piagent.Agent{}, Git: gitcli.New()})
 
 	// A single notification activity, shared by every workflow that notifies.
 	w.RegisterActivity(&notification.Activity{Notifier: buildNotifier(opts)})
@@ -660,12 +660,60 @@ func watchRun(id string) {
 		time.Sleep(time.Second)
 	}
 
-	var out string
-	if err := c.GetWorkflow(ctx, id, "").Get(ctx, &out); err != nil {
+	out, err := workflowResult(ctx, c.GetWorkflow(ctx, id, ""), id)
+	if err != nil {
 		fatalf("Workflow ended with error: %v", err)
 	}
 	fmt.Println("\n─── result ───")
 	fmt.Println(out)
+}
+
+// workflowResult decodes a completed workflow's result into the concrete type
+// that workflow returns and renders it for display. Most workflows return a
+// plain string summary, but a few return structured values — FleetPlanWorkflow a
+// fleet.FleetPlan and OpenPRWorkflow a codereview.OpenPRResult — that cannot be
+// decoded into a string. It picks the decode target from the workflow-ID class
+// (see classifyWorkflow) so `watch` also works for the structured-result
+// workflows advertised by `fleet plan` and the open-PR stage.
+func workflowResult(ctx context.Context, run client.WorkflowRun, id string) (string, error) {
+	switch classifyWorkflow(id) {
+	case "fleet-plan":
+		var plan fleet.FleetPlan
+		if err := run.Get(ctx, &plan); err != nil {
+			return "", err
+		}
+		return formatFleetPlan(plan), nil
+	case "open-pr":
+		var res codereview.OpenPRResult
+		if err := run.Get(ctx, &res); err != nil {
+			return "", err
+		}
+		if res.URL != "" {
+			return res.Summary + "\n" + res.URL, nil
+		}
+		return res.Summary, nil
+	default:
+		var out string
+		if err := run.Get(ctx, &out); err != nil {
+			return "", err
+		}
+		return out, nil
+	}
+}
+
+// formatFleetPlan renders a fleet plan's goal and its node list (with each
+// node's ordering dependencies) for display.
+func formatFleetPlan(plan fleet.FleetPlan) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Fleet plan (%d node(s)) for: %s\n", len(plan.Nodes), plan.Goal)
+	for _, n := range plan.Nodes {
+		if len(n.DependsOn) == 0 {
+			fmt.Fprintf(&b, "  - %s\n", n.ID)
+		} else {
+			fmt.Fprintf(&b, "  - %s (depends on %s)\n", n.ID, strings.Join(n.DependsOn, ", "))
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // printNewLines prints lines from cur that differ from the already-printed

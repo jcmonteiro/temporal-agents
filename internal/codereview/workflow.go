@@ -582,10 +582,24 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 	// the PR URL can be threaded into this workflow's own summary below; that
 	// summary is what the fleet orchestrator surfaces as the node's PR link.
 	openCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "open-pr-" + id})
+	openFut := workflow.ExecuteChildWorkflow(openCtx, OpenPRWorkflow, OpenPRInput{WorkDir: in.WorkDir})
+	// OpenPRWorkflow's result type changed from a plain string to the structured
+	// OpenPRResult. The decode is gated behind a workflow version so an in-flight
+	// DevelopWorkflow still replays cleanly: a history recorded before this change
+	// holds a *string* OpenPRWorkflow completion, and unmarshalling that string into
+	// OpenPRResult would fail replay and diverge from the recorded pilot commands.
+	// Pre-version executions therefore discard the legacy payload exactly as the
+	// original code did (it passed nil) and fall back to generic PR wording below;
+	// new executions capture the structured result and thread its URL through.
 	var openPR OpenPRResult
-	if err := workflow.ExecuteChildWorkflow(openCtx, OpenPRWorkflow,
-		OpenPRInput{WorkDir: in.WorkDir}).Get(ctx, &openPR); err != nil {
-		return "", fmt.Errorf("open PR workflow: %w", err)
+	if workflow.GetVersion(ctx, "open-pr-structured-result", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
+		if err := openFut.Get(ctx, nil); err != nil {
+			return "", fmt.Errorf("open PR workflow: %w", err)
+		}
+	} else {
+		if err := openFut.Get(ctx, &openPR); err != nil {
+			return "", fmt.Errorf("open PR workflow: %w", err)
+		}
 	}
 
 	// The pilot loop. It always chains (Chain: true), so waiting on it here blocks
