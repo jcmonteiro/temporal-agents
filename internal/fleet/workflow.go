@@ -99,6 +99,16 @@ type FleetInput struct {
 func FleetWorkflow(ctx workflow.Context, in FleetInput) (result string, err error) {
 	defer func() { wfnotify.NotifyFailureBestEffort(ctx, "Fleet run failed", err) }()
 
+	// WorktreesDir is required (see FleetInput): every child develops in its own
+	// worktree so concurrent nodes never share a working tree. An empty value
+	// would send each child through DevelopWorkflow's in-place branch path against
+	// the same WorkDir, letting parallel children switch and modify one working
+	// tree. Reject it before resolving the base or starting any child.
+	if in.WorktreesDir == "" {
+		return "", temporal.NewNonRetryableApplicationError(
+			"WorktreesDir is required so parallel nodes never share a working tree", errMissingWorktreesDir, nil)
+	}
+
 	layers, err := TopoLayers(in.Plan)
 	if err != nil {
 		return "", temporal.NewNonRetryableApplicationError(

@@ -226,6 +226,21 @@ func TestFleetWorkflow_InvalidPlan_FailsWithoutStartingChildren(t *testing.T) {
 	require.Error(t, env.GetWorkflowError())
 }
 
+func TestFleetWorkflow_MissingWorktreesDir_FailsWithoutStartingChildren(t *testing.T) {
+	env := newEnv(t)
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	// An empty WorktreesDir is rejected before the base is resolved or any child
+	// starts: neither ResolveBase nor DevelopWorkflow is registered as an
+	// expected call, so reaching them would fail the run for the wrong reason.
+	env.ExecuteWorkflow(FleetWorkflow, FleetInput{
+		Plan: linearPlan(), WorkDir: "/repo",
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+}
+
 func TestFleetWorkflow_Failure_SendsFailureNotification(t *testing.T) {
 	env := newEnv(t)
 	var got notification.Notification

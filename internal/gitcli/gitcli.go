@@ -123,7 +123,7 @@ func (g Git) HasChanges(ctx context.Context, dir string) (bool, error) {
 // worktree or index changes — not merely whether the repository is dirty.
 // It combines the HEAD commit SHA with two independent tree object hashes: the
 // real index tree (the staging area) and a synthesized tree of the complete
-// worktree (tracked, staged, and untracked non-ignored content). Because it
+// worktree (tracked, staged, untracked, and ignored content). Because it
 // captures content rather than a dirty/clean boolean, it detects a mutation to
 // a file that was already modified before the fingerprint was taken, which a
 // dirty-flag comparison cannot.
@@ -149,13 +149,15 @@ func (g Git) Fingerprint(ctx context.Context, dir string) (string, error) {
 	}
 	// Reserve a throwaway index path and seed it from HEAD before staging the
 	// worktree, all against GIT_INDEX_FILE so the user's real index is never
-	// touched. Seeding matters for a file that is committed but now matches
-	// .gitignore: `git add -A` skips it as ignored, so an empty starting index
-	// would drop it from the synthesized tree and an unstaged edit to it would
-	// leave both the real-index and worktree trees unchanged, letting the
-	// tripwire miss the mutation. read-tree HEAD keeps such tracked files in the
-	// index so they stay fingerprinted, while `git add -A` still layers on
-	// staged, unstaged, and untracked non-ignored changes (deletions included).
+	// touched. `git add --force -A` stages everything the plain form would
+	// (tracked, staged, unstaged, and untracked changes, deletions included) and,
+	// crucially, ignored files too: plain `git add -A` skips ignored paths, so an
+	// escaped command could overwrite a common ignored file such as .env while
+	// HEAD, the real index, and the worktree tree all stayed identical, letting
+	// the tripwire miss the mutation and contradicting the read-only guarantee.
+	// --force folds those ignored files into the synthesized tree so a change to
+	// one moves the fingerprint. read-tree HEAD seeds the index first so a
+	// committed-but-now-ignored file stays fingerprinted as a further guard.
 	idx, err := os.MkdirTemp("", "fleet-fp-*")
 	if err != nil {
 		return "", fmt.Errorf("reserve fingerprint index dir: %w", err)
@@ -165,7 +167,7 @@ func (g Git) Fingerprint(ctx context.Context, dir string) (string, error) {
 	if _, err := runEnv(ctx, dir, env, "read-tree", "HEAD"); err != nil {
 		return "", err
 	}
-	if _, err := runEnv(ctx, dir, env, "add", "-A"); err != nil {
+	if _, err := runEnv(ctx, dir, env, "add", "--force", "-A"); err != nil {
 		return "", err
 	}
 	worktreeTree, err := runEnv(ctx, dir, env, "write-tree")

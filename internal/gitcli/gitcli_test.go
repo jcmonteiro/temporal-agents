@@ -115,6 +115,51 @@ func TestFingerprintDetectsEditToTrackedIgnoredFile(t *testing.T) {
 	require.NotEqual(t, before, after, "editing a tracked-but-ignored file must change the fingerprint")
 }
 
+// TestFingerprintDetectsEditToIgnoredUntrackedFile pins that ignored files are
+// covered: an ignored, untracked file such as .env is never committed and is
+// skipped by plain `git add -A`, so without --force overwriting it would leave
+// HEAD, the real index, and the worktree tree all unchanged and the read-only
+// tripwire would miss the mutation. Staging with --force folds it into the
+// synthesized tree so the fingerprint moves.
+func TestFingerprintDetectsEditToIgnoredUntrackedFile(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := initRepo(t)
+	g := New()
+	ctx := context.Background()
+
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+
+	// Ignore .env, then create it as an untracked, ignored file (never committed,
+	// as a secret file would be).
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(".env\n"), 0o644))
+	git("add", ".gitignore")
+	git("commit", "-m", "ignore .env")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("SECRET=one\n"), 0o644))
+
+	before, err := g.Fingerprint(ctx, dir)
+	require.NoError(t, err)
+
+	// Overwrite the ignored file, as an escaped command could.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("SECRET=two\n"), 0o644))
+
+	after, err := g.Fingerprint(ctx, dir)
+	require.NoError(t, err)
+
+	require.NotEqual(t, before, after, "overwriting an ignored untracked file must change the fingerprint")
+}
+
 func TestClassifyExists(t *testing.T) {
 	tests := []struct {
 		name         string

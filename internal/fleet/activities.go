@@ -13,6 +13,13 @@ import (
 // activity's attempts.
 const errInvalidPlan = "InvalidPlan"
 
+// errMissingWorktreesDir is the error type returned (non-retryable) when a fleet
+// run is started without a WorktreesDir. It is required so parallel nodes never
+// share a working tree; an empty value would send every child through the
+// in-place branch path against the same WorkDir, so it fails fast rather than
+// letting concurrent children mutate one working tree.
+const errMissingWorktreesDir = "MissingWorktreesDir"
+
 // errPlanningMutatedRepo is the error type returned (non-retryable) when the
 // read-only planning contract's tripwire fires: the source repository changed
 // while planning ran. Retrying cannot undo a mutation, so it fails fast.
