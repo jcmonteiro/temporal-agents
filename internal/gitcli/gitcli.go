@@ -28,16 +28,28 @@ func (g Git) CurrentBranch(ctx context.Context, dir string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// CreateBranch creates and checks out a new branch at the current HEAD in dir.
-func (g Git) CreateBranch(ctx context.Context, dir, branch string) error {
-	_, err := run(ctx, dir, "checkout", "-b", branch)
+// CreateBranch creates and checks out a new branch in dir. When startPoint is
+// non-empty the branch is created at that commit-ish; an empty startPoint lets
+// git default to dir's current HEAD.
+func (g Git) CreateBranch(ctx context.Context, dir, branch, startPoint string) error {
+	args := []string{"checkout", "-b", branch}
+	if startPoint != "" {
+		args = append(args, startPoint)
+	}
+	_, err := run(ctx, dir, args...)
 	return classifyExists(err)
 }
 
 // AddWorktree creates a new worktree at worktreePath checked out on a new
-// branch created at the current HEAD of the repository in dir.
-func (g Git) AddWorktree(ctx context.Context, dir, worktreePath, branch string) error {
-	_, err := run(ctx, dir, "worktree", "add", worktreePath, "-b", branch)
+// branch created off the repository in dir. When startPoint is non-empty the
+// branch is created at that commit-ish; an empty startPoint lets git default to
+// the repository's current HEAD.
+func (g Git) AddWorktree(ctx context.Context, dir, worktreePath, branch, startPoint string) error {
+	args := []string{"worktree", "add", worktreePath, "-b", branch}
+	if startPoint != "" {
+		args = append(args, startPoint)
+	}
+	_, err := run(ctx, dir, args...)
 	return classifyExists(err)
 }
 
@@ -109,14 +121,29 @@ func (g Git) HasChanges(ctx context.Context, dir string) (bool, error) {
 
 // Fingerprint returns a value that changes whenever any content in dir's
 // worktree or index changes — not merely whether the repository is dirty.
-// It combines the HEAD commit SHA with a tree object hash of the complete
+// It combines the HEAD commit SHA with two independent tree object hashes: the
+// real index tree (the staging area) and a synthesized tree of the complete
 // worktree (tracked, staged, and untracked non-ignored content). Because it
 // captures content rather than a dirty/clean boolean, it detects a mutation to
 // a file that was already modified before the fingerprint was taken, which a
-// dirty-flag comparison cannot. It never disturbs the user's real index: it
-// stages into a throwaway index file via GIT_INDEX_FILE and hashes that.
+// dirty-flag comparison cannot.
+//
+// Hashing the real index separately is what makes staged-only changes visible:
+// if a file has an unstaged edit and something runs `git add` on it, HEAD and
+// worktree bytes are unchanged, so a worktree-only fingerprint would be
+// identical before and after even though the user's index was mutated. The
+// real index tree captures that staging. It never disturbs the user's real
+// index: `git write-tree` only reads the index (writing tree objects), and the
+// worktree tree is synthesized in a throwaway index file via GIT_INDEX_FILE.
 func (g Git) Fingerprint(ctx context.Context, dir string) (string, error) {
 	head, err := g.Head(ctx, dir)
+	if err != nil {
+		return "", err
+	}
+	// Hash the real index tree so staged-only changes are covered. write-tree
+	// reads the current index and writes the corresponding tree object without
+	// mutating the staged content, so it leaves the user's index intact.
+	indexTree, err := run(ctx, dir, "write-tree")
 	if err != nil {
 		return "", err
 	}
@@ -133,11 +160,11 @@ func (g Git) Fingerprint(ctx context.Context, dir string) (string, error) {
 	if _, err := runEnv(ctx, dir, env, "add", "-A"); err != nil {
 		return "", err
 	}
-	tree, err := runEnv(ctx, dir, env, "write-tree")
+	worktreeTree, err := runEnv(ctx, dir, env, "write-tree")
 	if err != nil {
 		return "", err
 	}
-	return head + ":" + strings.TrimSpace(tree), nil
+	return head + ":" + strings.TrimSpace(indexTree) + ":" + strings.TrimSpace(worktreeTree), nil
 }
 
 // Stash saves local changes (including untracked files) off to the side.

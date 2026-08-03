@@ -16,6 +16,7 @@ type fakeGit struct {
 	// changing between the two snapshots GeneratePlan takes.
 	fpBefore, fpAfter string
 	fpCalls           int
+	head              string
 	added             bool
 	removed           bool
 }
@@ -26,6 +27,10 @@ func (f *fakeGit) Fingerprint(_ context.Context, _ string) (string, error) {
 		return f.fpBefore, nil
 	}
 	return f.fpAfter, nil
+}
+
+func (f *fakeGit) Head(_ context.Context, _ string) (string, error) {
+	return f.head, nil
 }
 
 func (f *fakeGit) AddDisposableWorktree(_ context.Context, _ string) (string, error) {

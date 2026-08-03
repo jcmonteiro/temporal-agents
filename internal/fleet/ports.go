@@ -27,6 +27,11 @@ type Git interface {
 	// detects a mutation to a file that was already modified when planning
 	// started, which a boolean comparison would miss.
 	Fingerprint(ctx context.Context, dir string) (string, error)
+	// Head returns the commit SHA that HEAD points at in dir. The orchestrator
+	// reads it once when a run starts to pin every node's worktree to the same
+	// base commit, so the graph controls ordering only and later layers never
+	// inherit a moved checkout or a prerequisite's commits.
+	Head(ctx context.Context, dir string) (string, error)
 	// AddDisposableWorktree creates a throwaway detached worktree of the repo in
 	// dir and returns its path, so a read-only step can run against an isolated
 	// copy that never touches the user's working tree, branch, or index.

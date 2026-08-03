@@ -81,10 +81,14 @@ type FleetInput struct {
 //
 // Each node develops in its own git worktree (WorktreesDir) on an
 // auto-generated branch cut from the repository base, so concurrent nodes never
-// contend for a working tree. The graph therefore controls execution
-// *ordering*, not code layering: a dependent node starts only after the nodes it
-// depends on have succeeded, but it develops from the base without their
-// commits. Ordering is the coordination an approved plan prescribes.
+// contend for a working tree. The base is the repository HEAD captured once when
+// the run starts (ResolveBase) and passed to every child as an explicit
+// worktree start point, so a node started in a later layer branches from the
+// same commit as the first even if the user checks out, pulls, or merges while
+// earlier layers run. The graph therefore controls execution *ordering*, not
+// code layering: a dependent node starts only after the nodes it depends on have
+// succeeded, but it develops from the pinned base without their commits.
+// Ordering is the coordination an approved plan prescribes.
 //
 // "Succeeded" means the child DevelopWorkflow returned successfully. In the
 // default mode that is once the develop step landed its commits and the review
@@ -104,6 +108,20 @@ func FleetWorkflow(ctx workflow.Context, in FleetInput) (result string, err erro
 	nodesByID := make(map[string]FleetNode, len(in.Plan.Nodes))
 	for _, n := range in.Plan.Nodes {
 		nodesByID[n.ID] = n
+	}
+
+	// Capture the repository base once, before any node starts, and pin every
+	// child worktree to it (see the doc comment): the graph then controls only
+	// ordering, never each node's start point.
+	baseCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 3},
+	})
+	var a *Activities
+	var base string
+	if err := workflow.ExecuteActivity(baseCtx, a.ResolveBase,
+		ResolveBaseRequest{WorkDir: in.WorkDir}).Get(baseCtx, &base); err != nil {
+		return "", err
 	}
 
 	fleetID := workflow.GetInfo(ctx).WorkflowExecution.ID
@@ -135,6 +153,7 @@ func FleetWorkflow(ctx workflow.Context, in FleetInput) (result string, err erro
 			fut := workflow.ExecuteChildWorkflow(childCtx, codereview.DevelopWorkflow, codereview.DevelopInput{
 				WorkDir:      in.WorkDir,
 				WorktreesDir: in.WorktreesDir,
+				StartPoint:   base,
 				Prompt:       node.Prompt,
 				Summary:      in.Summary,
 				WithRemote:   in.WithRemote,

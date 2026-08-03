@@ -274,6 +274,12 @@ type DevelopInput struct {
 	// worktree created under this directory (at <WorktreesDir>/<branch>) instead of
 	// switching the branch in WorkDir, leaving WorkDir untouched.
 	WorktreesDir string
+	// StartPoint, when non-empty, is the commit-ish the new branch is created at
+	// instead of WorkDir's current HEAD. The fleet orchestrator sets it so every
+	// node branches from the same repository base captured once at run start,
+	// keeping the graph's contract ordering-only even if the checkout moves while
+	// earlier layers run. Empty (the standalone default) branches from HEAD.
+	StartPoint string
 	// Prompt is the caller's instruction describing what to implement.
 	Prompt string
 	// Summary, when true, runs a final activity before the workflow returns

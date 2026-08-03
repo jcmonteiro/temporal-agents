@@ -17,14 +17,17 @@ var ErrBranchOrWorktreeExists = errors.New("branch or worktree already exists")
 type Git interface {
 	// CurrentBranch returns the checked-out branch name in dir.
 	CurrentBranch(ctx context.Context, dir string) (string, error)
-	// CreateBranch creates and checks out a new branch at the current HEAD in
-	// dir. It wraps ErrBranchOrWorktreeExists when the branch already exists.
-	CreateBranch(ctx context.Context, dir, branch string) error
+	// CreateBranch creates and checks out a new branch in dir. When startPoint is
+	// non-empty the branch is created at that commit-ish; an empty startPoint
+	// falls back to dir's current HEAD. It wraps ErrBranchOrWorktreeExists when
+	// the branch already exists.
+	CreateBranch(ctx context.Context, dir, branch, startPoint string) error
 	// AddWorktree creates a new worktree at worktreePath checked out on a new
-	// branch created at the current HEAD of the repository in dir. It wraps
-	// ErrBranchOrWorktreeExists when the branch or the worktree path already
-	// exists.
-	AddWorktree(ctx context.Context, dir, worktreePath, branch string) error
+	// branch created off the repository in dir. When startPoint is non-empty the
+	// branch is created at that commit-ish; an empty startPoint falls back to the
+	// repository's current HEAD. It wraps ErrBranchOrWorktreeExists when the
+	// branch or the worktree path already exists.
+	AddWorktree(ctx context.Context, dir, worktreePath, branch, startPoint string) error
 	// Head returns the commit SHA that HEAD points at in dir.
 	Head(ctx context.Context, dir string) (string, error)
 	// HasChanges reports whether dir has uncommitted changes (tracked or

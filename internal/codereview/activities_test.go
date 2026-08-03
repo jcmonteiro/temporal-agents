@@ -43,7 +43,7 @@ func (f *fakeGit) CurrentBranch(_ context.Context, dir string) (string, error) {
 	return "", fmt.Errorf("%s is not a worktree", dir)
 }
 
-func (f *fakeGit) AddWorktree(_ context.Context, _, worktreePath, _ string) error {
+func (f *fakeGit) AddWorktree(_ context.Context, _, worktreePath, _, _ string) error {
 	f.worktreeAdded = true
 	f.addWorktreeAt = worktreePath
 	return f.addErr
@@ -51,7 +51,7 @@ func (f *fakeGit) AddWorktree(_ context.Context, _, worktreePath, _ string) erro
 
 func (f *fakeGit) Head(context.Context, string) (string, error) { return f.head, nil }
 
-func (f *fakeGit) CreateBranch(context.Context, string, string) error {
+func (f *fakeGit) CreateBranch(context.Context, string, string, string) error {
 	f.branchCreated = true
 	return f.createErr
 }

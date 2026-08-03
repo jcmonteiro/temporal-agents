@@ -49,6 +49,7 @@ func linearPlan() FleetPlan {
 func TestFleetWorkflow_HappyPath_RunsEveryNodeAndAggregates(t *testing.T) {
 	env := newEnv(t)
 
+	env.OnActivity(fa.ResolveBase, mock.Anything, mock.Anything).Return("base-sha", nil)
 	env.OnWorkflow(codereview.DevelopWorkflow, mock.Anything, mock.Anything).
 		Return("developed successfully\n\nTotal token usage across all sessions: 1,000 tokens.", nil)
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
@@ -76,6 +77,7 @@ func TestFleetWorkflow_PropagatesInputsAndFormsChildIDs(t *testing.T) {
 		in codereview.DevelopInput
 	}
 	var calls []childCall
+	env.OnActivity(fa.ResolveBase, mock.Anything, mock.Anything).Return("base-sha", nil)
 	env.OnWorkflow(codereview.DevelopWorkflow, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			ctx := args.Get(0).(workflow.Context)
@@ -107,6 +109,9 @@ func TestFleetWorkflow_PropagatesInputsAndFormsChildIDs(t *testing.T) {
 		require.Equal(t, "/wt", c.in.WorktreesDir, node)
 		require.True(t, c.in.Summary, node)
 		require.True(t, c.in.WithRemote, node)
+		// Every node branches from the single base captured once at run start,
+		// passed as an explicit worktree start point.
+		require.Equal(t, "base-sha", c.in.StartPoint, node)
 	}
 	require.Equal(t, "implement the core", byNode["core"].in.Prompt)
 	require.Equal(t, "expose via REST", byNode["rest"].in.Prompt)
@@ -122,6 +127,7 @@ func TestFleetWorkflow_DependencyFailure_SkipsDependents(t *testing.T) {
 	env := newEnv(t)
 
 	// The foundation node (core) fails; the dependent (rest) must never start.
+	env.OnActivity(fa.ResolveBase, mock.Anything, mock.Anything).Return("base-sha", nil)
 	env.OnWorkflow(codereview.DevelopWorkflow, mock.Anything, mock.MatchedBy(func(in codereview.DevelopInput) bool {
 		return in.Prompt == "implement the core"
 	})).Return("", errors.New("develop blew up"))
@@ -160,6 +166,7 @@ func TestFleetWorkflow_TransitiveSkip_PropagatesThroughLayers(t *testing.T) {
 
 	// Only node a should ever start a child; b and c must be skipped without
 	// running. Mock a to fail; any other child call would be an unexpected call.
+	env.OnActivity(fa.ResolveBase, mock.Anything, mock.Anything).Return("base-sha", nil)
 	env.OnWorkflow(codereview.DevelopWorkflow, mock.Anything, mock.MatchedBy(func(in codereview.DevelopInput) bool {
 		return in.Prompt == "a"
 	})).Return("", errors.New("develop blew up"))
@@ -189,6 +196,7 @@ func TestFleetWorkflow_ParallelNodes_BothRun(t *testing.T) {
 		},
 	}
 
+	env.OnActivity(fa.ResolveBase, mock.Anything, mock.Anything).Return("base-sha", nil)
 	env.OnWorkflow(codereview.DevelopWorkflow, mock.Anything, mock.Anything).Return("ok", nil)
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
 

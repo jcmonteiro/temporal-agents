@@ -25,6 +25,26 @@ type Activities struct {
 	Git   Git
 }
 
+// ResolveBaseRequest is the input to ResolveBase.
+type ResolveBaseRequest struct {
+	// WorkDir is the repository directory whose HEAD is read as the fleet base.
+	WorkDir string
+}
+
+// ResolveBase reads the repository's current HEAD so the fleet can pin every
+// node's worktree to that single commit. Capturing the base once when a run
+// starts (rather than letting each child branch off whatever HEAD points at
+// when it happens to start) keeps the dependency graph ordering-only: a later
+// layer branches from the same base as the first even if the user moves the
+// checkout, and never inherits a prerequisite node's commits.
+func (a *Activities) ResolveBase(ctx context.Context, req ResolveBaseRequest) (string, error) {
+	head, err := a.Git.Head(ctx, req.WorkDir)
+	if err != nil {
+		return "", fmt.Errorf("read repository base: %w", err)
+	}
+	return head, nil
+}
+
 // GeneratePlanRequest is the input to GeneratePlan.
 type GeneratePlanRequest struct {
 	// Goal is the high-level change to decompose into a dependency graph.

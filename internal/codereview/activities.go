@@ -91,6 +91,13 @@ type CreateBranchRequest struct {
 	// remove`/`prune`, so they accumulate under WorktreesDir and must be pruned
 	// manually.
 	WorktreesDir string
+	// StartPoint, when non-empty, is the commit-ish the new branch is created at
+	// instead of WorkDir's current HEAD. The fleet orchestrator captures the
+	// repository base once when a run starts and passes it here so every node
+	// branches from the same commit regardless of what the user does to the
+	// checkout while earlier layers run. An empty StartPoint preserves the
+	// standalone behavior of branching from the current HEAD.
+	StartPoint string
 }
 
 // CreateBranchResult is the output of CreateBranch: the branch that was actually
@@ -226,7 +233,7 @@ func (a *Activities) CreateBranch(ctx context.Context, req CreateBranchRequest) 
 			"working tree has local changes; commit or stash them first", errDirtyWorktree, nil)
 	}
 
-	if err := a.Git.CreateBranch(ctx, req.WorkDir, branch); err != nil {
+	if err := a.Git.CreateBranch(ctx, req.WorkDir, branch, req.StartPoint); err != nil {
 		if errors.Is(err, ErrBranchOrWorktreeExists) {
 			if generated {
 				// The generated alias collided with an existing branch ref. Persist a
@@ -337,7 +344,7 @@ func (a *Activities) createWorktree(ctx context.Context, req CreateBranchRequest
 			errBranchExists, nil)
 	}
 
-	if err := a.Git.AddWorktree(ctx, req.WorkDir, worktreePath, branch); err != nil {
+	if err := a.Git.AddWorktree(ctx, req.WorkDir, worktreePath, branch, req.StartPoint); err != nil {
 		if errors.Is(err, ErrBranchOrWorktreeExists) {
 			if generated {
 				// The generated alias' branch or worktree path already exists (e.g. a

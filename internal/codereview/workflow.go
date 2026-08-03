@@ -446,7 +446,7 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 
 	var created CreateBranchResult
 	if err := workflow.ExecuteActivity(branchCtx, a.CreateBranch,
-		CreateBranchRequest{WorkDir: in.WorkDir, Branch: in.Branch, WorktreesDir: in.WorktreesDir}).Get(branchCtx, &created); err != nil {
+		CreateBranchRequest{WorkDir: in.WorkDir, Branch: in.Branch, WorktreesDir: in.WorktreesDir, StartPoint: in.StartPoint}).Get(branchCtx, &created); err != nil {
 		return "", err
 	}
 	// Adopt the actual branch and working directory for the rest of the flow: the
