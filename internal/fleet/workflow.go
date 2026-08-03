@@ -36,14 +36,17 @@ func FleetPlanWorkflow(ctx workflow.Context, in FleetPlanInput) (plan FleetPlan,
 	})
 
 	var a *Activities
+	var res GeneratePlanResult
 	if err := workflow.ExecuteActivity(agentCtx, a.GeneratePlan,
-		GeneratePlanRequest{Goal: in.Goal, WorkDir: in.WorkDir}).Get(agentCtx, &plan); err != nil {
+		GeneratePlanRequest{Goal: in.Goal, WorkDir: in.WorkDir}).Get(agentCtx, &res); err != nil {
 		return FleetPlan{}, err
 	}
+	plan = res.Plan
 
 	wfnotify.NotifyBestEffort(ctx, notification.Notification{
 		Title: "Fleet plan ready",
-		Body:  fmt.Sprintf("Planned %d node(s) for: %s", len(plan.Nodes), plan.Goal),
+		Body: fmt.Sprintf("Planned %d node(s) for: %s\nPlanning token usage: %s tokens.",
+			len(plan.Nodes), plan.Goal, groupThousands(res.Tokens)),
 	})
 	return plan, nil
 }

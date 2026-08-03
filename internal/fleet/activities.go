@@ -27,19 +27,30 @@ type GeneratePlanRequest struct {
 	WorkDir string
 }
 
+// GeneratePlanResult is the output of GeneratePlan: the parsed, validated plan
+// and the token usage the read-only planning agent spent producing it, kept
+// separate from FleetPlan so the plan written to disk is not polluted with
+// run-specific accounting.
+type GeneratePlanResult struct {
+	// Plan is the parsed, validated dependency graph.
+	Plan FleetPlan
+	// Tokens is the planning agent session's total token usage.
+	Tokens int
+}
+
 // GeneratePlan drives the Pi agent to decompose the goal into a dependency
 // graph and returns the parsed, validated plan. Parsing and validation run here
 // (rather than in the workflow) so a malformed graph is a non-retryable activity
 // failure with a clear message. The agent makes no code changes; it only reads
 // the repository to inform the decomposition.
-func (a *Activities) GeneratePlan(ctx context.Context, req GeneratePlanRequest) (FleetPlan, error) {
-	out, _, err := a.Agent.Run(ctx, BuildPlanPrompt(req.Goal), req.WorkDir)
+func (a *Activities) GeneratePlan(ctx context.Context, req GeneratePlanRequest) (GeneratePlanResult, error) {
+	out, tokens, err := a.Agent.Run(ctx, BuildPlanPrompt(req.Goal), req.WorkDir)
 	if err != nil {
-		return FleetPlan{}, err
+		return GeneratePlanResult{}, err
 	}
 	plan, err := ParsePlan(out)
 	if err != nil {
-		return FleetPlan{}, temporal.NewNonRetryableApplicationError(
+		return GeneratePlanResult{}, temporal.NewNonRetryableApplicationError(
 			fmt.Sprintf("could not parse a fleet plan from the agent output: %v", err), errInvalidPlan, nil)
 	}
 	// The agent restates the goal, but keep the caller's original goal as the
@@ -48,8 +59,8 @@ func (a *Activities) GeneratePlan(ctx context.Context, req GeneratePlanRequest) 
 		plan.Goal = req.Goal
 	}
 	if err := ValidatePlan(plan); err != nil {
-		return FleetPlan{}, temporal.NewNonRetryableApplicationError(
+		return GeneratePlanResult{}, temporal.NewNonRetryableApplicationError(
 			fmt.Sprintf("the agent produced an invalid fleet plan: %v", err), errInvalidPlan, nil)
 	}
-	return plan, nil
+	return GeneratePlanResult{Plan: plan, Tokens: tokens}, nil
 }

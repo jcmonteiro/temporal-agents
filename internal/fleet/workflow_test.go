@@ -238,7 +238,8 @@ func TestFleetPlanWorkflow_ReturnsGeneratedPlan(t *testing.T) {
 	env := newEnv(t)
 	plan := linearPlan()
 
-	env.OnActivity(fa.GeneratePlan, mock.Anything, mock.Anything).Return(plan, nil)
+	env.OnActivity(fa.GeneratePlan, mock.Anything, mock.Anything).
+		Return(GeneratePlanResult{Plan: plan, Tokens: 1234}, nil)
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
 
 	env.ExecuteWorkflow(FleetPlanWorkflow, FleetPlanInput{Goal: "expose the core", WorkDir: "/repo"})
