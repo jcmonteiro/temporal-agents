@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"temporal-agents/internal/codereview"
@@ -133,17 +134,52 @@ func (g Git) HasChanges(ctx context.Context, dir string) (bool, error) {
 // worktree bytes are unchanged, so a worktree-only fingerprint would be
 // identical before and after even though the user's index was mutated. The
 // real index tree captures that staging. It never disturbs the user's real
-// index: `git write-tree` only reads the index (writing tree objects), and the
-// worktree tree is synthesized in a throwaway index file via GIT_INDEX_FILE.
+// index: `git write-tree` only reads the index, and the worktree tree is
+// synthesized in a throwaway index file via GIT_INDEX_FILE.
+//
+// Crucially it also writes no objects into the source repository. Both
+// write-tree calls (and the worktree `git add`) would otherwise persist new
+// blob and tree objects — including ignored secrets like .env and large
+// ignored trees pulled in by --force — under the source repo's .git/objects,
+// contradicting the read-only guarantee even for planning that never commits.
+// GIT_OBJECT_DIRECTORY redirects every new object into a disposable directory
+// that is removed when the fingerprint returns, while
+// GIT_ALTERNATE_OBJECT_DIRECTORIES lets git still read the repository's
+// existing objects (HEAD's tree, tracked blobs) to synthesize the trees.
 func (g Git) Fingerprint(ctx context.Context, dir string) (string, error) {
 	head, err := g.Head(ctx, dir)
 	if err != nil {
 		return "", err
 	}
+	// Locate the source repo's real object database so it can be exposed as a
+	// read-only alternate: new objects go to the disposable dir below, existing
+	// ones are read from here. Resolve to an absolute path so it does not depend
+	// on any git process's working directory.
+	realObjects, err := run(ctx, dir, "rev-parse", "--git-path", "objects")
+	if err != nil {
+		return "", err
+	}
+	realObjects = strings.TrimSpace(realObjects)
+	if !filepath.IsAbs(realObjects) {
+		realObjects = filepath.Join(dir, realObjects)
+	}
+	// Disposable object directory: every object git writes while fingerprinting
+	// lands here and is discarded, so the source repo's .git/objects is never
+	// written to. The alternate keeps existing objects readable.
+	objDir, err := os.MkdirTemp("", "fleet-fp-obj-*")
+	if err != nil {
+		return "", fmt.Errorf("reserve fingerprint object dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(objDir) }()
+	objEnv := []string{
+		"GIT_OBJECT_DIRECTORY=" + objDir,
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES=" + realObjects,
+	}
 	// Hash the real index tree so staged-only changes are covered. write-tree
-	// reads the current index and writes the corresponding tree object without
-	// mutating the staged content, so it leaves the user's index intact.
-	indexTree, err := run(ctx, dir, "write-tree")
+	// reads the current index and writes the corresponding tree object (now into
+	// the disposable object dir) without mutating the staged content, so it
+	// leaves the user's index intact.
+	indexTree, err := runEnv(ctx, dir, objEnv, "write-tree")
 	if err != nil {
 		return "", err
 	}
@@ -163,7 +199,7 @@ func (g Git) Fingerprint(ctx context.Context, dir string) (string, error) {
 		return "", fmt.Errorf("reserve fingerprint index dir: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(idx) }()
-	env := []string{"GIT_INDEX_FILE=" + idx + "/index"}
+	env := append([]string{"GIT_INDEX_FILE=" + idx + "/index"}, objEnv...)
 	if _, err := runEnv(ctx, dir, env, "read-tree", "HEAD"); err != nil {
 		return "", err
 	}

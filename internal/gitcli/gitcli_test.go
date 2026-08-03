@@ -160,6 +160,49 @@ func TestFingerprintDetectsEditToIgnoredUntrackedFile(t *testing.T) {
 	require.NotEqual(t, before, after, "overwriting an ignored untracked file must change the fingerprint")
 }
 
+// TestFingerprintWritesNoObjectsToSourceRepo pins the read-only guarantee at
+// the object-store level: synthesizing the worktree tree stages ignored files
+// with `git add --force`, which would otherwise persist their blobs (a secret
+// like .env, or a large ignored tree) under the source repo's .git/objects
+// permanently. Redirecting new objects to a disposable directory must leave the
+// source repo's object database byte-for-byte unchanged.
+func TestFingerprintWritesNoObjectsToSourceRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := initRepo(t)
+	g := New()
+	ctx := context.Background()
+
+	// An ignored, untracked file whose blob would be stored by `git add --force`.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(".env\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("SECRET=one\n"), 0o644))
+
+	objectsDir := filepath.Join(dir, ".git", "objects")
+	listObjects := func() []string {
+		t.Helper()
+		var files []string
+		err := filepath.Walk(objectsDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if !info.IsDir() {
+				files = append(files, path)
+			}
+			return nil
+		})
+		require.NoError(t, err)
+		return files
+	}
+
+	before := listObjects()
+	_, err := g.Fingerprint(ctx, dir)
+	require.NoError(t, err)
+	after := listObjects()
+
+	require.ElementsMatch(t, before, after, "fingerprinting must not write objects into the source repository")
+}
+
 func TestClassifyExists(t *testing.T) {
 	tests := []struct {
 		name         string
