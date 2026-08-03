@@ -147,16 +147,24 @@ func (g Git) Fingerprint(ctx context.Context, dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Reserve a throwaway index path and let git create it: `git add` treats a
-	// missing GIT_INDEX_FILE as an empty index, so staging everything captures
-	// exactly the current worktree content (deletions included, since only
-	// present files are staged) without touching the user's real index.
+	// Reserve a throwaway index path and seed it from HEAD before staging the
+	// worktree, all against GIT_INDEX_FILE so the user's real index is never
+	// touched. Seeding matters for a file that is committed but now matches
+	// .gitignore: `git add -A` skips it as ignored, so an empty starting index
+	// would drop it from the synthesized tree and an unstaged edit to it would
+	// leave both the real-index and worktree trees unchanged, letting the
+	// tripwire miss the mutation. read-tree HEAD keeps such tracked files in the
+	// index so they stay fingerprinted, while `git add -A` still layers on
+	// staged, unstaged, and untracked non-ignored changes (deletions included).
 	idx, err := os.MkdirTemp("", "fleet-fp-*")
 	if err != nil {
 		return "", fmt.Errorf("reserve fingerprint index dir: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(idx) }()
 	env := []string{"GIT_INDEX_FILE=" + idx + "/index"}
+	if _, err := runEnv(ctx, dir, env, "read-tree", "HEAD"); err != nil {
+		return "", err
+	}
 	if _, err := runEnv(ctx, dir, env, "add", "-A"); err != nil {
 		return "", err
 	}
