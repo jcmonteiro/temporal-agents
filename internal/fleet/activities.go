@@ -59,13 +59,12 @@ type GeneratePlanResult struct {
 // repository and fails non-retryably if it changed, so a plan is never returned
 // from a run that escaped the sandbox.
 func (a *Activities) GeneratePlan(ctx context.Context, req GeneratePlanRequest) (GeneratePlanResult, error) {
-	// Snapshot the source repository up front so the tripwire below can confirm
-	// planning left it exactly where it started.
-	beforeHead, err := a.Git.Head(ctx, req.WorkDir)
-	if err != nil {
-		return GeneratePlanResult{}, fmt.Errorf("read repository HEAD: %w", err)
-	}
-	beforeDirty, err := a.Git.HasChanges(ctx, req.WorkDir)
+	// Snapshot the source repository's complete content up front so the tripwire
+	// below can confirm planning left it exactly where it started. A content
+	// fingerprint (not a dirty/clean flag) is required: a repository that starts
+	// dirty must still detect a mutation to an already-modified file, which a
+	// boolean comparison would miss because both snapshots would read "dirty".
+	before, err := a.Git.Fingerprint(ctx, req.WorkDir)
 	if err != nil {
 		return GeneratePlanResult{}, fmt.Errorf("read repository state: %w", err)
 	}
@@ -87,15 +86,11 @@ func (a *Activities) GeneratePlan(ctx context.Context, req GeneratePlanRequest) 
 	// must be where it started. A mismatch means the read-only contract was
 	// violated; fail non-retryably rather than return a plan produced by a run that
 	// touched the user's repository.
-	afterHead, err := a.Git.Head(ctx, req.WorkDir)
-	if err != nil {
-		return GeneratePlanResult{}, fmt.Errorf("verify repository HEAD: %w", err)
-	}
-	afterDirty, err := a.Git.HasChanges(ctx, req.WorkDir)
+	after, err := a.Git.Fingerprint(ctx, req.WorkDir)
 	if err != nil {
 		return GeneratePlanResult{}, fmt.Errorf("verify repository state: %w", err)
 	}
-	if afterHead != beforeHead || afterDirty != beforeDirty {
+	if after != before {
 		return GeneratePlanResult{}, temporal.NewNonRetryableApplicationError(
 			"planning changed the repository despite its read-only contract", errPlanningMutatedRepo, nil)
 	}

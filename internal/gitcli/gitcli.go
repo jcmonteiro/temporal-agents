@@ -107,6 +107,39 @@ func (g Git) HasChanges(ctx context.Context, dir string) (bool, error) {
 	return strings.TrimSpace(out) != "", nil
 }
 
+// Fingerprint returns a value that changes whenever any content in dir's
+// worktree or index changes — not merely whether the repository is dirty.
+// It combines the HEAD commit SHA with a tree object hash of the complete
+// worktree (tracked, staged, and untracked non-ignored content). Because it
+// captures content rather than a dirty/clean boolean, it detects a mutation to
+// a file that was already modified before the fingerprint was taken, which a
+// dirty-flag comparison cannot. It never disturbs the user's real index: it
+// stages into a throwaway index file via GIT_INDEX_FILE and hashes that.
+func (g Git) Fingerprint(ctx context.Context, dir string) (string, error) {
+	head, err := g.Head(ctx, dir)
+	if err != nil {
+		return "", err
+	}
+	// Reserve a throwaway index path and let git create it: `git add` treats a
+	// missing GIT_INDEX_FILE as an empty index, so staging everything captures
+	// exactly the current worktree content (deletions included, since only
+	// present files are staged) without touching the user's real index.
+	idx, err := os.MkdirTemp("", "fleet-fp-*")
+	if err != nil {
+		return "", fmt.Errorf("reserve fingerprint index dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(idx) }()
+	env := []string{"GIT_INDEX_FILE=" + idx + "/index"}
+	if _, err := runEnv(ctx, dir, env, "add", "-A"); err != nil {
+		return "", err
+	}
+	tree, err := runEnv(ctx, dir, env, "write-tree")
+	if err != nil {
+		return "", err
+	}
+	return head + ":" + strings.TrimSpace(tree), nil
+}
+
 // Stash saves local changes (including untracked files) off to the side.
 func (g Git) Stash(ctx context.Context, dir string) error {
 	_, err := run(ctx, dir, "stash", "push", "--include-untracked")
@@ -149,12 +182,20 @@ func parseRevList(out string) []string {
 // run executes `git -C dir <args...>` and returns stdout, wrapping failures
 // with stderr for context.
 func run(ctx context.Context, dir string, args ...string) (string, error) {
+	return runEnv(ctx, dir, nil, args...)
+}
+
+// runEnv is run with extra environment variables appended (after LC_ALL=C), so
+// callers can point git at a throwaway index via GIT_INDEX_FILE without leaking
+// that setting into the process environment.
+func runEnv(ctx context.Context, dir string, extraEnv []string, args ...string) (string, error) {
 	full := append([]string{"-C", dir}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	// Pin the locale to C so git emits stable, English stderr. classifyExists
 	// matches the "already exists" substring, which would silently stop matching
 	// under a localized LANG/LC_ALL and degrade the fast-fail path to opaque retry.
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	cmd.Env = append(cmd.Env, extraEnv...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

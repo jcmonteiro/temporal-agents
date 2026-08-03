@@ -20,11 +20,13 @@ type Agent interface {
 // worktree and confirms the source repository was left untouched. Implementations
 // are driven adapters over the `git` CLI (gitcli.Git satisfies this port).
 type Git interface {
-	// Head returns the commit SHA that HEAD points at in dir.
-	Head(ctx context.Context, dir string) (string, error)
-	// HasChanges reports whether dir has uncommitted changes (tracked or
-	// untracked).
-	HasChanges(ctx context.Context, dir string) (bool, error)
+	// Fingerprint returns a value that changes whenever any content in dir's
+	// worktree or index changes, capturing HEAD plus tracked, staged, and
+	// untracked content. The planning tripwire compares fingerprints taken before
+	// and after the run: a content fingerprint (rather than a dirty/clean flag)
+	// detects a mutation to a file that was already modified when planning
+	// started, which a boolean comparison would miss.
+	Fingerprint(ctx context.Context, dir string) (string, error)
 	// AddDisposableWorktree creates a throwaway detached worktree of the repo in
 	// dir and returns its path, so a read-only step can run against an isolated
 	// copy that never touches the user's working tree, branch, or index.

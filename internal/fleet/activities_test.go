@@ -12,30 +12,20 @@ import (
 // and lets a test simulate the source repository changing across a planning run.
 type fakeGit struct {
 	sandbox string
-	// headBefore/headAfter and dirtyBefore/dirtyAfter let a test simulate the
-	// source repo changing between the two snapshots GeneratePlan takes.
-	headBefore, headAfter   string
-	dirtyBefore, dirtyAfter bool
-	headCalls               int
-	dirtyCalls              int
-	added                   bool
-	removed                 bool
+	// fpBefore/fpAfter let a test simulate the source repo's content fingerprint
+	// changing between the two snapshots GeneratePlan takes.
+	fpBefore, fpAfter string
+	fpCalls           int
+	added             bool
+	removed           bool
 }
 
-func (f *fakeGit) Head(_ context.Context, _ string) (string, error) {
-	f.headCalls++
-	if f.headCalls == 1 {
-		return f.headBefore, nil
+func (f *fakeGit) Fingerprint(_ context.Context, _ string) (string, error) {
+	f.fpCalls++
+	if f.fpCalls == 1 {
+		return f.fpBefore, nil
 	}
-	return f.headAfter, nil
-}
-
-func (f *fakeGit) HasChanges(_ context.Context, _ string) (bool, error) {
-	f.dirtyCalls++
-	if f.dirtyCalls == 1 {
-		return f.dirtyBefore, nil
-	}
-	return f.dirtyAfter, nil
+	return f.fpAfter, nil
 }
 
 func (f *fakeGit) AddDisposableWorktree(_ context.Context, _ string) (string, error) {
@@ -67,9 +57,8 @@ const planJSON = `{"goal":"expose the core","nodes":[{"id":"core","prompt":"impl
 
 func TestGeneratePlan_RunsAgentInDisposableSandbox(t *testing.T) {
 	git := &fakeGit{
-		sandbox:    "/tmp/sandbox",
-		headBefore: "abc", headAfter: "abc",
-		dirtyBefore: false, dirtyAfter: false,
+		sandbox:  "/tmp/sandbox",
+		fpBefore: "abc:tree1", fpAfter: "abc:tree1",
 	}
 	agent := &fakeAgent{output: planJSON, tokens: 1234}
 	a := &Activities{Agent: agent, Git: git}
@@ -87,11 +76,12 @@ func TestGeneratePlan_RunsAgentInDisposableSandbox(t *testing.T) {
 }
 
 func TestGeneratePlan_TripwireFailsWhenRepoMutated(t *testing.T) {
-	// The source repo's HEAD advanced across the run: the read-only contract was
-	// violated, so no plan is returned even though the agent produced valid JSON.
+	// The source repo's content fingerprint changed across the run: the read-only
+	// contract was violated, so no plan is returned even though the agent produced
+	// valid JSON.
 	git := &fakeGit{
-		sandbox:    "/tmp/sandbox",
-		headBefore: "abc", headAfter: "def",
+		sandbox:  "/tmp/sandbox",
+		fpBefore: "abc:tree1", fpAfter: "def:tree2",
 	}
 	agent := &fakeAgent{output: planJSON}
 	a := &Activities{Agent: agent, Git: git}
@@ -101,5 +91,24 @@ func TestGeneratePlan_TripwireFailsWhenRepoMutated(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "read-only contract"))
 	// Even on the tripwire failure, the sandbox is discarded.
+	require.True(t, git.removed)
+}
+
+func TestGeneratePlan_TripwireFailsWhenAlreadyDirtyRepoMutated(t *testing.T) {
+	// The repo starts dirty and stays dirty (HEAD unchanged), but the content of
+	// an already-modified file changes across the run, so the fingerprints differ.
+	// A dirty/clean boolean comparison would miss this; the content fingerprint
+	// catches it and no plan is returned.
+	git := &fakeGit{
+		sandbox:  "/tmp/sandbox",
+		fpBefore: "abc:dirtyTreeA", fpAfter: "abc:dirtyTreeB",
+	}
+	agent := &fakeAgent{output: planJSON}
+	a := &Activities{Agent: agent, Git: git}
+
+	_, err := a.GeneratePlan(context.Background(), GeneratePlanRequest{Goal: "expose the core", WorkDir: "/repo"})
+
+	require.Error(t, err)
+	require.True(t, strings.Contains(err.Error(), "read-only contract"))
 	require.True(t, git.removed)
 }
