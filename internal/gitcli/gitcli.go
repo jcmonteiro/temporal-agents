@@ -241,6 +241,26 @@ func (g Git) Push(ctx context.Context, dir, branch string) error {
 	return err
 }
 
+// MergeBranch merges branch into the branch currently checked out in dir,
+// creating a merge commit (or fast-forwarding) with a default message
+// (--no-edit). It is used to seed a dependent's branch with the work of the
+// branches it depends on and, later, to keep it current as those branches move.
+// A merge conflict leaves the merge in progress and returns an error; the caller
+// is responsible for aborting (see AbortMerge) so the branch is not left with
+// conflict markers.
+func (g Git) MergeBranch(ctx context.Context, dir, branch string) error {
+	_, err := run(ctx, dir, "merge", "--no-edit", branch)
+	return err
+}
+
+// AbortMerge aborts a merge left in progress in dir (e.g. after a conflict),
+// restoring the branch to its pre-merge state so no conflict markers are
+// committed or pushed.
+func (g Git) AbortMerge(ctx context.Context, dir string) error {
+	_, err := run(ctx, dir, "merge", "--abort")
+	return err
+}
+
 // parseRevList splits `git rev-list` output into SHAs, dropping blank lines.
 func parseRevList(out string) []string {
 	var shas []string

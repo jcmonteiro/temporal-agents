@@ -203,6 +203,95 @@ func TestFingerprintWritesNoObjectsToSourceRepo(t *testing.T) {
 	require.ElementsMatch(t, before, after, "fingerprinting must not write objects into the source repository")
 }
 
+// gitRunner returns a helper that runs pinned-identity git commands in dir and
+// fails the test on error. Identity is set both via env and (by the caller)
+// local config so merge commits succeed without reading the developer's global
+// git configuration.
+func gitRunner(t *testing.T, dir string) func(args ...string) {
+	t.Helper()
+	return func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+}
+
+// TestMergeBranch_CombinesDivergentBranches pins the seeding behavior: merging a
+// branch that diverged from the base folds its commits into the checked-out
+// branch, so a dependent's branch ends up carrying the work of the branch it
+// depends on.
+func TestMergeBranch_CombinesDivergentBranches(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := initRepo(t)
+	git := gitRunner(t, dir)
+	// Pin identity in local config so the merge commit does not need global config.
+	git("config", "user.name", "t")
+	git("config", "user.email", "t@t")
+
+	// A dependency branch that adds its own file, then a node branch off the same
+	// base that adds a different file: the two diverge without conflicting.
+	git("checkout", "-b", "dep")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "dep.txt"), []byte("dep\n"), 0o644))
+	git("add", "dep.txt")
+	git("commit", "-m", "dep work")
+	git("checkout", "main")
+	git("checkout", "-b", "node")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "node.txt"), []byte("node\n"), 0o644))
+	git("add", "node.txt")
+	git("commit", "-m", "node work")
+
+	require.NoError(t, New().MergeBranch(context.Background(), dir, "dep"))
+
+	// The merge brought the dependency's file in alongside the node's own.
+	require.FileExists(t, filepath.Join(dir, "dep.txt"))
+	require.FileExists(t, filepath.Join(dir, "node.txt"))
+}
+
+// TestMergeBranch_ConflictErrorsAndAbortRestores pins the conflict contract: a
+// conflicting merge returns an error and leaves the merge in progress, and
+// AbortMerge restores the branch to a clean pre-merge state so no conflict
+// markers survive.
+func TestMergeBranch_ConflictErrorsAndAbortRestores(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := initRepo(t)
+	g := New()
+	ctx := context.Background()
+	git := gitRunner(t, dir)
+	git("config", "user.name", "t")
+	git("config", "user.email", "t@t")
+
+	// Two branches edit the same line differently: merging them conflicts.
+	git("checkout", "-b", "dep")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "file.txt"), []byte("dep\n"), 0o644))
+	git("add", "file.txt")
+	git("commit", "-m", "dep edit")
+	git("checkout", "main")
+	git("checkout", "-b", "node")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "file.txt"), []byte("node\n"), 0o644))
+	git("add", "file.txt")
+	git("commit", "-m", "node edit")
+
+	require.Error(t, g.MergeBranch(ctx, dir, "dep"), "a conflicting merge must error")
+
+	require.NoError(t, g.AbortMerge(ctx, dir))
+	dirty, err := g.HasChanges(ctx, dir)
+	require.NoError(t, err)
+	require.False(t, dirty, "abort must leave a clean working tree")
+	got, err := os.ReadFile(filepath.Join(dir, "file.txt"))
+	require.NoError(t, err)
+	require.Equal(t, "node\n", string(got), "abort must restore the node branch's content")
+}
+
 func TestClassifyExists(t *testing.T) {
 	tests := []struct {
 		name         string
