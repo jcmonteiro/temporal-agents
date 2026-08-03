@@ -295,6 +295,17 @@ type OpenPRInput struct {
 	WorkDir string
 }
 
+// OpenPRResult is the structured outcome of OpenPRWorkflow. It carries both the
+// human-readable summary and the PR URL so callers (e.g. the remote develop
+// pipeline, and in turn the fleet orchestrator) can surface the link rather
+// than having to scrape it out of prose.
+type OpenPRResult struct {
+	// Summary is the outcome-neutral, human-readable summary line.
+	Summary string
+	// URL is the pull request's web URL.
+	URL string
+}
+
 // branchAdjectives and branchAnimals seed the auto-generated branch alias used
 // when `code develop` is run without an explicit --branch. A name is composed as
 // <adjective>-<animal>-<date> (e.g. "flaming-duck-2026-jul-29"). With 15 of each

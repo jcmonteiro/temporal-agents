@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -169,9 +170,17 @@ func runFleetExecute(planFile string, summary, withRemote bool) {
 	if err != nil {
 		fatalf("Could not read plan %s: %v", planFile, err)
 	}
+	// Decode strictly: reject unknown fields (a misspelled "dependsOn" must fail
+	// rather than silently drop the ordering constraint) while still rejecting any
+	// trailing data after the plan object, as json.Unmarshal did.
 	var plan fleet.FleetPlan
-	if err := json.Unmarshal(data, &plan); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&plan); err != nil {
 		fatalf("Could not parse plan %s: %v", planFile, err)
+	}
+	if dec.More() {
+		fatalf("Could not parse plan %s: unexpected trailing data after the plan object", planFile)
 	}
 	if err := fleet.ValidatePlan(plan); err != nil {
 		fatalf("Plan %s is invalid: %v", planFile, err)

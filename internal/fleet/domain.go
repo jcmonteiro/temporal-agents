@@ -377,13 +377,20 @@ Rules:
 // output. The agent is asked for bare JSON, but ParsePlan tolerates surrounding
 // prose or a ```json code fence by extracting the outermost { ... } object. It
 // does not validate the graph; callers pair it with ValidatePlan.
+//
+// The prompt requires the exact FleetPlan schema, so parsing rejects unknown
+// fields (DisallowUnknownFields): a near-miss such as "depends_on" instead of
+// "dependsOn" fails planning here rather than silently dropping the dependency
+// and letting a node run before its prerequisites.
 func ParsePlan(output string) (FleetPlan, error) {
 	raw := extractJSONObject(output)
 	if raw == "" {
 		return FleetPlan{}, fmt.Errorf("no JSON object found in agent output")
 	}
 	var plan FleetPlan
-	if err := json.Unmarshal([]byte(raw), &plan); err != nil {
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&plan); err != nil {
 		return FleetPlan{}, fmt.Errorf("parse plan JSON: %w", err)
 	}
 	return plan, nil

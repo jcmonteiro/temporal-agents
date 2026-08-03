@@ -56,7 +56,7 @@ The CLI connects to `localhost:17233` by default. Override with `TEMPORAL_ADDRES
 | `watch <workflow-id>` | Stream a workflow's live Pi progress, then its result. |
 | `list` | List running workflows and schedules (fleet parents and per-node children included). |
 
-Common flags: `--save <name>` stores the invocation as a reusable template; `--chain` re-triggers on each success; `--summary` (code subcommands only) sends a Pi-generated summary as the webhook body.
+Common flags: `--save <name>` stores the invocation as a reusable template; `--chain` re-triggers on each success; `--summary` sends a Pi-generated summary as the webhook body for the code subcommands, and on `fleet execute` propagates that behavior to each node's develop workflow.
 
 Run any command with `--help` for details, e.g. `temporal-agents code develop --help`.
 

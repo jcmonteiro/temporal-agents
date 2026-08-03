@@ -234,7 +234,8 @@ func TestDevelopWorkflow_WithRemote_OrchestratesReviewOpenPRAndPilot(t *testing.
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
 	// The full remote pipeline runs as supervised children this workflow waits on.
 	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
-	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).Return("opened", nil)
+	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).
+		Return(OpenPRResult{Summary: "opened", URL: "https://github.com/acme/widgets/pull/7"}, nil)
 	// The pilot loop is triggered with chaining enabled so it loops until Copilot
 	// has nothing left; here it is mocked to return once.
 	env.OnWorkflow(PilotWorkflow, mock.Anything, mock.MatchedBy(func(in PilotInput) bool {
@@ -250,6 +251,9 @@ func TestDevelopWorkflow_WithRemote_OrchestratesReviewOpenPRAndPilot(t *testing.
 	// The result reflects the whole pipeline having completed, not just review.
 	require.Contains(t, out, "opened the PR")
 	require.Contains(t, out, "pilot")
+	// The PR URL is threaded through the develop result so the fleet orchestrator
+	// can surface it as the node's PR link.
+	require.Contains(t, out, "https://github.com/acme/widgets/pull/7")
 	env.AssertExpectations(t)
 }
 
@@ -266,7 +270,7 @@ func TestDevelopWorkflow_WithRemote_SeedsReviewTokensAndPropagatesSummary(t *tes
 	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.MatchedBy(func(in ReviewInput) bool {
 		return in.TokensSoFar == 4200 && in.Summary
 	})).Return("reviewed", nil)
-	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).Return("opened", nil)
+	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).Return(OpenPRResult{Summary: "opened"}, nil)
 	env.OnWorkflow(PilotWorkflow, mock.Anything, mock.Anything).Return("piloted", nil)
 	var sent []notification.Notification
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
@@ -303,7 +307,7 @@ func TestDevelopWorkflow_WithRemote_OpenPRFailure_StopsBeforePilot(t *testing.T)
 	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
 	// Opening the PR fails, so the pilot loop must never start.
 	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).
-		Return("", temporal.NewNonRetryableApplicationError("no commits to open a PR", "OpenPR", nil))
+		Return(OpenPRResult{}, temporal.NewNonRetryableApplicationError("no commits to open a PR", "OpenPR", nil))
 
 	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing", WithRemote: true})
 
@@ -321,7 +325,7 @@ func TestDevelopWorkflow_WithRemote_PipelineFailure_NotifiesPipelineNotDevelopme
 	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
 	// Opening the PR fails after development has already landed its commits.
 	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).
-		Return("", temporal.NewNonRetryableApplicationError("push rejected", "OpenPR", nil))
+		Return(OpenPRResult{}, temporal.NewNonRetryableApplicationError("push rejected", "OpenPR", nil))
 	var sent []notification.Notification
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { sent = append(sent, args.Get(1).(notification.Notification)) }).Return(nil)

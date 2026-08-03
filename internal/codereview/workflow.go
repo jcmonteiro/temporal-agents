@@ -342,7 +342,7 @@ func runPilotOnce(ctx workflow.Context, in PilotInput, agentRan *bool) (string, 
 // PR simply succeeds. It is used as a supervised stage of the
 // `develop --with-remote` pipeline but is a standalone workflow in its own
 // right.
-func OpenPRWorkflow(ctx workflow.Context, in OpenPRInput) (result string, err error) {
+func OpenPRWorkflow(ctx workflow.Context, in OpenPRInput) (result OpenPRResult, err error) {
 	// No agent runs here, so there is never a Pi session to summarize; pass
 	// summaryEnabled/agentRan false so the notification simply carries the plain
 	// body.
@@ -359,10 +359,10 @@ func OpenPRWorkflow(ctx workflow.Context, in OpenPRInput) (result string, err er
 
 	var pr PullRequest
 	if err := workflow.ExecuteActivity(quick, a.OpenPR, in).Get(quick, &pr); err != nil {
-		return "", err
+		return OpenPRResult{}, err
 	}
 	if err := workflow.ExecuteActivity(quick, a.RequestCopilotReview, pr).Get(quick, nil); err != nil {
-		return "", err
+		return OpenPRResult{}, err
 	}
 
 	// OpenPR is idempotent: it returns an already-open PR unchanged rather than
@@ -372,7 +372,7 @@ func OpenPRWorkflow(ctx workflow.Context, in OpenPRInput) (result string, err er
 	summary := fmt.Sprintf("PR #%d is open and a Copilot review was requested.", pr.Number)
 	notifyComplete(ctx, false, false, in.WorkDir, notification.Notification{
 		Title: "Pull request ready", Body: summary, URL: pr.URL}, "")
-	return summary, nil
+	return OpenPRResult{Summary: summary, URL: pr.URL}, nil
 }
 
 // DevelopWorkflow drives the "code develop" flow. In sequence it:
@@ -578,10 +578,13 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 		return "", fmt.Errorf("review workflow: %w", err)
 	}
 
-	// Open the PR and request a Copilot review.
+	// Open the PR and request a Copilot review. Capture its structured result so
+	// the PR URL can be threaded into this workflow's own summary below; that
+	// summary is what the fleet orchestrator surfaces as the node's PR link.
 	openCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "open-pr-" + id})
+	var openPR OpenPRResult
 	if err := workflow.ExecuteChildWorkflow(openCtx, OpenPRWorkflow,
-		OpenPRInput{WorkDir: in.WorkDir}).Get(ctx, nil); err != nil {
+		OpenPRInput{WorkDir: in.WorkDir}).Get(ctx, &openPR); err != nil {
 		return "", fmt.Errorf("open PR workflow: %w", err)
 	}
 
@@ -598,9 +601,16 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 	// run in their own sessions (their results are discarded via .Get(ctx, nil)) and
 	// emit their own totals, so a "across all sessions" figure computed from develop
 	// tokens alone would under-report and mislead.
+	// Include the PR URL so callers (notably the fleet orchestrator, which scans
+	// this summary for a link) can surface it. Guard on a non-empty URL so the
+	// wording stays clean if OpenPRWorkflow ever reports none.
+	prClause := "opened the PR"
+	if openPR.URL != "" {
+		prClause = fmt.Sprintf("opened the PR (%s)", openPR.URL)
+	}
 	summary := withDevelopStepTokens(fmt.Sprintf(
-		"Developed branch %s with %d commit(s); ran the review loop, opened the PR, and completed the Copilot pilot loop.",
-		in.Branch, len(commits)), tokens)
+		"Developed branch %s with %d commit(s); ran the review loop, %s, and completed the Copilot pilot loop.",
+		in.Branch, len(commits), prClause), tokens)
 	// The terminal pipeline notification carries no summary body: the develop
 	// summary was delivered up front with the develop-completion notification, and
 	// the review and pilot children have since emitted their own fresher summaries.

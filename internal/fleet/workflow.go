@@ -159,6 +159,15 @@ func FleetWorkflow(ctx workflow.Context, in FleetInput) (result string, err erro
 		}
 	}
 
+	// Preserve cancellation. When the parent workflow is canceled, each pending
+	// ChildWorkflowFuture.Get returns a cancellation error that the loop above
+	// records as a node failure; without this check the run would still build a
+	// summary and return a nil error, so Temporal would record it as completed
+	// rather than canceled. Surfacing ctx.Err() lets the run terminate as canceled.
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
 	ordered := make([]NodeResult, 0, len(order))
 	for _, id := range order {
 		ordered = append(ordered, results[id])
