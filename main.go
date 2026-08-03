@@ -605,14 +605,19 @@ func listRunning() {
 }
 
 // classifyWorkflow labels a workflow row by its ID prefix so `list` surfaces
-// what each running workflow is — including fleet parents and their per-node
-// develop children ("fleet-<uuid>-<nodeid>"), which share the "fleet-" prefix.
+// what each running workflow is. Fleet parents ("fleet-<uuid>") and their
+// per-node develop children ("fleet-<uuid>-<nodeid>") share the "fleet-" prefix,
+// so the two are told apart by whether the text after the prefix is a bare
+// UUID (the parent) or a UUID with a "-<nodeid>" suffix (a child node).
 func classifyWorkflow(id string) string {
 	switch {
 	case strings.HasPrefix(id, "fleet-plan-"):
 		return "fleet-plan"
 	case strings.HasPrefix(id, "fleet-"):
-		return "fleet"
+		if _, err := uuid.Parse(strings.TrimPrefix(id, "fleet-")); err == nil {
+			return "fleet"
+		}
+		return "fleet-node"
 	case strings.HasPrefix(id, "develop-"):
 		return "develop"
 	case strings.HasPrefix(id, "review-"):

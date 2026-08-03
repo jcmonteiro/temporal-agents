@@ -1,7 +1,14 @@
 // Package fleet implements fan-out orchestration: a parent "fleet" workflow
 // that decomposes a larger change into a dependency graph of features and runs
 // a child develop workflow per feature, respecting the graph so a dependent
-// feature only starts once every feature it builds upon has landed.
+// feature only starts once every feature it depends on has succeeded.
+//
+// Dependencies gate execution *ordering*, not code layering: every node
+// develops on its own branch/worktree cut from the same repository base, so a
+// node does not automatically inherit the commits of the nodes it depends on.
+// An edge therefore sequences work (and skips a dependent when a prerequisite
+// fails) rather than stacking one node's code on top of another's. Author each
+// node's prompt as a self-contained instruction.
 //
 // It follows the same hexagonal split as the codereview package: this file
 // holds the application core (pure domain types and logic — plan validation,
@@ -22,7 +29,7 @@ import (
 )
 
 // FleetNode is one feature in a fleet plan: an isolated unit of work handed to
-// a child develop workflow, plus the IDs of the features it builds upon.
+// a child develop workflow, plus the IDs of the features it must run after.
 type FleetNode struct {
 	// ID uniquely identifies the node within its plan. It must be a short slug
 	// (letters, digits, '-', '_') so it can be embedded verbatim in a child
@@ -32,7 +39,10 @@ type FleetNode struct {
 	// node.
 	Prompt string `json:"prompt"`
 	// DependsOn lists the IDs of nodes that must complete successfully before
-	// this node starts. An edge A in B.DependsOn means "B builds on top of A".
+	// this node starts. An edge A in B.DependsOn means "B runs after A": it
+	// sequences B after A (and skips B if A does not succeed), but B still
+	// develops from the repository base without A's commits, so the ordering does
+	// not stack B's code on top of A's.
 	DependsOn []string `json:"dependsOn,omitempty"`
 }
 
@@ -197,7 +207,8 @@ const (
 	// StatusFailed means the node's child develop workflow returned an error.
 	StatusFailed NodeStatus = "failed"
 	// StatusSkipped means the node never ran because one of its dependencies did
-	// not succeed, so building on top of it would be meaningless.
+	// not succeed, so running a node sequenced after a failed prerequisite would
+	// be pointless.
 	StatusSkipped NodeStatus = "skipped"
 )
 
@@ -222,6 +233,14 @@ type NodeResult struct {
 // "Total token usage across all sessions: 1,234 tokens." and the develop-step
 // variant "Develop step token usage: 1,234 tokens." The captured group is the
 // comma-grouped number.
+//
+// In both fleet modes the child DevelopWorkflow returns only its develop-step
+// usage: the review loop is an abandoned child (default mode) or reports its own
+// total (--with-remote), so the number parsed here is always the develop step's,
+// which is why SummarizeFleet labels the aggregate as develop-step usage. This
+// is a hidden coupling to codereview's human summary wording; a structured token
+// count would be more robust but would change DevelopWorkflow's string result
+// type and every caller, so the regex is kept deliberately.
 var tokenTotalPattern = regexp.MustCompile(`token usage[^:]*:\s*([\d,]+)\s*tokens`)
 
 // ParseTokenTotal extracts the token count reported in a child workflow's
@@ -242,8 +261,11 @@ func ParseTokenTotal(summary string) int {
 
 // SummarizeFleet renders the single aggregated summary for a fleet run: the
 // goal, a per-node status line (with any PR link surfaced from the child's
-// detail), and the total token usage across every node. Results are rendered in
-// the given order (the execution order the workflow collected them in).
+// detail), and the develop-step token usage summed across every node. Only the
+// develop step's usage is aggregated because that is all a child DevelopWorkflow
+// returns to the fleet (see tokenTotalPattern); the review and pilot stages
+// report their own totals separately. Results are rendered in the given order
+// (the execution order the workflow collected them in).
 func SummarizeFleet(goal string, results []NodeResult) string {
 	var b strings.Builder
 	b.WriteString("Fleet run complete.\n")
@@ -274,7 +296,7 @@ func SummarizeFleet(goal string, results []NodeResult) string {
 	}
 	b.WriteString(fmt.Sprintf("\n%d node(s): %d succeeded, %d failed, %d skipped.\n",
 		len(results), succeeded, failed, skipped))
-	b.WriteString(fmt.Sprintf("Total token usage across all nodes: %s tokens.", groupThousands(total)))
+	b.WriteString(fmt.Sprintf("Develop-step token usage across all nodes: %s tokens. The review and pilot stages report their own token totals separately.", groupThousands(total)))
 	return b.String()
 }
 
@@ -311,7 +333,9 @@ func groupThousands(n int) string {
 // the decomposition toward small, independently reviewable slices with explicit
 // dependencies.
 func BuildPlanPrompt(goal string) string {
-	return `Decompose the software change described below into a dependency graph of small, independently reviewable slices of work (a "fleet plan"). Prefer a horizontal slice that establishes shared/domain foundations first, followed by vertical slices that can proceed in parallel once their foundation is in place.
+	return `Decompose the software change described below into a dependency graph of small, independently reviewable slices of work (a "fleet plan"). Prefer a horizontal slice that establishes shared/domain foundations first, followed by vertical slices, and use dependencies to order the foundational slice ahead of the slices that logically build on it.
+
+IMPORTANT: dependencies control execution ORDER only. Each slice is developed on its own branch cut from the current repository base and does NOT automatically include the code produced by the slices it depends on. So every "prompt" must be a complete, standalone instruction that a coding agent can implement on its own branch from the base, without relying on another slice's uncommitted work being present. Use "dependsOn" only to sequence slices (e.g. so a foundation is reviewed and lands first) and to skip a slice when a prerequisite fails.
 
 Do NOT make any code changes. Read the referenced code and relevant in-repo documentation to inform the decomposition, then output ONLY a single JSON object (no prose, no code fences) matching exactly this shape:
 
@@ -321,16 +345,16 @@ Do NOT make any code changes. Read the referenced code and relevant in-repo docu
     {
       "id": "<short-slug-unique-id>",
       "prompt": "<self-contained instruction for this slice>",
-      "dependsOn": ["<id-of-a-slice-this-builds-on>"]
+      "dependsOn": ["<id-of-a-slice-this-must-run-after>"]
     }
   ]
 }
 
 Rules:
 - Each "id" must be a unique short slug using only letters, digits, '-' or '_'.
-- "dependsOn" lists the ids of slices that must land before this one; omit or use [] when the slice has no prerequisites.
+- "dependsOn" lists the ids of slices that must succeed before this one starts; omit or use [] when the slice has no prerequisites.
 - The graph must be acyclic.
-- Each "prompt" must be a complete, standalone instruction that a coding agent can implement on its own branch.
+- Each "prompt" must be a complete, standalone instruction that a coding agent can implement on its own branch from the repository base.
 
 --- Goal ---
 ` + strings.TrimSpace(goal)

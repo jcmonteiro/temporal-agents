@@ -99,7 +99,7 @@ func TestSummarizeFleet_ReportsStatusesTotalsAndPRLinks(t *testing.T) {
 	require.Contains(t, out, "rest: failed")
 	require.Contains(t, out, "grpc: skipped")
 	require.Contains(t, out, "3 node(s): 1 succeeded, 1 failed, 1 skipped.")
-	require.Contains(t, out, "Total token usage across all nodes: 1,000 tokens.")
+	require.Contains(t, out, "Develop-step token usage across all nodes: 1,000 tokens.")
 }
 
 func TestBuildPlanPrompt_IncludesGoalAndForbidsCodeChanges(t *testing.T) {

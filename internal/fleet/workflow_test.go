@@ -2,11 +2,13 @@ package fleet
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/workflow"
 
 	"temporal-agents/internal/codereview"
 	"temporal-agents/internal/notification"
@@ -63,7 +65,57 @@ func TestFleetWorkflow_HappyPath_RunsEveryNodeAndAggregates(t *testing.T) {
 	require.Contains(t, out, "rest: succeeded")
 	require.Contains(t, out, "2 node(s): 2 succeeded, 0 failed, 0 skipped.")
 	// Both nodes each reported 1,000 tokens, so the fleet total is their sum.
-	require.Contains(t, out, "Total token usage across all nodes: 2,000 tokens.")
+	require.Contains(t, out, "Develop-step token usage across all nodes: 2,000 tokens.")
+}
+
+func TestFleetWorkflow_PropagatesInputsAndFormsChildIDs(t *testing.T) {
+	env := newEnv(t)
+
+	type childCall struct {
+		id string
+		in codereview.DevelopInput
+	}
+	var calls []childCall
+	env.OnWorkflow(codereview.DevelopWorkflow, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			ctx := args.Get(0).(workflow.Context)
+			in := args.Get(1).(codereview.DevelopInput)
+			calls = append(calls, childCall{id: workflow.GetInfo(ctx).WorkflowExecution.ID, in: in})
+		}).Return("ok", nil)
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(FleetWorkflow, FleetInput{
+		Plan: linearPlan(), WorkDir: "/repo", WorktreesDir: "/wt",
+		Summary: true, WithRemote: true,
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	// Key each child call by the node id recovered from its workflow ID suffix.
+	byNode := make(map[string]childCall)
+	for _, c := range calls {
+		idx := strings.LastIndex(c.id, "-")
+		byNode[c.id[idx+1:]] = c
+	}
+	require.Len(t, byNode, 2)
+
+	// Every node's develop input carries the shared repo/worktree location, its
+	// own prompt, and the propagated --summary/--with-remote toggles.
+	for node, c := range byNode {
+		require.Equal(t, "/repo", c.in.WorkDir, node)
+		require.Equal(t, "/wt", c.in.WorktreesDir, node)
+		require.True(t, c.in.Summary, node)
+		require.True(t, c.in.WithRemote, node)
+	}
+	require.Equal(t, "implement the core", byNode["core"].in.Prompt)
+	require.Equal(t, "expose via REST", byNode["rest"].in.Prompt)
+
+	// Child workflow IDs are formed as "<fleetID>-<nodeid>": both share the fleet
+	// parent's ID as a prefix, differing only in the node suffix.
+	require.Equal(t,
+		strings.TrimSuffix(byNode["core"].id, "-core"),
+		strings.TrimSuffix(byNode["rest"].id, "-rest"))
 }
 
 func TestFleetWorkflow_DependencyFailure_SkipsDependents(t *testing.T) {

@@ -215,7 +215,10 @@ func fleetHelp(w io.Writer) {
 
 Break a larger change into a dependency graph of small, independently reviewable
 slices, then orchestrate a develop workflow per slice, respecting the graph so a
-dependent slice only starts once every slice it builds upon has landed.
+dependent slice only starts once every slice it depends on has succeeded.
+Dependencies control execution order only: each slice develops on its own branch
+cut from the repository base and does not inherit the code of the slices it
+depends on.
 
 USAGE
   temporal-agents fleet plan "<prompt>" [--out <file>]

@@ -63,7 +63,7 @@ Run any command with `--help` for details, e.g. `temporal-agents code develop --
 ### Fleet fan-out
 
 Larger changes are better delivered as several small, independently reviewable
-slices with explicit dependencies (e.g. a horizontal slice implementing a domain
+slices with explicit ordering (e.g. a horizontal slice implementing a domain
 core, followed by two parallel vertical slices exposing it via REST and gRPC).
 The `fleet` command orchestrates exactly that:
 
@@ -80,7 +80,17 @@ dependency layers: independent nodes run in parallel, and a node starts only
 once every node it depends on has succeeded (a node whose dependency did not
 succeed is skipped). Each node develops in its own git worktree so parallel
 nodes never share a working tree. When every node settles, a single summary
-notification aggregates each node's status, PR link, and token usage.
+notification aggregates each node's status, PR link, and develop-step token
+usage.
+
+Dependencies control execution **order only**, not code layering: each node
+develops on its own branch cut from the repository base and does not inherit the
+commits of the nodes it depends on, so author each node's prompt as a
+self-contained instruction. By default a node counts as "succeeded" once its
+develop step lands and its review loop is started (the review keeps running
+afterwards), so dependents are released after the develop step; pass
+`--with-remote` when a dependent should wait for the full review, PR, and Copilot
+pilot pipeline to complete first.
 
 ## Docker
 

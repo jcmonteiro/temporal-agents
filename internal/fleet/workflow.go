@@ -71,16 +71,24 @@ type FleetInput struct {
 // the graph in dependency layers (see TopoLayers): every node in a layer runs
 // concurrently as a child develop workflow, and the next layer only starts once
 // the current one has settled. A node whose dependency did not succeed is
-// skipped (building on top of a missing foundation is meaningless), while
-// independent branches of the graph keep running. It aggregates every node's
-// outcome — status, token usage, and any PR link — into a single summary
-// notification.
+// skipped (running a node sequenced after a failed prerequisite is pointless),
+// while independent branches of the graph keep running. It aggregates every
+// node's outcome — status, develop-step token usage, and any PR link — into a
+// single summary notification.
 //
 // Each node develops in its own git worktree (WorktreesDir) on an
-// auto-generated branch, so concurrent nodes never contend for a working tree.
-// The graph therefore controls execution *ordering*: a dependent node starts
-// only after the features it builds upon have landed, which is the coordination
-// an approved plan prescribes.
+// auto-generated branch cut from the repository base, so concurrent nodes never
+// contend for a working tree. The graph therefore controls execution
+// *ordering*, not code layering: a dependent node starts only after the nodes it
+// depends on have succeeded, but it develops from the base without their
+// commits. Ordering is the coordination an approved plan prescribes.
+//
+// "Succeeded" means the child DevelopWorkflow returned successfully. In the
+// default mode that is once the develop step landed its commits and the review
+// loop was *started* (an abandoned child that keeps running afterwards), so the
+// fleet releases dependents after the develop step, not after review converges.
+// Pass WithRemote when a dependent should wait for the full review+PR+pilot
+// pipeline to complete before it starts.
 func FleetWorkflow(ctx workflow.Context, in FleetInput) (result string, err error) {
 	defer func() { wfnotify.NotifyFailureBestEffort(ctx, "Fleet run failed", err) }()
 
