@@ -48,7 +48,7 @@ The CLI connects to `localhost:17233` by default. Override with `TEMPORAL_ADDRES
 | `run "<prompt>" [--save <name>] [--chain]` | Start a workflow and return immediately. |
 | `schedule "<interval\|cron>" "<prompt>" [--save <name>] [--chain]` | Run a workflow on a schedule (overlaps skipped). Interval = Go duration (`1h`, `30m`); or a 5-field cron. |
 | `template <list\|show\|run\|delete> [name]` | Manage/run prompts saved via `--save`. |
-| `code pilot [--append\|--replace <prompt>] [--chain] [--summary]` | Address unresolved review comments on the current branch's PR. |
+| `code pilot [--append\|--replace <prompt>] [--no-chain] [--summary]` | Address unresolved review comments on the current branch's PR (loops until none remain; `--no-chain` runs a single pass). |
 | `code review [--summary]` | Review the current branch locally, then implement + re-review in a loop. |
 | `code develop "<prompt>" [--branch <name>] [--worktree] [--summary] [--with-remote]` | Create a branch, implement the prompt, then run the review loop (and PR + pilot with `--with-remote`). |
 | `fleet plan "<prompt>" [--out <file>]` | Have the agent decompose a change into a dependency graph, written to a file to review. |
@@ -56,7 +56,7 @@ The CLI connects to `localhost:17233` by default. Override with `TEMPORAL_ADDRES
 | `watch <workflow-id>` | Stream a workflow's live Pi progress, then its result. |
 | `list` | List running workflows and schedules (fleet parents and per-node children included). |
 
-Common flags: `--save <name>` stores the invocation as a reusable template; `--chain` re-triggers on each success; `--summary` sends a Pi-generated summary as the webhook body for the code subcommands, and on `fleet execute` propagates that behavior to each node's develop workflow.
+Common flags: `--save <name>` stores the invocation as a reusable template; `--chain` re-triggers `run`/`schedule` on each success (`code pilot` chains by default, disable with `--no-chain`); `--summary` (code subcommands only) sends a Pi-generated summary as the webhook body, and on `fleet execute` propagates that behavior to each node's develop workflow.
 
 Run any command with `--help` for details, e.g. `temporal-agents code develop --help`.
 

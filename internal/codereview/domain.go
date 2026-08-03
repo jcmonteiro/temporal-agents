@@ -50,10 +50,10 @@ type PilotInput struct {
 	PromptText string
 	// Chain, when true, continues the loop as new after a successful pass that
 	// addressed comments so it keeps folding in new review feedback until a
-	// pass finds nothing left to address. Every caller enables it: the pilot
-	// loop always chains (the standalone `code pilot` command and the pilot
-	// stage of `develop --with-remote` both set it), so a pass that addresses
-	// comments always loops rather than stopping after one pass.
+	// pass finds nothing left to address. The pilot stage of
+	// `develop --with-remote` always sets it, and the standalone `code pilot`
+	// command sets it by default (opt out with `--no-chain`), so a pass that
+	// addresses comments loops rather than stopping after one pass.
 	Chain bool
 	// TokensSoFar carries the accumulated total token usage from prior passes of
 	// a chained run, so the terminal result reports the whole chain's usage.
@@ -63,13 +63,13 @@ type PilotInput struct {
 	// that summary as the webhook notification's body (only the webhook).
 	Summary bool
 	// ChainSummary carries the webhook summary of the most recent addressed pass
-	// across continue-as-new. With --chain --summary the terminal success is the
-	// no-comments pass: it runs no agent (its own Pi session is empty) and lands
-	// under a new RunID, and because piagent keys the Pi session on the run, that
-	// pass cannot summarize the real work. So each addressing pass summarizes
-	// itself while its session is still live and carries the text here, and the
-	// terminal notification attaches this preserved summary instead. It is set
-	// only when both Chain and Summary are enabled.
+	// across continue-as-new. When chaining with --summary the terminal success
+	// is the no-comments pass: it runs no agent (its own Pi session is empty) and
+	// lands under a new RunID, and because piagent keys the Pi session on the
+	// run, that pass cannot summarize the real work. So each addressing pass
+	// summarizes itself while its session is still live and carries the text
+	// here, and the terminal notification attaches this preserved summary
+	// instead. It is set only when both Chain and Summary are enabled.
 	ChainSummary string
 }
 
