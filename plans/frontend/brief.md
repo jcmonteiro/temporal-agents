@@ -38,9 +38,15 @@ already runs against — an operator sees actual workflow executions and their
 states, not a mockup. (Development proceeds against a stand-in data source, but
 the shipped outcome is wired to live data.)
 
-The overview is the first-class deliverable. The other destinations named in the
-concept (Fleets, Workflows, Templates, Insights, Settings) exist as reachable
-places but are not required to be functional for this outcome to be met.
+Each orbiting item is a top-level piece of work — either an entire **fleet** or a
+**standalone workflow** (a run started via `run`, `schedule`, or `code
+develop`). Selecting one shows its details; from a fleet's details the operator
+can open a dedicated **fleet view** that shows that fleet and its relationships.
+
+The **Overview** (orbit) and the **Fleet view** are the first-class
+deliverables. The remaining destinations (Workflows, Templates, Insights,
+Settings) exist as reachable places but are not required to be functional for
+this outcome to be met.
 
 ## Success signals
 
@@ -61,8 +67,8 @@ places but are not required to be functional for this outcome to be met.
   databases, or deployment. The only data path added is a **minimal, local,
   read-only feed** that reads existing Temporal workflow state and exposes it to
   the frontend. Anything beyond read-only local observation is out.
-- **The non-overview destinations** — Fleets, Workflows, Templates, Insights,
-  Settings are navigable placeholders only.
+- **Workflows, Templates, Insights, Settings** — navigable placeholders only.
+  (Overview and the Fleet view are in scope; the rest are not.)
 - **Mutating agent work from the UI** — starting, stopping, or editing workflows
   is out; this is a read/observe surface.
 - **Multi-user concerns** — sharing, permissions, presence, notifications

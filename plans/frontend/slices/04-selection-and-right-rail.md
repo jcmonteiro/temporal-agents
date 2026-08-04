@@ -20,8 +20,9 @@ panel; a sensible default selection is shown on load.
       (focusable, name exposed, activ-on-Enter/click); lift selection state to
       the Overview page (IB §4).
 - [ ] Selected panel reads the selected `WorkItem` and renders label, status,
-      fleet, progress (as a bar), estimate, owner, and a non-functional
-      "View Details" button (mutations out of scope per brief).
+      fleet, progress (as a bar), estimate, owner, and a "View Details" button.
+      For a `fleet` item it navigates to the fleet view route (Slice 8); for a
+      `workflow` item it is inert/hidden (Q5). Mutations remain out of scope.
 - [ ] Up Next renders the queued items (label + status) from the client data.
 - [ ] Default selection on load (e.g. first in-progress item) so the panel is
       never empty.

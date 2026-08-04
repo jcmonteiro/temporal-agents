@@ -146,14 +146,24 @@ source of intent.
 - **Domain types** (`src/domain/`) are the single source of truth for a work
   item, its status enum, groupings ("fleets"), progress, estimate, owner, and
   the "up next" queue. Fixtures and any future API both conform to these types.
+- **Item kinds (Q5):** an overview satellite is one of two kinds — `fleet` or
+  `workflow` (a standalone run from `run`/`schedule`/`code develop`). The type
+  carries a `kind` discriminator. A `fleet` item's single status is an
+  **aggregation** of its node statuses (aggregation rule is a stated decision —
+  see §5); a `workflow` item's status is its native execution status. Only
+  `fleet` items are navigable to the fleet view.
 - The status vocabulary is fixed by the concept: `todo`, `in-progress`,
   `paused`, `waiting-input`, `waiting`, `done`, `failed` (the concept's
   "Blocked" maps to `failed`). Each status has one color, defined once as a
   token and consumed by both the legend and the orbit dots.
 
-## 4. The orbit visualization (constraints, rendering left open)
+## 4. The visualizations (constraints, rendering left open)
 
-This is the novel piece with no reference precedent. Constraints:
+Two custom views, no reference precedent.
+
+### 4a. Overview — orbit
+
+Constraints:
 
 - The layout is a **pure function of the work-item list**: given N items and a
   center, item positions are deterministic and reproducible (same input →
@@ -173,9 +183,42 @@ This is the novel piece with no reference precedent. Constraints:
   elements, or a mix are all acceptable. It must be testable under jsdom
   (assert item presence/labels/status and selection), which argues against a
   `<canvas>`-only approach — but the choice is the implementer's to justify.
+- Selecting a satellite fills the right rail (State Legend, Selected, Up Next).
+  For a `fleet` item, "View Details" navigates to the **fleet view** route; for
+  a `workflow` item it is inert (no dedicated view in scope).
+
+### 4b. Fleet view — relationship graph
+
+A dedicated route (the left-nav "Fleets" destination) rendering a **node-link
+graph** of a fleet and its relationships (per the fleet-view concept image),
+with a right rail: Selected Fleet (progress, estimate, owner, description),
+Connected Fleets, Related Workflows. Constraints:
+
+- Nodes render with a short monogram + label + status dot (shared status token);
+  edges show relationships; selection drives the right rail.
+- Same chrome as Overview (top bar, nav, legend, zoom/recenter controls).
+- Layout is deterministic enough to test node/edge presence and selection under
+  jsdom. Force-directed physics is optional polish, not required for the demo.
+- **Backend-gap constraint (Q3=A philosophy):** the graph's fleet-to-fleet
+  "Connected Fleets" edges and per-fleet Progress/Estimate/Owner/Description
+  have **no source in PR #18** (which models only nodes *within* one fleet). The
+  live view must degrade honestly: render what exists (a fleet's own node DAG +
+  node statuses; progress derivable as done-node ratio) and omit or mark as
+  unavailable what the backend cannot yet provide. Fixtures may show the full
+  concept. Cross-fleet relationships are a documented future backend feature,
+  not to be fabricated.
 
 ## 5. Known risks, unknowns, open decisions
 
+- **Fleet → single status aggregation rule (Q5)** — how a fleet's node statuses
+  collapse to one satellite status. Suggested precedence: any `failed` →
+  `failed`; else any `waiting-input`/`blocked` → `waiting-input`; else any
+  `in-progress` → `in-progress`; else any `waiting`/`todo` → `in-progress` if
+  some node done else `todo`; all `done` → `done`. Decide and record in Slice 2.
+- **Graph rendering (fleet view)** — hand-rolled SVG vs a graph/force library.
+  Trade-off: a library eases layout but adds a dep and jsdom-test friction;
+  hand-rolled keeps the neutral-dependency stance (Q1). Decide in the fleet-view
+  slice.
 - **Orbit rendering approach** — SVG vs positioned DOM vs library. Trade-off:
   SVG gives precise geometry and easy dashed orbits; DOM gives easier CONNECT
   component embedding and accessibility. No mandate; pick and record the choice

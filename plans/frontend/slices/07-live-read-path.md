@@ -30,8 +30,16 @@ component changes.
       Completed → `done`; Failed → `failed`; `SeedConflictBlocked` →
       `waiting-input` (≈ blocked, optional in first pass). "Up Next" =
       `todo`/`waiting` nodes. Reuse `internal/fleet` domain types where possible.
-- [ ] Add an HTTP handler serving `GET /api/v1/overview` returning JSON that
-      matches the frontend `src/domain/` types (items + up-next).
+- [ ] Compose the **overview** satellites (Q5): one item per **fleet**
+      (aggregated status via the domain rule, derived progress = done/total
+      nodes) and one per **standalone workflow** (`run`/`schedule`/`code
+      develop` executions that are not fleet children), each tagged with its
+      `kind`.
+- [ ] Add an HTTP handler serving `GET /api/v1/overview` (items + up-next) and
+      `GET /api/v1/fleets/:id` (fleet detail: nodes, edges, connected fleets,
+      related workflows) returning JSON matching `src/domain/` types. Where a
+      field has no backend source (cross-fleet edges, owner/estimate/
+      description), omit it or mark unavailable — do not fabricate (IB §4b).
 - [ ] Expose it via a **new** entrypoint that does not alter existing commands:
       a `serve`/`web` CLI subcommand (preferred) or a `--http` flag. Reads
       `TEMPORAL_ADDRESS` like the rest of the CLI.
@@ -46,7 +54,8 @@ component changes.
 ### Frontend side
 
 - [ ] Add the live implementation of the `clients/agent-hub` boundary that calls
-      `GET /api/v1/overview` via `proxyFetch`, returning `Result<T, E>`.
+      `GET /api/v1/overview` and `GET /api/v1/fleets/:id` via `proxyFetch`,
+      returning `Result<T, E>`.
 - [ ] Select fixtures vs live via config/env (`Config` flag) so tests and
       offline dev keep using fixtures; no component changes (IB §3).
 - [ ] Test: live client maps a sample payload to domain types and surfaces
@@ -54,7 +63,8 @@ component changes.
 
 ## Done when
 
-Running the `serve` command with a live worker shows real workflow executions in
-the Orbit with correct statuses, the JSON contract matches the domain types, the
+Running the `serve` command with a live worker shows real fleets (aggregated)
+and standalone workflows in the Orbit with correct statuses, the fleet view
+renders a real fleet's nodes, the JSON contract matches the domain types, the
 fixture path still works for offline/test, and no existing Go command changed
 behaviour.

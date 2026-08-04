@@ -9,13 +9,18 @@ Loading and error states are visible.
 
 ## Tasks
 
-- [ ] Define `src/domain/types.ts`: `WorkItem` (id, label, icon kind, status,
-      fleet, progress, estimate, owner), the `WorkStatus` union
+- [ ] Define `src/domain/types.ts`: `WorkItem` (id, label, `kind: 'fleet' |
+      'workflow'` per Q5, icon kind, status, fleet, progress, estimate, owner),
+      the `WorkStatus` union
       (`todo | in-progress | paused | waiting-input | waiting | done | failed`),
-      `Fleet` (incl. its **plan**: an ordered set of planned workflow steps with
-      predecessor links — the source of derived `todo`/`waiting` and "Up Next",
-      per Q3), and the "up next" item shape (IB §3). The full seven-status enum
-      stays in the domain even though the live feed only emits a subset (Q3=A).
+      `Fleet` (incl. its **plan**: the node DAG — nodes with predecessor links,
+      the source of derived `todo`/`waiting`, "Up Next", and the fleet-view
+      graph, per Q3/Q5), and the "up next" item shape (IB §3). Mirror the
+      `internal/fleet` shapes (`FleetPlan`/`FleetNode`/`NodeStatus`).
+- [ ] Define + record the **fleet → single status aggregation rule** (Q5, IB §5)
+      and implement it as a pure function with tests.
+- [ ] The full seven-status enum stays in the domain even though the live feed
+      only emits a subset (Q3=A).
 - [ ] Define status color tokens once in `src/styles/theme.ts` keyed by
       `WorkStatus`, consumed by list + (later) legend + orbit (IB §3).
 - [ ] Add `src/clients/proxy-fetch.ts` mirroring the reference `/{service}/{path}`

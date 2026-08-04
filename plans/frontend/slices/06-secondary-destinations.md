@@ -3,16 +3,19 @@
 **Discharges:** brief scope (non-overview destinations are navigable
 placeholders; search + notifications presentational), IB §2 (routing, chrome).
 
-**Demo:** clicking Fleets, Workflows, Templates, Insights, or Settings navigates
-to a placeholder page that renders its title (and marks the nav item active).
-The top-bar search field and notification bell are present and interactive at a
+**Demo:** clicking Workflows, Templates, Insights, or Settings navigates to a
+placeholder page that renders its title (and marks the nav item active).
+(Overview is Slices 3–5; Fleets is the real fleet view in Slice 8.) The top-bar
+search field and notification bell are present and interactive at a
 presentational level (search input accepts text; bell opens an empty/placeholder
 popover). Help is reachable.
 
 ## Tasks
 
-- [ ] Add lazy routes in `router.tsx` for each secondary destination, each to a
-      minimal `src/pages/<name>/page.tsx` placeholder with a titled empty state.
+- [ ] Add lazy routes in `router.tsx` for each **placeholder** destination
+      (Workflows, Templates, Insights, Settings), each a minimal
+      `src/pages/<name>/page.tsx` with a titled empty state. (Fleets route is
+      Slice 8.)
 - [ ] Wire left-nav links to the routes; active state reflects the current route
       (IB §2 routing).
 - [ ] Make the top-bar search a controlled input (no backend search — brief
@@ -20,11 +23,11 @@ popover). Help is reachable.
       but do not require it.
 - [ ] Make the notification bell open a placeholder popover (no delivery — brief
       scope).
-- [ ] Test: each nav link resolves to its placeholder page and sets active
+- [ ] Test: each placeholder nav link resolves to its page and sets active
       state; search input updates on type; bell toggles its popover.
 
 ## Done when
 
-All six nav destinations resolve to real (if placeholder) routes with correct
-active state, and the search + notification affordances are present and behave
-at the presentational level defined by the brief.
+All nav destinations resolve to routes with correct active state (Overview,
+Fleets, and four placeholders), and the search + notification affordances are
+present and behave at the presentational level defined by the brief.
