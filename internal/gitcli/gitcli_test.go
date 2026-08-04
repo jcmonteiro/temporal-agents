@@ -359,6 +359,41 @@ func TestMergeBranch_ConflictErrorsAndAbortRestores(t *testing.T) {
 	require.Equal(t, "node\n", string(got), "abort must restore the node branch's content")
 }
 
+// TestAbortMerge_NoMergeInProgressIsNoOp pins abort idempotency: with no merge
+// underway (a prior attempt already aborted, or none ever started) AbortMerge
+// must succeed rather than fail with "no merge to abort", so it is safe to
+// re-run under activity retries.
+func TestAbortMerge_NoMergeInProgressIsNoOp(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := initRepo(t)
+	g := New()
+	ctx := context.Background()
+
+	// A clean repository has no merge in progress; abort must be a no-op.
+	require.NoError(t, g.AbortMerge(ctx, dir))
+
+	// After a real abort, a second abort (as a retry would issue) must also
+	// succeed rather than resurface as a failure.
+	git := gitRunner(t, dir)
+	git("config", "user.name", "t")
+	git("config", "user.email", "t@t")
+	git("checkout", "-b", "dep")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "file.txt"), []byte("dep\n"), 0o644))
+	git("add", "file.txt")
+	git("commit", "-m", "dep edit")
+	git("checkout", "main")
+	git("checkout", "-b", "node")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "file.txt"), []byte("node\n"), 0o644))
+	git("add", "file.txt")
+	git("commit", "-m", "node edit")
+	require.Error(t, g.MergeBranch(ctx, dir, "dep"), "a conflicting merge must error")
+
+	require.NoError(t, g.AbortMerge(ctx, dir))
+	require.NoError(t, g.AbortMerge(ctx, dir), "a second abort must be a no-op")
+}
+
 // TestAddDisposableClone_DetachesOrigin pins the source-repo detachment: the
 // sandbox must carry no `origin` remote pointing back at the source, so a
 // `git push origin ...` from the read-only sandbox has no configured path to

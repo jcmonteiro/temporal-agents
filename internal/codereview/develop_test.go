@@ -166,6 +166,39 @@ func TestDevelopWorkflow_SeedConflict_Unresolved_AbortsAndBlocks(t *testing.T) {
 	env.AssertExpectations(t)
 }
 
+func TestDevelopWorkflow_SeedConflict_AbortFailure_FailsNotBlocked(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
+		Return(CreateBranchResult{Branch: "feat/b", WorkDir: "/wt/b", BaseSHA: "base"}, nil)
+	env.OnActivity(a.MergeDependency, mock.Anything, mock.Anything).
+		Return(MergeDependencyResult{Conflicted: true}, nil)
+	env.OnActivity(a.ResolveMergeConflict, mock.Anything, mock.Anything).
+		Return(ResolveMergeConflictResult{}, errors.New("still conflicted"))
+	// The cleanup abort itself fails, so the branch may remain half-merged with
+	// conflict markers and the "blocked, branch left clean" classification cannot
+	// be trusted.
+	env.OnActivity(a.AbortMerge, mock.Anything, mock.Anything).
+		Return(errors.New("abort failed"))
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{
+		WorkDir: "/repo", Branch: "feat/b", WorktreesDir: "/wt", Prompt: "expose via REST",
+		MergeBranches: []string{"feat/a"}, AwaitReview: true,
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	require.Error(t, err)
+	// A failed abort must not be classified as blocked: the failure carries no
+	// SeedConflictBlockedErrType, so the fleet records the node as failed rather
+	// than claiming the branch was left clean.
+	var appErr *temporal.ApplicationError
+	if errors.As(err, &appErr) {
+		require.NotEqual(t, SeedConflictBlockedErrType, appErr.Type())
+	}
+	env.AssertExpectations(t)
+}
+
 func TestDevelopWorkflow_Worktree_PassesWorktreesDirAndDevelopsInReturnedWorktree(t *testing.T) {
 	env := newDevelopEnv(t)
 

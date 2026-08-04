@@ -586,8 +586,16 @@ func seedBranches(ctx workflow.Context, quick, resolveCtx workflow.Context, work
 		var rr ResolveMergeConflictResult
 		if rErr := workflow.ExecuteActivity(resolveCtx, a.ResolveMergeConflict,
 			ResolveMergeConflictRequest{WorkDir: workDir, Branch: b}).Get(resolveCtx, &rr); rErr != nil {
-			// Best-effort abort so the branch is left clean rather than half-merged.
-			_ = workflow.ExecuteActivity(quick, a.AbortMerge, AbortMergeRequest{WorkDir: workDir}).Get(quick, nil)
+			// Abort so the branch is left clean rather than half-merged. The abort
+			// result is honoured: only once cleanup is confirmed may the node be
+			// classified as blocked (branch left clean). If the abort itself fails the
+			// branch may remain half-merged with conflict markers, so surface a plain
+			// (retryable) failure instead of the non-retryable SeedConflictBlocked
+			// classification, which the fleet records as failed rather than blocked and
+			// which does not claim the branch was left clean.
+			if aErr := workflow.ExecuteActivity(quick, a.AbortMerge, AbortMergeRequest{WorkDir: workDir}).Get(quick, nil); aErr != nil {
+				return "", tokens, fmt.Errorf("abort merge of dependency branch %q after failed conflict resolution: %w", b, aErr)
+			}
 			return "", tokens, temporal.NewNonRetryableApplicationError(
 				fmt.Sprintf("cannot resolve conflict merging dependency branch %q", b),
 				SeedConflictBlockedErrType, rErr)

@@ -291,10 +291,45 @@ func (g Git) MergeBranch(ctx context.Context, dir, branch string) error {
 
 // AbortMerge aborts a merge left in progress in dir (e.g. after a conflict),
 // restoring the branch to its pre-merge state so no conflict markers are
-// committed or pushed.
+// committed or pushed. It is idempotent so it stays safe under activity
+// retries: with no merge in progress (a prior attempt already aborted, or the
+// merge never started) `git merge --abort` fails with "no merge to abort", so
+// the ref is probed first and the abort is skipped when there is nothing to
+// undo. This keeps a retry after a successful abort from resurfacing as a
+// failure.
 func (g Git) AbortMerge(ctx context.Context, dir string) error {
-	_, err := run(ctx, dir, "merge", "--abort")
+	inProgress, err := g.mergeInProgress(ctx, dir)
+	if err != nil {
+		return err
+	}
+	if !inProgress {
+		return nil
+	}
+	_, err = run(ctx, dir, "merge", "--abort")
 	return err
+}
+
+// mergeInProgress reports whether dir has a merge in progress by probing for
+// MERGE_HEAD, the ref git writes while a merge is underway (including one
+// stopped on conflicts). `git rev-parse -q --verify MERGE_HEAD` exits 0 when
+// the ref exists and 1 when it is absent; any other non-zero exit is a genuine
+// git failure and is returned as an error. It lets AbortMerge no-op cleanly
+// when there is nothing to abort.
+func (g Git) mergeInProgress(ctx context.Context, dir string) (bool, error) {
+	full := []string{"-C", dir, "rev-parse", "-q", "--verify", "MERGE_HEAD"}
+	cmd := exec.CommandContext(ctx, "git", full...)
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("git rev-parse --verify MERGE_HEAD: %w: %s", err, strings.TrimSpace(stderr.String()))
 }
 
 // HasConflicts reports whether dir has unmerged paths: files left in a
