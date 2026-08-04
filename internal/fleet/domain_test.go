@@ -101,7 +101,7 @@ func TestSummarizeFleet_ReportsStatusesTotalsAndPRLinks(t *testing.T) {
 	// The blocking dependency is surfaced on the skip line (with the redundant
 	// "skipped:" prefix trimmed since the status already says skipped).
 	require.Contains(t, out, `grpc: skipped (dependency "core" did not succeed)`)
-	require.Contains(t, out, "3 node(s): 1 succeeded, 1 failed, 1 skipped.")
+	require.Contains(t, out, "3 node(s): 1 succeeded, 1 failed, 0 blocked, 1 skipped.")
 	require.Contains(t, out, "Develop-step token usage across all nodes: 1,000 tokens.")
 }
 

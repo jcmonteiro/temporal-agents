@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 
@@ -64,7 +65,7 @@ func TestFleetWorkflow_HappyPath_RunsEveryNodeAndAggregates(t *testing.T) {
 	require.NoError(t, env.GetWorkflowResult(&out))
 	require.Contains(t, out, "core: succeeded")
 	require.Contains(t, out, "rest: succeeded")
-	require.Contains(t, out, "2 node(s): 2 succeeded, 0 failed, 0 skipped.")
+	require.Contains(t, out, "2 node(s): 2 succeeded, 0 failed, 0 blocked, 0 skipped.")
 	// Both nodes each reported 1,000 tokens, so the fleet total is their sum.
 	require.Contains(t, out, "Develop-step token usage across all nodes: 2,000 tokens.")
 }
@@ -129,6 +130,34 @@ func TestFleetWorkflow_PropagatesInputsAndFormsChildIDs(t *testing.T) {
 	require.Equal(t, fleetID, strings.TrimSuffix(byNode["rest"].id, "-rest"))
 }
 
+func TestFleetWorkflow_SeedConflictBlocked_RecordsBlockedAndBlocksDependents(t *testing.T) {
+	env := newEnv(t)
+
+	// The foundation node's branch cannot be seeded (an unresolved seed conflict),
+	// so its child returns the blocked application-error type; the dependent must
+	// not start.
+	env.OnActivity(fa.ResolveBase, mock.Anything, mock.Anything).Return("base-sha", nil)
+	env.OnWorkflow(codereview.DevelopWorkflow, mock.Anything, mock.MatchedBy(func(in codereview.DevelopInput) bool {
+		return in.Prompt == "implement the core"
+	})).Return("", temporal.NewNonRetryableApplicationError(
+		"cannot resolve conflict", codereview.SeedConflictBlockedErrType, nil))
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(FleetWorkflow, FleetInput{
+		Plan: linearPlan(), WorkDir: "/repo", WorktreesDir: "/wt",
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	var out string
+	require.NoError(t, env.GetWorkflowResult(&out))
+	// The blocked node reads as blocked (distinct from failed), and its dependent
+	// is still gated.
+	require.Contains(t, out, "core: blocked")
+	require.Contains(t, out, "rest: skipped")
+	require.Contains(t, out, "2 node(s): 0 succeeded, 0 failed, 1 blocked, 1 skipped.")
+}
+
 func TestFleetWorkflow_DependencyFailure_SkipsDependents(t *testing.T) {
 	env := newEnv(t)
 
@@ -152,7 +181,7 @@ func TestFleetWorkflow_DependencyFailure_SkipsDependents(t *testing.T) {
 	// The skip line names the blocking dependency so the reader need not
 	// reconstruct the graph.
 	require.Contains(t, out, `rest: skipped (dependency "core" did not succeed)`)
-	require.Contains(t, out, "2 node(s): 0 succeeded, 1 failed, 1 skipped.")
+	require.Contains(t, out, "2 node(s): 0 succeeded, 1 failed, 0 blocked, 1 skipped.")
 }
 
 func TestFleetWorkflow_TransitiveSkip_PropagatesThroughLayers(t *testing.T) {
@@ -188,7 +217,7 @@ func TestFleetWorkflow_TransitiveSkip_PropagatesThroughLayers(t *testing.T) {
 	require.Contains(t, out, `b: skipped (dependency "a" did not succeed)`)
 	// c is blocked by b, which was skipped (not failed) — the transitive case.
 	require.Contains(t, out, `c: skipped (dependency "b" did not succeed)`)
-	require.Contains(t, out, "3 node(s): 0 succeeded, 1 failed, 2 skipped.")
+	require.Contains(t, out, "3 node(s): 0 succeeded, 1 failed, 0 blocked, 2 skipped.")
 }
 
 func TestFleetWorkflow_ParallelNodes_BothRun(t *testing.T) {
@@ -212,7 +241,7 @@ func TestFleetWorkflow_ParallelNodes_BothRun(t *testing.T) {
 	require.NoError(t, env.GetWorkflowError())
 	var out string
 	require.NoError(t, env.GetWorkflowResult(&out))
-	require.Contains(t, out, "3 node(s): 3 succeeded, 0 failed, 0 skipped.")
+	require.Contains(t, out, "3 node(s): 3 succeeded, 0 failed, 0 blocked, 0 skipped.")
 }
 
 func TestFleetWorkflow_InvalidPlan_FailsWithoutStartingChildren(t *testing.T) {

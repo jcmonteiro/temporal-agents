@@ -233,6 +233,11 @@ const (
 	StatusSucceeded NodeStatus = "succeeded"
 	// StatusFailed means the node's child develop workflow returned an error.
 	StatusFailed NodeStatus = "failed"
+	// StatusBlocked means the node ran but could not integrate its dependencies'
+	// work: seeding its branch hit a merge conflict the agent could not resolve.
+	// The branch was left clean (no conflict markers); unlike a failure this is
+	// recoverable — a later re-sync may succeed once the conflicting branches move.
+	StatusBlocked NodeStatus = "blocked"
 	// StatusSkipped means the node never ran because one of its dependencies did
 	// not succeed, so running a node sequenced after a failed prerequisite would
 	// be pointless.
@@ -302,7 +307,7 @@ func SummarizeFleet(goal string, results []NodeResult) string {
 		b.WriteString(g)
 		b.WriteString("\n")
 	}
-	var succeeded, failed, skipped, total int
+	var succeeded, failed, blocked, skipped, total int
 	b.WriteString("\nPer-node status:\n")
 	for _, r := range results {
 		total += r.Tokens
@@ -311,6 +316,8 @@ func SummarizeFleet(goal string, results []NodeResult) string {
 			succeeded++
 		case StatusFailed:
 			failed++
+		case StatusBlocked:
+			blocked++
 		case StatusSkipped:
 			skipped++
 		}
@@ -334,8 +341,8 @@ func SummarizeFleet(goal string, results []NodeResult) string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString(fmt.Sprintf("\n%d node(s): %d succeeded, %d failed, %d skipped.\n",
-		len(results), succeeded, failed, skipped))
+	b.WriteString(fmt.Sprintf("\n%d node(s): %d succeeded, %d failed, %d blocked, %d skipped.\n",
+		len(results), succeeded, failed, blocked, skipped))
 	b.WriteString(fmt.Sprintf("Develop-step token usage across all nodes: %s tokens. The review and pilot stages report their own token totals separately.", groupThousands(total)))
 	return b.String()
 }
