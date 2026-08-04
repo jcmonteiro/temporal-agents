@@ -4,10 +4,10 @@
 dropped), IB §5 (Faro + package-manager decisions), IB §6 (seams).
 
 **Demo:** run the dev server from `web/`; the app boots showing the fixed top
-bar (logo "Agent Hub", search field, notification bell, avatar) and the left
-nav (Overview active; Fleets, Workflows, Templates, Insights, Settings, Help).
-The Overview route renders an empty content area with the greeting. `go build .`
-and the Go CI still pass, untouched.
+bar (logo "Agent Hub", search field, notification bell, static avatar) and the
+left nav (Overview active; Fleets, Workflows, Templates, Insights, Settings,
+Help). The Overview route renders an empty content area (**no greeting** — Q10).
+`go build .` and the Go CI still pass, untouched.
 
 ## Tasks
 
@@ -43,9 +43,11 @@ and the Go CI still pass, untouched.
       lazy Overview route as index. **No** `RequireAuth`/`RequireRole` (IB §2).
 - [ ] Add `src/app.tsx` shell: fixed `TopBar` + left nav + `<Outlet/>` content
       area, native HTML + inline `style` only (IB §2 no layout primitives).
-- [ ] Add `src/navigation/top-bar.tsx` (logo, search placeholder, bell, avatar)
-      and the left nav component with the six destinations + Help, using the
-      local `ui/` primitives and local SVG icons (via `vite-plugin-svgr`).
+- [ ] Add `src/navigation/top-bar.tsx` (logo, search placeholder, bell, static
+      avatar) and the left nav component with the six destinations + Help, using
+      the local `ui/` primitives and the **public icon library** for chrome
+      icons (Q9); `vite-plugin-svgr` is reserved for the bespoke logo/planet
+      mark only (no competing icon source).
 - [ ] Add `src/utils/result.ts`, `src/utils/error-boundary.tsx`,
       `src/utils/router-error-boundary.tsx` (ported from reference).
 - [ ] Add `src/config/index.ts` with only non-auth config (env, backend base
@@ -57,7 +59,9 @@ and the Go CI still pass, untouched.
 - [ ] Update root `.gitignore` to ignore `web/node_modules`, `web/dist`,
       `web/*.tsbuildinfo` (IB §1). Commit the lockfile.
 - [ ] Add `.github/workflows/web.yml` (Node install + `lint` + `test` +
-      `build`) scoped to `web/**` paths; leave `go.yml` untouched (IB §1, §6).
+      `build`) with push + pull-request path filters covering **both `web/**`
+      and `.github/workflows/web.yml` itself** (so changes to the workflow
+      config are exercised); leave `go.yml` untouched (IB §1, §6).
 - [ ] Add `web/AGENTS.md` capturing the carried-over conventions (functional
       components, `Result` usage, no layout primitives / native HTML + inline
       style, token-only styling, dark-theme-by-default + themeable rule).

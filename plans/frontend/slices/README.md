@@ -14,10 +14,12 @@ dependency. Every slice names the implementation-brief constraints it discharges
 | 6 | [Secondary destinations + top-bar affordances](./06-secondary-destinations.md) | Workflows/Templates/Insights/Settings placeholders; search + notifications present but disconnected |
 | 7 | [Live read-path](./07-live-read-path.md) | Go read adapter serves real fleets + workflows; Orbit + fleet view show live data |
 | 8 | [Fleet view (node DAG)](./08-fleet-view.md) | Fleets route renders a selectable graph of one fleet's node DAG + right rail; reached via nav and "View Details" |
+| 9 | [Dismissals + Postgres persistence](./09-dismissals-persistence.md) | Dismiss a done/failed satellite; it stays hidden across reloads/browsers (Postgres) |
 
 Slices 1–6 and 8 are pure-frontend and fixtures-backed — each demoable offline.
 Slice 7 adds the Go read adapter and swaps the client to live data behind the
-same boundary (feeding both Overview and the fleet view).
+same boundary (feeding both Overview and the fleet view). Slice 9 adds the one
+write path (dismissals) with Postgres persistence.
 
 Satellites (Q5) are top-level works: a **fleet** (aggregated status, navigable
 to the fleet view) or a **standalone workflow** (`run`/`schedule`/`code
@@ -32,7 +34,11 @@ develop`). The Overview is an orbit; the fleet view is one fleet's node DAG
 - IB §4.0 (shared canvas primitive, Q8=A): built in slice 3+5, reused/refined in slice 8.
 - IB §4a (orbit): slices 3, 4, 5. IB §4b (fleet node DAG, no cross-fleet — Q6=A): slice 8.
 - Q5 (satellite kinds, aggregation, fleet-view navigation): slices 2, 4, 7, 8.
-- Q7 (PR #18 assumed merged): slice 7 only; slices 1–6 + 8 are independent of it.
+- IB §3 `/runs`+`/schedules`+plan-source (GC1/GC2/GC5): slice 7. Dismissal store + Postgres (GC5a): slice 9.
+- Q7 (PR #18 assumed merged): slices 7+9 only; slices 1–6 + 8 are independent of it.
+- Copilot review (GC1–GC5a): plan-from-workflow-input port, `/schedules` identity/status,
+  exact aggregation precedence, loopback-default `serve`, chain-identity + dismissible
+  `/runs`, Postgres-backed dismissals — recorded in impl brief §3/§5/§6, slices 7 and 9.
 - Q9–Q22 resolutions recorded in the implementation brief §5 and folded into the
   relevant slices (icons, pnpm, `web/`, no greeting/identity, deferred rendering
   with a reactive/clickable/draggable/animated/low-resource DoD, backend-owned

@@ -4,8 +4,8 @@
 (data seam, Go read adapter in scope), IB §6 (additive Go only).
 
 **Assumes (Q7):** PR #18 (`internal/fleet/`) is merged to the base branch, so
-`FleetPlan`/`FleetNode`/`NodeStatus` and `fleet-plan.json` are available to
-reference and reuse directly. Slices 1–6 + 8 do not depend on this.
+`FleetPlan`/`FleetNode`/`NodeStatus` are available to reference and reuse
+directly. Slices 1–6 + 8 do not depend on this.
 
 **Demo:** with the Temporal dev server and worker running, the Overview shows
 **real** workflow executions orbiting the center with their live statuses —
@@ -23,40 +23,53 @@ component changes.
 - [ ] Implement the driven adapter over the Temporal client
       (`ListWorkflowExecutions` / `DescribeWorkflowExecution`), mapping native
       execution status to `WorkStatus` (Q3 = A): Running/ContinuedAsNew →
-      `in-progress`, Completed → `done`, Failed/TimedOut/Terminated/Canceled →
-      `failed`. Do **not** emit `waiting-input`/`paused` (no source) and do
-      **not** instrument the existing workflows (IB §3 mapping constraint).
-- [ ] Read the fleet **plan** DAG (`fleet-plan.json` written by
-      `FleetPlanWorkflow` — Q4) and reconcile against live child executions
-      matched by the `<fleetID>-<nodeID>` convention. Derive per-node status per
-      IB §3: no-exec+dep-pending → `waiting`; no-exec+deps-done → `todo`;
-      no-exec+dep-failed → `paused` (≈ skipped); Running → `in-progress`;
+      `in-progress`, Completed → `done`, Failed/TimedOut/Terminated/**Canceled**
+      → `failed` (GC-Canceled). Do **not** emit `waiting-input`/`paused` (no
+      source) and do **not** instrument the existing workflows (IB §3).
+- [ ] **Recover each fleet's plan from its `FleetWorkflow` start input/history**
+      keyed by fleet ID, behind a **`PlanFor(fleetID)` port** (GC1) — **not** an
+      ambient `fleet-plan.json`. First impl decodes the start input; a future
+      Postgres plan store swaps in without touching callers. Reconcile the DAG
+      against child executions matched by `<fleetID>-<nodeID>`. Derive per-node
+      status per IB §3: no-exec+dep-pending → `waiting`; no-exec+deps-done →
+      `todo`; no-exec+dep-failed → `paused` (≈ skipped); Running → `in-progress`;
       Completed → `done`; Failed → `failed`; `SeedConflictBlocked` →
-      `waiting-input` (≈ blocked, optional in first pass). "Up Next" =
-      `todo`/`waiting` nodes. Reuse `internal/fleet` domain types where possible.
+      `waiting-input` (deferred, Q16). "Up Next" = `todo`/`waiting` nodes.
 - [ ] Serve **resource endpoints** (Q19): `GET /api/v1/fleets` (fleets with
-      backend-**aggregated** status + derived progress — Q15), `GET /api/v1/runs`
-      (`run`/`code develop` executions), `GET /api/v1/schedules` (`schedule`s),
-      and `GET /api/v1/fleets/:id` (a fleet's `FleetNode` DAG — nodes +
-      `DependsOn` edges + per-node status + child workflow). JSON matches
-      `src/domain/` types, **payloads portable / DB-agnostic** so a future DB
-      swaps only the adapter. **No cross-fleet edges**; `owner`/`estimate`/
-      `description` are not modelled (Q6=A, Q10). The Overview satellites are
-      composed by the frontend from fleets + runs + schedules (each tagged with
-      its `kind`).
-- [ ] Implement the fleet **status aggregation** in the Go adapter (Q15), not
-      the frontend.
+      backend-**aggregated** status via the GC3 precedence + derived progress
+      done/total — Q15), `GET /api/v1/runs`, `GET /api/v1/schedules`, and
+      `GET /api/v1/fleets/:id` (a fleet's `FleetNode` DAG — nodes + `DependsOn`
+      edges + per-node status + child workflow). JSON matches `src/domain/`
+      types, **payloads portable / DB-agnostic**. **No cross-fleet edges**;
+      `owner`/`estimate`/`description` are not modelled (Q6=A, Q10). Overview
+      satellites are composed by the frontend from fleets + runs + schedules
+      (each tagged with its `kind`).
+- [ ] **`/runs` bounded visibility + chain identity (GC5):** show running runs +
+      **non-dismissed** terminal runs (no time window); collapse each
+      continue-as-new chain to **one satellite** keyed by the chain's original
+      workflow ID (latest iteration's status); server-cap results. Read the
+      dismissed set from the dismissal store (Slice 9).
+- [ ] **`/schedules` (GC2 = A):** one satellite per schedule (identity =
+      schedule ID); status = `paused` if paused, `in-progress` if an action is
+      running, else latest completed action's `done`/`failed`, `todo` if never
+      run; **no progress**.
+- [ ] Implement the fleet **status aggregation** (GC3 precedence + progress) in
+      the Go adapter (Q15), not the frontend; unit-test the table incl. the
+      empty-fleet and mixed-state cases.
 - [ ] Expose via a **new `serve` CLI subcommand** (Q17) that does not alter
       existing commands; reads `TEMPORAL_ADDRESS` like the rest of the CLI.
+      **Bind to loopback (`127.0.0.1`) by default; non-loopback is explicit
+      opt-in via `--addr` (GC4).**
 - [ ] Serve the built SPA (`web/dist`) as **independently hostable static
       assets** (Q18): `serve` serves the bundle locally for convenience, but the
       API (JSON under `/api/v1`) stays decoupled from asset hosting so the same
       bundle can later sit behind **S3 + a CDN** unchanged. Configurable base
       path. Dev uses the Vite `/api/v1` proxy against this API.
 - [ ] Tests: port has a fake/stub in unit tests for the handler (assert JSON
-      contract + status mapping); the Temporal adapter is covered per the repo's
-      existing adapter-testing approach. `go build .` and existing Go tests/CI
-      stay green.
+      contract + status mapping + aggregation precedence + chain-identity
+      dedup); assert `serve` defaults to a loopback listener (GC4). The Temporal
+      adapter is covered per the repo's existing adapter-testing approach.
+      `go build .` and existing Go tests/CI stay green.
 
 ### Frontend side
 

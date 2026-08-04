@@ -65,14 +65,18 @@ this outcome to be met.
 
 - **Authentication / authorization** — no login, no identity, no roles. The app
   assumes a single trusted local operator.
-- **A production backend, hosting, or persistence layer** — no new services,
-  databases, or deployment. The only data path added is a **minimal, local,
-  read-only feed** that reads existing Temporal workflow state and exposes it to
-  the frontend. Anything beyond read-only local observation is out.
+- **Production hosting or cloud deployment** — out. The data path added is a
+  **local, read-mostly feed** that reads existing Temporal workflow state and
+  exposes it to the frontend, plus a **local Postgres** that persists only the
+  operator's **view state** (which finished items have been dismissed). No cloud
+  services, no deployment.
 - **Workflows, Templates, Insights, Settings** — navigable placeholders only.
   (Overview and the Fleet view are in scope; the rest are not.)
 - **Mutating agent work from the UI** — starting, stopping, or editing workflows
-  is out; this is a read/observe surface.
+  is out; this is an observe surface. The single exception is **dismissing a
+  finished satellite** (a view-state write), which does not touch agent work.
 - **Multi-user concerns** — sharing, permissions, presence, notifications
   delivery. The bell/notifications and search are presentational only.
-- **Any change to the Go worker/CLI behaviour.**
+- **Any change to existing Go worker/CLI command behaviour.** New *additive*
+  surface (a `serve` command, read + dismissal endpoints) is in scope; changing
+  what today's `worker`/`run`/`schedule`/`code` commands do is not.

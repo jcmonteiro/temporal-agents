@@ -3,9 +3,9 @@
 **Discharges:** IB §3 (data seam), IB §2 (Result-based error handling, testing).
 
 **Demo:** the Overview page loads work items **through the client boundary**
-(not by importing fixtures) and renders them as a simple list under the greeting,
-each row showing its label and a status indicator in the correct status color.
-Loading and error states are visible.
+(not by importing fixtures) and renders them as a simple list (**no greeting** —
+Q10), each row showing its label and a status indicator in the correct status
+color. Loading and error states are visible.
 
 ## Tasks
 

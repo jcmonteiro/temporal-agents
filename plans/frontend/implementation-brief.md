@@ -110,11 +110,21 @@ boundary.
 `codereview.DevelopWorkflow` per node, child workflow IDs `<fleetID>-<nodeID>`).
 Domain: `FleetPlan{Goal, Nodes[]}`, `FleetNode{ID, Prompt, DependsOn[]}`,
 `NodeStatus{succeeded, failed, blocked, skipped}`. There are **no query
-handlers**, so the read adapter's sources are (a) the plan file(s) for the DAG
-and (b) Temporal executions (parent `FleetWorkflow` + child `<fleetID>-<nodeID>`
-+ standalone `PromptWorkflow`/develop runs) for live status. The hand-authored
-manifest option is dropped — the plan file authored by `FleetPlanWorkflow` is the
-source of intent.
+handlers**.
+
+**Plan source (Q4/GC1 = A):** the approved `FleetPlan` is **carried in each
+`FleetWorkflow`'s start input** (that is how `fleet execute` runs it). The read
+adapter recovers each fleet's plan from its **workflow start input/history**,
+keyed by fleet ID — **not** from an ambient `fleet-plan.json` (which is a
+user-chosen, `--out`-configurable review artifact that may be absent, stale,
+overwritten, or belong to a different fleet). This lookup sits behind a
+**"plan store" port** (`PlanFor(fleetID) → FleetPlan`); the first implementation
+decodes the workflow start input, and a future **Postgres-backed plan store**
+(see GC5a) swaps in without changing callers.
+
+Live-status sources are the Temporal executions: parent `FleetWorkflow` + child
+`<fleetID>-<nodeID>` + standalone `PromptWorkflow`/develop runs + schedules. The
+hand-authored manifest option is dropped.
 
 
 - **Constraint:** UI components and pages must not read fixtures directly. Work
@@ -133,6 +143,20 @@ source of intent.
   portable** — defined by the backend contract, DB-agnostic — so a future switch
   from workflow-id reconstruction to a real database changes only the adapter,
   not the contract or the frontend.
+- **Constraint (`/runs` visibility + chain identity, GC5):** `/runs` shows all
+  **running** runs plus **terminal** runs that have **not been dismissed**
+  (there is **no time-based window**). A continue-as-new chain collapses to
+  **one satellite** with a **stable per-chain identity** (the chain's original
+  workflow ID), showing the latest iteration's status — never one satellite per
+  retained execution. Results are server-capped; not a full history browser. A
+  terminal `done` (and `failed`) satellite persists until the operator
+  **explicitly dismisses** it (dismissal store, GC5a).
+- **Constraint (`/schedules` identity + status, GC2 = A):** one satellite
+  **per schedule** (identity = schedule ID). Status: `paused` when the schedule
+  is paused; `in-progress` when an action is currently running; else the outcome
+  of the most recent completed action (`done`/`failed`); `todo` when it has
+  never run. **No progress** for schedules. This mapping is part of the portable
+  contract.
 - **Constraint (Go read adapter, in scope — Slice 7):** read-only HTTP endpoints
   served by a **new, additive** Go package (e.g. `internal/httpapi/`) via a
   `serve` CLI subcommand (Q17). Hexagonal: it depends on a **driven port** that
@@ -146,6 +170,18 @@ source of intent.
   convenience, but the architecture must allow the same bundle to be fronted by
   **S3 + a CDN** later without changing the API. Configurable base path; no
   hard embed that couples assets to the API binary lifecycle.
+- **Constraint (network binding, GC4):** because the API is unauthenticated and
+  exposes workflow goals/prompts, `serve` **binds to loopback (`127.0.0.1`) by
+  default**; any non-loopback bind is an **explicit opt-in** (e.g. `--addr`).
+  This preserves the trusted-local-operator boundary by construction.
+- **Constraint (dismissal persistence, GC5a):** dismissing a terminal satellite
+  is a **write** persisted server-side in **Postgres** (added to
+  `docker-compose.yml`). A `POST`/`DELETE` dismissals endpoint under `/api/v1`
+  and a **driven "dismissal store" port** (Postgres adapter) own it; dismissed
+  items are keyed by the stable per-chain / fleet / schedule identity. This is
+  the first mutation in an otherwise read surface; keep reads and this write in
+  separate ports. The same Postgres instance is available to back the plan store
+  (GC1) later.
 - **Status mapping (Q3 = A honest subset, enriched by the real fleet domain):**
   the adapter emits only statuses reconstructable from (plan DAG + executions),
   never fabricated by instrumenting workflows. Per fleet node:
@@ -156,9 +192,10 @@ source of intent.
   - child Completed (succeeded) → `done`
   - child returned `SeedConflictBlocked` (recoverable, needs a human) →
     `waiting-input` (≈ `blocked`); requires reading the child failure detail
-  - child Failed/TimedOut/Terminated → `failed`
-  Standalone `PromptWorkflow`/develop runs (no fleet) map by native status only
-  (`in-progress`/`done`/`failed`).
+  - child Failed/TimedOut/Terminated/**Canceled** → `failed`
+  Standalone `PromptWorkflow`/develop runs (no fleet) map by native status:
+  Running/ContinuedAsNew → `in-progress`; Completed → `done`;
+  Failed/TimedOut/Terminated/Canceled → `failed`.
 - **"Up Next"** = the `todo`/`waiting` nodes. Match plan node ↔ execution by the
   `<fleetID>-<nodeID>` workflow-ID convention (Q19 first implementation).
 - `waiting-input` (≈ `blocked`) reconstruction is **deferred** in the first pass
@@ -169,10 +206,20 @@ source of intent.
 - **Item kinds (Q5/Q19):** an overview satellite has a `kind` discriminator —
   `fleet`, `run`, or `schedule` (matching the three resource endpoints). Only
   `fleet` items are navigable to the fleet view (§4b, Q6=A).
-- **Fleet status aggregation is the backend's job (Q15):** the API returns a
-  fleet's already-aggregated status (and derived progress); the frontend does
-  **not** compute it. The aggregation rule is defined and exercised in the Go
-  read adapter (Slice 7), not in the client.
+- **Fleet status aggregation is the backend's job (Q15), with an exact rule
+  (GC3):** the API returns a fleet's already-aggregated status and progress; the
+  frontend does **not** compute them. The rule is a **fixed precedence**
+  (first match wins), defined in the portable contract and unit-tested in the Go
+  adapter (Slice 7):
+  1. no nodes → `todo`
+  2. any `failed` → `failed`
+  3. any `waiting-input` (blocked) → `waiting-input`
+  4. any `in-progress` → `in-progress`
+  5. any `paused` (skipped) → `paused`
+  6. all `done` → `done`
+  7. otherwise → `in-progress` if any node is `done`, else `todo`
+  **Progress** = `done / total` over all plan nodes (`skipped`/`blocked` count
+  in the denominator, not the numerator).
 - The status vocabulary is fixed by the concept: `todo`, `in-progress`,
   `paused`, `waiting-input`, `waiting`, `done`, `failed` (the concept's
   "Blocked" maps to `failed`). Each status has one color, defined once as a
@@ -255,6 +302,15 @@ backend API (Q15); `waiting-input`/`blocked` deferred (Q16); `serve` subcommand
 convention first (Q19); search + notifications present but disconnected
 (Q20/Q22); no Playwright (Q21).
 
+**Resolved from Copilot review (GC1–GC5a):** plan recovered from `FleetWorkflow`
+start input behind a plan-store port (GC1); `/schedules` = schedule identity +
+latest-action status, no progress (GC2); exact fleet aggregation precedence +
+progress (GC3); `serve` binds **loopback by default**, non-loopback is opt-in
+(GC4); `/runs` = one satellite per continue-as-new chain, no time window,
+terminal satellites persist until explicitly dismissed (GC5); **dismissals are
+persisted in Postgres** via a backend write endpoint, with Postgres added to
+`docker-compose.yml` (GC5a).
+
 Remaining genuinely open:
 
 - **Custom UI layer scope** — the local `ui/` primitives (Button, Tag/Badge,
@@ -265,8 +321,9 @@ Remaining genuinely open:
 
 ## 6. Seams this work must not cross
 
-- May **add** Go source (the read adapter + its port/tests) but must not change
-  the behaviour of the existing worker, CLI commands, or workflows.
+- May **add** Go source (the read adapter, the dismissal write endpoint, their
+  ports/adapters/tests) and add **Postgres** to `docker-compose.yml`, but must
+  not change the behaviour of the existing worker, CLI commands, or workflows.
 - Must not couple the Go build/test to Node tooling or vice versa (the read
   adapter is pure Go; the SPA bundle is independently hostable static assets —
   Q18 — not a Node dependency of the Go binary).

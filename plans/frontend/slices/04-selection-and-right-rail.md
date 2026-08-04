@@ -5,10 +5,10 @@
 
 **Demo:** the right rail from the concept appears with three sections — **State
 Legend** (all seven statuses named with their color), **Selected** (details of
-the highlighted item: icon, label, status, fleet, progress bar, estimate, owner,
-and a "View Details" affordance), and **Up Next** (the queued items with their
-statuses). Clicking or keyboard-selecting an orbiting item updates the Selected
-panel; a sensible default selection is shown on load.
+the highlighted item: icon, label, status, fleet, progress bar, and a "View
+Details" affordance — **no `estimate`/`owner`**, Q6/Q10), and **Up Next** (the
+queued items with their statuses). Clicking or keyboard-selecting a satellite
+updates the Selected panel; a sensible default selection is shown on load.
 
 ## Tasks
 
@@ -17,8 +17,8 @@ panel; a sensible default selection is shown on load.
 - [ ] Render the State Legend from the single status-token source (IB §3) so it
       cannot drift from the orbit dots.
 - [ ] Make orbiting items selectable with an accessible affordance
-      (focusable, name exposed, activ-on-Enter/click); lift selection state to
-      the Overview page (IB §4).
+      (focusable, name exposed, activated on Enter/click); lift selection state
+      to the Overview page (IB §4).
 - [ ] Selected panel reads the selected `WorkItem` and renders label, status,
       fleet, progress (as a bar), and a "View Details" button (**no owner** —
       Q10). For a `fleet` item it navigates to the fleet view route (Slice 8);
