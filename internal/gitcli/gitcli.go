@@ -261,6 +261,19 @@ func (g Git) AbortMerge(ctx context.Context, dir string) error {
 	return err
 }
 
+// HasConflicts reports whether dir has unmerged paths: files left in a
+// conflicted state by an in-progress merge. It lets a caller tell a merge that
+// stopped on conflict (recoverable by agent resolution, or by AbortMerge) apart
+// from other git failures, and lets it verify that a resolution attempt left no
+// conflict markers before treating the merge as done.
+func (g Git) HasConflicts(ctx context.Context, dir string) (bool, error) {
+	out, err := run(ctx, dir, "ls-files", "--unmerged")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
 // parseRevList splits `git rev-list` output into SHAs, dropping blank lines.
 func parseRevList(out string) []string {
 	var shas []string

@@ -283,7 +283,16 @@ func TestMergeBranch_ConflictErrorsAndAbortRestores(t *testing.T) {
 
 	require.Error(t, g.MergeBranch(ctx, dir, "dep"), "a conflicting merge must error")
 
+	// The merge stopped on conflict: unmerged paths are present, which lets a
+	// caller tell this apart from other git failures.
+	conflicted, err := g.HasConflicts(ctx, dir)
+	require.NoError(t, err)
+	require.True(t, conflicted, "a conflicting merge must leave unmerged paths")
+
 	require.NoError(t, g.AbortMerge(ctx, dir))
+	conflicted, err = g.HasConflicts(ctx, dir)
+	require.NoError(t, err)
+	require.False(t, conflicted, "abort must clear the unmerged paths")
 	dirty, err := g.HasChanges(ctx, dir)
 	require.NoError(t, err)
 	require.False(t, dirty, "abort must leave a clean working tree")
