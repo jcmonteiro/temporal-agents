@@ -406,15 +406,16 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	// agentRan gates summarizing the last run: a failure before the develop agent
 	// runs has no Pi session to resume.
 	//
-	// remoteOwned is set once development has landed and ownership passes to the
-	// supervised remote pipeline (developWithRemote). From that point a child
-	// failure is a pipeline failure, not a development failure: developWithRemote
-	// emits its own stage-specific failure notification, so this defer stands down
-	// to avoid a second, misleading "Development failed" heads-up.
+	// failureNotified is set once a more specific failure notification has been (or
+	// will be) emitted elsewhere, so this generic "Development failed" defer stands
+	// down to avoid a second, misleading heads-up. It guards all three such paths:
+	// a blocked seed conflict (its own "Node blocked" notification), the supervised
+	// remote pipeline (developWithRemote emits stage-specific failures), and the
+	// await-review path (the supervised review child emits its own failure).
 	var agentRan bool
-	var remoteOwned bool
+	var failureNotified bool
 	defer func() {
-		if remoteOwned {
+		if failureNotified {
 			return
 		}
 		notifyFailure(ctx, "Development failed", in.WorkDir, in.Summary, agentRan, err)
@@ -473,7 +474,7 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 			// develop-failure defer down (as the remote and await-review paths do).
 			var appErr *temporal.ApplicationError
 			if errors.As(err, &appErr) && appErr.Type() == SeedConflictBlockedErrType {
-				remoteOwned = true
+				failureNotified = true
 				wfnotify.NotifyBestEffort(ctx, notification.Notification{
 					Title: "Node blocked: unresolved seed conflict",
 					Body: fmt.Sprintf("Could not merge a dependency branch into %s and the conflict could not be resolved automatically. The branch was left clean (no conflict markers); a later sync may succeed once the conflicting branches move.",
@@ -516,7 +517,7 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	}
 
 	if in.WithRemote {
-		remoteOwned = true
+		failureNotified = true
 		return developWithRemote(ctx, in, commits, agentResult.Tokens, webhookBody)
 	}
 
@@ -524,7 +525,7 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 		// Development has landed; ownership passes to the supervised review child,
 		// which emits its own failure notification, so stand the develop-failure
 		// defer down (as the remote path does).
-		remoteOwned = true
+		failureNotified = true
 		return developAndAwaitReview(ctx, in, commits, agentResult.Tokens, webhookBody)
 	}
 
