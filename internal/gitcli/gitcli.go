@@ -80,17 +80,16 @@ func (g Git) AddWorktree(ctx context.Context, dir, worktreePath, branch, startPo
 // the sandbox with no configured path back to the source. Partial clones left
 // behind by a failure are removed so a failed call leaves nothing behind.
 func (g Git) AddDisposableClone(ctx context.Context, dir string) (string, error) {
-	// Reserve a unique path without leaving a directory behind: `git clone` wants
-	// to create the destination directory itself and refuses a pre-existing
-	// non-empty one. MkdirTemp is the simplest race-free way to reserve a name, so
-	// create it then immediately remove the empty directory and hand the bare path
-	// to git.
+	// Reserve a unique path race-free with MkdirTemp, which creates the directory
+	// with restrictive 0700 permissions. Clone into that existing empty directory
+	// rather than removing it first: `git clone` accepts an empty destination and
+	// only refuses a non-empty one, so keeping the directory preserves its 0700
+	// mode. Removing it and letting `git clone` recreate the destination would
+	// reintroduce it under the process umask (commonly 0755), briefly exposing the
+	// private repository copy to other local users.
 	path, err := os.MkdirTemp("", "fleet-plan-*")
 	if err != nil {
 		return "", fmt.Errorf("reserve sandbox path: %w", err)
-	}
-	if err := os.Remove(path); err != nil {
-		return "", fmt.Errorf("clear sandbox path: %w", err)
 	}
 	// Clone dir ("." resolves to it under `git -C dir`) into the absolute temp
 	// path. --no-hardlinks forces a full object-database copy so the sandbox is
