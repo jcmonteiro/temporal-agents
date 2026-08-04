@@ -158,6 +158,34 @@ func TestFleetWorkflow_SeedConflictBlocked_RecordsBlockedAndBlocksDependents(t *
 	require.Contains(t, out, "2 node(s): 0 succeeded, 0 failed, 1 blocked, 1 skipped.")
 }
 
+func TestFleetWorkflow_ReviewNotConverged_RecordsBlockedAndBlocksDependents(t *testing.T) {
+	env := newEnv(t)
+
+	// The foundation node develops but its local review loop stops at the pass cap
+	// without converging, so its child returns the review-not-converged error type.
+	// Development landed and the branch is clean, so it reads as blocked (not
+	// failed); either way the dependent must not start against un-addressed review
+	// feedback.
+	env.OnActivity(fa.ResolveBase, mock.Anything, mock.Anything).Return("base-sha", nil)
+	env.OnWorkflow(codereview.DevelopWorkflow, mock.Anything, mock.MatchedBy(func(in codereview.DevelopInput) bool {
+		return in.Prompt == "implement the core"
+	})).Return("", temporal.NewNonRetryableApplicationError(
+		"local review did not converge", codereview.ReviewNotConvergedErrType, nil))
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(FleetWorkflow, FleetInput{
+		Plan: linearPlan(), WorkDir: "/repo", WorktreesDir: "/wt",
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	var out string
+	require.NoError(t, env.GetWorkflowResult(&out))
+	require.Contains(t, out, "core: blocked")
+	require.Contains(t, out, "rest: skipped")
+	require.Contains(t, out, "2 node(s): 0 succeeded, 0 failed, 1 blocked, 1 skipped.")
+}
+
 func TestFleetWorkflow_DependencyFailure_SkipsDependents(t *testing.T) {
 	env := newEnv(t)
 

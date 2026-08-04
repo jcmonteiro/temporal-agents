@@ -608,9 +608,24 @@ func seedBranches(ctx workflow.Context, quick, resolveCtx workflow.Context, work
 func developAndAwaitReview(ctx workflow.Context, in DevelopInput, commits []string, tokens int, webhookBody string) (result string, err error) {
 	reviewID := "review-" + workflow.GetInfo(ctx).WorkflowExecution.ID
 	reviewCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: reviewID})
+	var outcome ReviewOutcome
 	if err := workflow.ExecuteChildWorkflow(reviewCtx, ReviewWorkflow,
-		ReviewInput{WorkDir: in.WorkDir, TokensSoFar: tokens, Summary: in.Summary}).Get(ctx, nil); err != nil {
+		ReviewInput{WorkDir: in.WorkDir, TokensSoFar: tokens, Summary: in.Summary}).Get(ctx, &outcome); err != nil {
 		return "", fmt.Errorf("review workflow: %w", err)
+	}
+	// The review loop can end two ways: it converged (the review agent found
+	// nothing left to change) or it stopped at MaxReviewPasses with feedback still
+	// outstanding. Only convergence is a clean prerequisite for a dependent node, so
+	// gate on it explicitly: a pass-capped node must not read as succeeded and let
+	// its dependents start against un-addressed review feedback. The review child
+	// already emitted its own "stopped after N pass(es)" completion notification, so
+	// surface the non-converged outcome as a non-retryable, node-blocking error
+	// rather than a second heads-up; the fleet records it as blocked (branch left
+	// clean, development landed) rather than a hard failure.
+	if !outcome.Converged {
+		return "", temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("local review did not converge for branch %s: %s", in.Branch, outcome.Summary),
+			ReviewNotConvergedErrType, nil)
 	}
 	// Report only the develop step's own token usage: the awaited ReviewWorkflow
 	// child is a separate, billable session whose tokens are discarded via
@@ -760,7 +775,7 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 //
 // The loop is also bounded: it stops after MaxReviewPasses passes even when the
 // implement pass keeps making commits, so it cannot run forever.
-func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err error) {
+func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome, err error) {
 	// Notify best-effort when the review loop fails. Continue-as-new is a control
 	// signal (looping passes), not a failure, so NotifyFailureBestEffort excludes
 	// it. agentRan gates summarizing the last run: a failure before any agent step
@@ -800,13 +815,13 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 	var cp Checkpoint
 	if strings.TrimSpace(in.Payload) != "" {
 		if err := workflow.ExecuteActivity(quick, a.MarkHeadAndStash, PilotInput{WorkDir: in.WorkDir}).Get(quick, &cp); err != nil {
-			return "", err
+			return ReviewOutcome{}, err
 		}
 
 		var implResult AgentResult
 		implReq := RunImplementRequest{WorkDir: in.WorkDir, Payload: in.Payload}
 		if err := workflow.ExecuteActivity(agentCtx, a.RunImplementAgent, implReq).Get(agentCtx, &implResult); err != nil {
-			return "", err
+			return ReviewOutcome{}, err
 		}
 		// The implement agent has run: a Pi session now exists for this run that a
 		// later SummarizeLastRun step could resume.
@@ -825,18 +840,18 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 				// No carried summary here: this terminal pass ran the implement agent, so
 				// agentRan is true and summarizeForWebhook summarizes this run directly.
 				if err := notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary}, ""); err != nil {
-					return "", err
+					return ReviewOutcome{}, err
 				}
-				return summary, nil
+				return ReviewOutcome{Summary: summary, Converged: true}, nil
 			}
-			return "", err
+			return ReviewOutcome{}, err
 		}
 	}
 
 	// Review the current branch. This blocks until the review completes.
 	var reviewResult AgentResult
 	if err := workflow.ExecuteActivity(agentCtx, a.RunReviewAgent, ReviewInput{WorkDir: in.WorkDir}).Get(agentCtx, &reviewResult); err != nil {
-		return "", err
+		return ReviewOutcome{}, err
 	}
 	// The review agent has run: a Pi session now exists for this run that a later
 	// SummarizeLastRun step could resume.
@@ -862,10 +877,10 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 		// No carried summary here: this terminal pass ran the review agent, so
 		// agentRan is true and summarizeForWebhook summarizes this run directly.
 		if err := notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary}, ""); err != nil {
-			return "", err
+			return ReviewOutcome{}, err
 		}
-		return summary, nil
+		return ReviewOutcome{Summary: summary, Converged: false}, nil
 	}
-	return "", workflow.NewContinueAsNewError(ctx, ReviewWorkflow,
+	return ReviewOutcome{}, workflow.NewContinueAsNewError(ctx, ReviewWorkflow,
 		ReviewInput{WorkDir: in.WorkDir, Payload: reviewOutput, Pass: nextPass, TokensSoFar: total, Summary: in.Summary})
 }

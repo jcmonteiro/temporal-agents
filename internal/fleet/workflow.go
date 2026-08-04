@@ -180,13 +180,18 @@ func FleetWorkflow(ctx workflow.Context, in FleetInput) (result string, err erro
 		for _, p := range started {
 			var childOut string
 			if cerr := p.fut.Get(ctx, &childOut); cerr != nil {
-				// A seed conflict the child could not resolve is recoverable: record it
-				// as blocked (branch left clean) rather than failed, so it reads as a
-				// distinct outcome. Its dependents are still gated (see
-				// blockingDependency, which treats any non-succeeded status as blocking).
+				// Some child failures are recoverable and leave the branch clean, so
+				// record them as blocked (a distinct outcome) rather than failed: a seed
+				// conflict the child could not resolve, and a local review loop that
+				// stopped at the pass cap without converging (development landed, but
+				// feedback is still outstanding). Its dependents are still gated either
+				// way (see blockingDependency, which treats any non-succeeded status as
+				// blocking).
 				status := StatusFailed
 				var appErr *temporal.ApplicationError
-				if errors.As(cerr, &appErr) && appErr.Type() == codereview.SeedConflictBlockedErrType {
+				if errors.As(cerr, &appErr) &&
+					(appErr.Type() == codereview.SeedConflictBlockedErrType ||
+						appErr.Type() == codereview.ReviewNotConvergedErrType) {
 					status = StatusBlocked
 				}
 				results[p.id] = NodeResult{ID: p.id, Status: status, Detail: cerr.Error()}

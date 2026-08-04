@@ -61,9 +61,12 @@ func TestReviewWorkflow_AtPassCap_StopsInsteadOfLooping(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	var out string
+	var out ReviewOutcome
 	require.NoError(t, env.GetWorkflowResult(&out))
-	require.Contains(t, out, "stopped after")
+	require.Contains(t, out.Summary, "stopped after")
+	// Stopping at the pass cap is not convergence: the outcome must say so
+	// explicitly so a fleet-gating parent does not read it as a clean success.
+	require.False(t, out.Converged)
 }
 
 func TestReviewWorkflow_Result_ReportsAccumulatedTokenUsageAcrossSessions(t *testing.T) {
@@ -83,9 +86,9 @@ func TestReviewWorkflow_Result_ReportsAccumulatedTokenUsageAcrossSessions(t *tes
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	var out string
+	var out ReviewOutcome
 	require.NoError(t, env.GetWorkflowResult(&out))
-	require.Contains(t, out, "Total token usage across all sessions: 1,350 tokens.")
+	require.Contains(t, out.Summary, "Total token usage across all sessions: 1,350 tokens.")
 }
 
 func TestReviewWorkflow_WithPayload_ImplementsCheckingHeadThenReviewsAndLoops(t *testing.T) {
@@ -120,9 +123,12 @@ func TestReviewWorkflow_WithPayload_NoNewCommits_SucceedsAndStops(t *testing.T) 
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	var out string
+	var out ReviewOutcome
 	require.NoError(t, env.GetWorkflowResult(&out))
-	require.Contains(t, out, "nothing to commit")
+	require.Contains(t, out.Summary, "nothing to commit")
+	// The implement pass found nothing to change: the outcome is an explicit
+	// convergence so a fleet-gating parent can start dependents.
+	require.True(t, out.Converged)
 	// Converged: it must not review again or loop.
 	env.AssertNotCalled(t, activityName(a.RunReviewAgent), mock.Anything, mock.Anything)
 }

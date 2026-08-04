@@ -247,6 +247,20 @@ type ReviewInput struct {
 	Summary bool
 }
 
+// ReviewOutcome is the result of ReviewWorkflow. Summary is the human-readable
+// summary line (carrying the token-total the fleet parses). Converged is an
+// explicit signal of *why* the loop ended: true only when the review agent
+// found nothing left to change, false when the loop stopped at MaxReviewPasses
+// with feedback still outstanding. The fleet gates a node's dependents on
+// Converged so a pass-capped node does not read as a clean success.
+type ReviewOutcome struct {
+	// Summary is the terminal pass's human-readable summary line.
+	Summary string
+	// Converged reports whether the loop ended by converging (true) rather than
+	// by reaching the pass cap with outstanding feedback (false).
+	Converged bool
+}
+
 // ReviewPrompt is the instruction handed to the Pi agent to review the current
 // branch. It is deliberately terse; the agent decides how to review.
 const ReviewPrompt = "Perform a thorough code review of the current branch"

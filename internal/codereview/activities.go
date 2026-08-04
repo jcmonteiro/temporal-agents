@@ -204,6 +204,15 @@ const errInvalidBranch = "InvalidBranch"
 // later re-sync tick may succeed once the conflicting branches move.
 const SeedConflictBlockedErrType = "SeedConflictBlocked"
 
+// ReviewNotConvergedErrType is the ApplicationError type returned
+// (non-retryable) by developAndAwaitReview when the awaited local review loop
+// ends because it hit MaxReviewPasses with feedback still outstanding rather
+// than because the branch converged. Development has already landed and the
+// branch is left clean, so the fleet matches this type to record the node as
+// blocked rather than failed; either way its dependents are gated so they do
+// not start against un-addressed review feedback.
+const ReviewNotConvergedErrType = "ReviewNotConverged"
+
 // CreateBranch creates the branch to develop on and returns the branch name,
 // the working directory the rest of the flow should use, and the HEAD SHA the
 // branch starts from (so a later step can confirm the agent advanced it).
