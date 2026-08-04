@@ -29,7 +29,9 @@ develop`). The Overview is an orbit; the fleet view is one fleet's node DAG
 - IB §1 (Go coexistence): slice 1.
 - IB §2 (stack + structure mirror, auth + @lego dropped, themeable dark): slice 1, extended per-layer by 2–6.
 - IB §3 (data seam): slice 2 (boundary + fixtures), slice 7 (Go read adapter + live client).
-- IB §4a (orbit): slices 3, 4, 5. IB §4b (fleet-view graph + backend-gap honesty): slice 8.
+- IB §4.0 (shared canvas primitive, Q8=A): built in slice 3+5, reused/refined in slice 8.
+- IB §4a (orbit): slices 3, 4, 5. IB §4b (fleet node DAG, no cross-fleet — Q6=A): slice 8.
 - Q5 (satellite kinds, aggregation, fleet-view navigation): slices 2, 4, 7, 8.
+- Q7 (PR #18 assumed merged): slice 7 only; slices 1–6 + 8 are independent of it.
 - IB §5 (open decisions — rendering, pkg manager): recorded in slices 1 and 3.
 - IB §6 (seams not to cross): honored by every slice; asserted in slice 1's CI and slice 7 (additive Go only).

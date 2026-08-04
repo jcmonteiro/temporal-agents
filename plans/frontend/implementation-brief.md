@@ -162,6 +162,17 @@ source of intent.
 
 Two custom views, no reference precedent.
 
+### 4.0 Shared canvas primitive (Q8 = A, hard constraint)
+
+Both views share **one reusable canvas/viewport primitive** rather than two
+implementations. It owns the cross-cutting behaviour — pan/zoom view transform,
+node selection, starfield background, and the zoom/recenter controls — and is
+parameterized by (a) a **layout function** (`orbit` for Overview, `dag` for the
+fleet view) and (b) a **node renderer**. View-specific code supplies only the
+layout, the node/edge rendering, and the right-rail wiring. The layout functions
+stay pure and deterministic (§4a/§4b). The legend, status-dot, and status token
+are likewise shared, not duplicated per view.
+
 ### 4a. Overview — orbit
 
 Constraints:

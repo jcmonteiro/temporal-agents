@@ -3,6 +3,10 @@
 **Discharges:** brief outcome (overview reflects **real** agent work), IB §3
 (data seam, Go read adapter in scope), IB §6 (additive Go only).
 
+**Assumes (Q7):** PR #18 (`internal/fleet/`) is merged to the base branch, so
+`FleetPlan`/`FleetNode`/`NodeStatus` and `fleet-plan.json` are available to
+reference and reuse directly. Slices 1–6 + 8 do not depend on this.
+
 **Demo:** with the Temporal dev server and worker running, the Overview shows
 **real** workflow executions orbiting the center with their live statuses —
 kicked-off runs appear, completed ones show `done`, failed ones show `failed`.

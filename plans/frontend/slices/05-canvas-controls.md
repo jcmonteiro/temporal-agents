@@ -12,9 +12,10 @@ success signal).
 ## Tasks
 
 - [ ] Add a `canvas-controls` component (local `ui/` icon buttons) fixed at the
-      bottom-left of the Overview canvas.
-- [ ] Implement zoom as a **view transform** over the orbit (scale/translate),
-      not a change to the underlying layout/data (IB §4).
+      bottom-left, as part of the **shared canvas primitive** (Q8=A) so the
+      fleet view (Slice 8) reuses it.
+- [ ] Implement zoom/pan as the canvas primitive's **view transform**
+      (scale/translate), not a change to the underlying layout/data (IB §4).
 - [ ] Bound zoom to a sensible min/max; display the current percentage.
 - [ ] Implement recenter to reset zoom to 100% and pan to origin.
 - [ ] Ensure selection (slice 4) and status legibility (slice 3) survive zoom.

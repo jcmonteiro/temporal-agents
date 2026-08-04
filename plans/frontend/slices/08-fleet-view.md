@@ -1,7 +1,8 @@
 # Slice 8 — Fleet view (fleet node DAG)
 
-**Discharges:** brief outcome (dedicated fleet view), IB §4b (fleet's node DAG,
-no cross-fleet, honest fields — Q6=A), IB §5 (graph-rendering decision).
+**Discharges:** brief outcome (dedicated fleet view), IB §4.0 (shared canvas
+primitive — Q8=A, second consumer), IB §4b (fleet's node DAG, no cross-fleet,
+honest fields — Q6=A), IB §5 (graph-rendering decision).
 
 **Demo:** the left-nav **Fleets** destination (and "View Details" on a fleet
 satellite in Slice 4) opens a page titled "Fleets / Explore and manage your
@@ -20,10 +21,12 @@ Slice 7. **No cross-fleet "Connected Fleets" concept.**
 - [ ] Add route `fleets` (and `fleets/:id`) in `router.tsx`; lazy
       `src/pages/fleets/page.tsx`. Wire the left-nav Fleets link and Slice 4's
       "View Details" to it.
-- [ ] Add `src/components/graph/` (or under the page): a deterministic node-link
-      layout (pure function `(nodes, edges) → positions`) over the fleet's
-      `FleetNode`/`DependsOn` DAG, testable under jsdom; force-directed physics
-      is optional polish.
+- [ ] Reuse the **shared canvas primitive** (Slices 3+5, Q8=A) with a new `dag`
+      layout: a deterministic pure function `(nodes, edges) → positions` over the
+      fleet's `FleetNode`/`DependsOn` DAG, testable under jsdom; force-directed
+      physics is optional polish. Pan/zoom/select/starfield/controls come from
+      the primitive, not re-implemented. If the second consumer reveals gaps in
+      the primitive's interface, refactor it here (IB §4.0).
 - [ ] Render nodes (monogram + label + status dot from the shared status token),
       `DependsOn` edges, and a selected-node ring; clicking a node updates the
       right rail with that node's status + its child workflow execution.
