@@ -1,6 +1,7 @@
 package codereview
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -53,11 +54,11 @@ func TestDevelopWorkflow_AwaitReview_SeedsFromDependencyBranchesAndAwaitsReview(
 
 	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
 		Return(CreateBranchResult{Branch: "feat/b", WorkDir: "/wt/b", BaseSHA: "base"}, nil)
-	// The dependency branches are merged into the fresh branch before development;
-	// SeedBranches reports the post-seed HEAD.
-	env.OnActivity(a.SeedBranches, mock.Anything, mock.MatchedBy(func(req SeedBranchesRequest) bool {
-		return req.WorkDir == "/wt/b" && len(req.Branches) == 1 && req.Branches[0] == "feat/a"
-	})).Return("seeded-head", nil)
+	// Each dependency branch is merged into the fresh branch before development;
+	// a clean merge reports the post-seed HEAD.
+	env.OnActivity(a.MergeDependency, mock.Anything, mock.MatchedBy(func(req MergeDependencyRequest) bool {
+		return req.WorkDir == "/wt/b" && req.Branch == "feat/a"
+	})).Return(MergeDependencyResult{Head: "seeded-head"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	// EnsureDeveloped validates against the post-seed HEAD, so the check confirms
 	// the develop agent (not the seeding merges) advanced the branch.
@@ -77,6 +78,65 @@ func TestDevelopWorkflow_AwaitReview_SeedsFromDependencyBranchesAndAwaitsReview(
 	require.NoError(t, env.GetWorkflowResult(&out))
 	// Phase 1 waits for the review loop to converge (not merely start it).
 	require.Contains(t, out, "local review converged")
+	env.AssertExpectations(t)
+}
+
+func TestDevelopWorkflow_SeedConflict_Resolved_ProceedsToDevelop(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
+		Return(CreateBranchResult{Branch: "feat/b", WorkDir: "/wt/b", BaseSHA: "base"}, nil)
+	// The dependency merge conflicts; the agent resolves it and the seed reports
+	// the resolved HEAD, which becomes the develop base.
+	env.OnActivity(a.MergeDependency, mock.Anything, mock.Anything).
+		Return(MergeDependencyResult{Conflicted: true}, nil)
+	env.OnActivity(a.ResolveMergeConflict, mock.Anything, mock.Anything).
+		Return(ResolveMergeConflictResult{Head: "resolved-head", Tokens: 100}, nil)
+	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
+	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.MatchedBy(func(req EnsureDevelopedRequest) bool {
+		return req.BaseSHA == "resolved-head"
+	})).Return([]string{"sha1"}, nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{
+		WorkDir: "/repo", Branch: "feat/b", WorktreesDir: "/wt", Prompt: "expose via REST",
+		MergeBranches: []string{"feat/a"}, AwaitReview: true,
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	env.AssertExpectations(t)
+}
+
+func TestDevelopWorkflow_SeedConflict_Unresolved_AbortsAndBlocks(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
+		Return(CreateBranchResult{Branch: "feat/b", WorkDir: "/wt/b", BaseSHA: "base"}, nil)
+	env.OnActivity(a.MergeDependency, mock.Anything, mock.Anything).
+		Return(MergeDependencyResult{Conflicted: true}, nil)
+	// The agent cannot resolve the conflict (its bounded attempts fail).
+	env.OnActivity(a.ResolveMergeConflict, mock.Anything, mock.Anything).
+		Return(ResolveMergeConflictResult{}, errors.New("still conflicted"))
+	// The workflow aborts the in-progress merge so the branch is left clean.
+	var aborted bool
+	env.OnActivity(a.AbortMerge, mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) { aborted = true }).Return(nil)
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{
+		WorkDir: "/repo", Branch: "feat/b", WorktreesDir: "/wt", Prompt: "expose via REST",
+		MergeBranches: []string{"feat/a"}, AwaitReview: true,
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	require.Error(t, err)
+	// The failure carries the blocked type so the fleet records the node as
+	// blocked (recoverable) rather than failed, and the develop agent never ran.
+	var appErr *temporal.ApplicationError
+	require.True(t, errors.As(err, &appErr))
+	require.Equal(t, SeedConflictBlockedErrType, appErr.Type())
+	require.True(t, aborted, "the in-progress merge must be aborted to leave a clean branch")
 	env.AssertExpectations(t)
 }
 

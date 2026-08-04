@@ -45,8 +45,17 @@ type Git interface {
 	// MergeBranch merges branch into the branch currently checked out in dir
 	// (creating a merge commit or fast-forwarding). It seeds a dependent's branch
 	// with the committed work of the branches it depends on. A conflict returns an
-	// error and leaves the merge in progress for the caller to abort.
+	// error and leaves the merge in progress for the caller to resolve or abort.
 	MergeBranch(ctx context.Context, dir, branch string) error
+	// AbortMerge aborts an in-progress merge in dir, restoring the pre-merge state
+	// so a branch that could not be seeded cleanly is left clean rather than
+	// half-merged with conflict markers.
+	AbortMerge(ctx context.Context, dir string) error
+	// HasConflicts reports whether dir has unmerged paths from an in-progress
+	// merge. It lets a caller tell a merge that stopped on conflict (recoverable
+	// by agent resolution or AbortMerge) apart from other git failures, and verify
+	// a resolution attempt left no conflict markers.
+	HasConflicts(ctx context.Context, dir string) (bool, error)
 }
 
 // PullRequests is the port for the GitHub operations the workflow needs.

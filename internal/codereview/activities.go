@@ -132,12 +132,43 @@ type EnsureDevelopedRequest struct {
 	BaseSHA string
 }
 
-// SeedBranchesRequest is the input to SeedBranches.
-type SeedBranchesRequest struct {
+// MergeDependencyRequest is the input to MergeDependency.
+type MergeDependencyRequest struct {
 	WorkDir string
-	// Branches are merged, in order, into the branch currently checked out in
-	// WorkDir. They are the branches of the node's dependencies.
-	Branches []string
+	// Branch is the dependency branch to merge into the branch checked out in
+	// WorkDir.
+	Branch string
+}
+
+// MergeDependencyResult is the outcome of MergeDependency.
+type MergeDependencyResult struct {
+	// Conflicted is true when the merge stopped on a conflict (the merge is left
+	// in progress for the caller to resolve or abort). When false the merge
+	// completed and Head holds the resulting commit.
+	Conflicted bool
+	// Head is the commit HEAD points at after a clean merge; empty when Conflicted.
+	Head string
+}
+
+// ResolveMergeConflictRequest is the input to ResolveMergeConflict.
+type ResolveMergeConflictRequest struct {
+	WorkDir string
+	// Branch is the dependency branch whose in-progress merge is being resolved,
+	// named in the agent prompt for context.
+	Branch string
+}
+
+// ResolveMergeConflictResult is the outcome of a successful ResolveMergeConflict.
+type ResolveMergeConflictResult struct {
+	// Head is the commit HEAD points at after the resolved merge was committed.
+	Head string
+	// Tokens is the token usage of the resolution agent run.
+	Tokens int
+}
+
+// AbortMergeRequest is the input to AbortMerge.
+type AbortMergeRequest struct {
+	WorkDir string
 }
 
 // RunImplementRequest is the input to RunImplementAgent.
@@ -164,6 +195,14 @@ const errBranchExists = "BranchExists"
 // branch name fails ValidateBranchName, i.e. it is unsafe to use verbatim as a
 // filesystem path or a git argument. Retrying cannot fix a malformed name.
 const errInvalidBranch = "InvalidBranch"
+
+// SeedConflictBlockedErrType is the ApplicationError type returned
+// (non-retryable) by DevelopWorkflow when a dependency branch cannot be merged
+// while seeding a node and the agent cannot resolve the conflict within its
+// bounded attempts. The merge is aborted first so the branch is left clean; the
+// fleet matches this type to record the node as blocked rather than failed — a
+// later re-sync tick may succeed once the conflicting branches move.
+const SeedConflictBlockedErrType = "SeedConflictBlocked"
 
 // CreateBranch creates the branch to develop on and returns the branch name,
 // the working directory the rest of the flow should use, and the HEAD SHA the
@@ -412,24 +451,72 @@ func (a *Activities) EnsureDeveloped(ctx context.Context, req EnsureDevelopedReq
 	return commits, nil
 }
 
-// SeedBranches merges each branch in req.Branches, in order, into the branch
-// currently checked out in req.WorkDir and returns the resulting HEAD. It seeds
-// a dependent node's freshly-created branch with the committed work of the
-// branches it depends on, so the develop agent starts from its dependencies'
-// code rather than the bare base. The returned HEAD is the post-seed commit; the
-// caller uses it as the base for EnsureDeveloped so that check verifies the
-// develop agent (not these seeding merges) advanced the branch.
-func (a *Activities) SeedBranches(ctx context.Context, req SeedBranchesRequest) (string, error) {
-	for _, b := range req.Branches {
-		if err := a.Git.MergeBranch(ctx, req.WorkDir, b); err != nil {
-			return "", fmt.Errorf("merge dependency branch %q: %w", b, err)
+// MergeDependency merges one dependency branch into the branch checked out in
+// req.WorkDir while seeding a dependent node. On a clean merge (or fast-forward)
+// it reports the resulting HEAD with Conflicted=false. When the merge stops on a
+// conflict it reports Conflicted=true — leaving the merge in progress for the
+// caller to resolve or abort — rather than erroring, so the orchestrator can
+// tell a resolvable conflict apart from a genuine git failure (which is still
+// returned as an error).
+func (a *Activities) MergeDependency(ctx context.Context, req MergeDependencyRequest) (MergeDependencyResult, error) {
+	if err := a.Git.MergeBranch(ctx, req.WorkDir, req.Branch); err != nil {
+		conflicted, cErr := a.Git.HasConflicts(ctx, req.WorkDir)
+		if cErr != nil {
+			return MergeDependencyResult{}, fmt.Errorf("merge dependency %q: %w (checking for conflicts: %v)", req.Branch, err, cErr)
 		}
+		if conflicted {
+			return MergeDependencyResult{Conflicted: true}, nil
+		}
+		return MergeDependencyResult{}, fmt.Errorf("merge dependency %q: %w", req.Branch, err)
 	}
 	head, err := a.Git.Head(ctx, req.WorkDir)
 	if err != nil {
-		return "", fmt.Errorf("read head after seeding: %w", err)
+		return MergeDependencyResult{}, fmt.Errorf("read head after merging %q: %w", req.Branch, err)
 	}
-	return head, nil
+	return MergeDependencyResult{Head: head}, nil
+}
+
+// ResolveMergeConflict runs the agent to resolve the conflicts left by an
+// in-progress merge of req.Branch in req.WorkDir and complete the merge commit.
+// Afterwards it verifies no unmerged paths and no uncommitted changes remain;
+// if either does it returns a (retryable) error so the activity's bounded retry
+// policy re-runs the agent, and the orchestrator aborts the merge once the
+// attempts are exhausted. On success it reports the post-resolution HEAD and the
+// resolution agent's token usage.
+func (a *Activities) ResolveMergeConflict(ctx context.Context, req ResolveMergeConflictRequest) (ResolveMergeConflictResult, error) {
+	_, tokens, err := a.Agent.Run(ctx, BuildMergeConflictPrompt(req.Branch), req.WorkDir)
+	if err != nil {
+		return ResolveMergeConflictResult{}, fmt.Errorf("run conflict-resolution agent: %w", err)
+	}
+	conflicted, err := a.Git.HasConflicts(ctx, req.WorkDir)
+	if err != nil {
+		return ResolveMergeConflictResult{}, fmt.Errorf("check for conflicts after resolution: %w", err)
+	}
+	if conflicted {
+		return ResolveMergeConflictResult{}, fmt.Errorf("merge of %q still has unresolved conflicts", req.Branch)
+	}
+	dirty, err := a.Git.HasChanges(ctx, req.WorkDir)
+	if err != nil {
+		return ResolveMergeConflictResult{}, fmt.Errorf("check for uncommitted changes after resolution: %w", err)
+	}
+	if dirty {
+		return ResolveMergeConflictResult{}, fmt.Errorf("merge of %q resolved but not committed", req.Branch)
+	}
+	head, err := a.Git.Head(ctx, req.WorkDir)
+	if err != nil {
+		return ResolveMergeConflictResult{}, fmt.Errorf("read head after resolution: %w", err)
+	}
+	return ResolveMergeConflictResult{Head: head, Tokens: tokens}, nil
+}
+
+// AbortMerge aborts the in-progress merge in req.WorkDir, restoring the branch
+// to its pre-merge state so a node that could not be seeded cleanly is left
+// clean (no conflict markers) rather than half-merged.
+func (a *Activities) AbortMerge(ctx context.Context, req AbortMergeRequest) error {
+	if err := a.Git.AbortMerge(ctx, req.WorkDir); err != nil {
+		return fmt.Errorf("abort merge: %w", err)
+	}
+	return nil
 }
 
 // OpenPR publishes the current branch and ensures an open PR exists for it,

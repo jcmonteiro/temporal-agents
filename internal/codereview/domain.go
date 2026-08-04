@@ -487,6 +487,14 @@ func BuildDevelopPrompt(prompt string) string {
 ` + strings.TrimSpace(prompt)
 }
 
+// BuildMergeConflictPrompt renders the instruction that has the Pi agent resolve
+// the conflicts of an in-progress merge of branch and finish the merge. It asks
+// the agent to commit the completed merge (so the caller can confirm no
+// conflict markers or uncommitted changes remain) and not to push.
+func BuildMergeConflictPrompt(branch string) string {
+	return `A git merge of the branch "` + branch + `" into the current branch has stopped with conflicts. Resolve every conflict by reconciling both sides' intent (do not discard either side's changes), keep lint/typecheck/build (and synth, if infra) passing, then stage the resolved files and commit to complete the merge. Do not push and do not abort the merge.`
+}
+
 // BuildImplementPrompt renders the instruction that has the Pi agent act on a
 // code review's raw output. It asks the agent to commit its work so the
 // workflow's HEAD-advanced check can confirm the change landed, and to make no

@@ -463,13 +463,27 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	// from its dependencies' code. The post-seed HEAD becomes the base for
 	// EnsureDeveloped, so that check verifies the develop agent — not these seeding
 	// merges — advanced the branch.
+	var seedTokens int
 	if len(in.MergeBranches) > 0 {
-		var seededHead string
-		if err := workflow.ExecuteActivity(quick, a.SeedBranches,
-			SeedBranchesRequest{WorkDir: in.WorkDir, Branches: in.MergeBranches}).Get(quick, &seededHead); err != nil {
+		seededHead, tokens, err := seedBranches(ctx, quick, agentCtx, in.WorkDir, in.MergeBranches)
+		if err != nil {
+			// A seed conflict the agent could not resolve leaves the node blocked, not
+			// failed: the branch was aborted clean and a later re-sync may succeed. A
+			// dedicated notification is emitted here, so stand the generic
+			// develop-failure defer down (as the remote and await-review paths do).
+			var appErr *temporal.ApplicationError
+			if errors.As(err, &appErr) && appErr.Type() == SeedConflictBlockedErrType {
+				remoteOwned = true
+				wfnotify.NotifyBestEffort(ctx, notification.Notification{
+					Title: "Node blocked: unresolved seed conflict",
+					Body: fmt.Sprintf("Could not merge a dependency branch into %s and the conflict could not be resolved automatically. The branch was left clean (no conflict markers); a later sync may succeed once the conflicting branches move.",
+						in.Branch),
+				})
+			}
 			return "", err
 		}
 		base = seededHead
+		seedTokens = tokens
 	}
 
 	var agentResult AgentResult
@@ -477,6 +491,9 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 		RunDevelopRequest{WorkDir: in.WorkDir, Prompt: in.Prompt}).Get(agentCtx, &agentResult); err != nil {
 		return "", err
 	}
+	// Fold any conflict-resolution token usage from seeding into the develop
+	// total, so the tree's reported usage covers the whole develop step.
+	agentResult.Tokens += seedTokens
 	// The develop agent has run: a Pi session now exists for this run that a
 	// later SummarizeLastRun step could resume.
 	agentRan = true
@@ -542,6 +559,42 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 		WebhookBody: webhookBody,
 	})
 	return summary, nil
+}
+
+// seedBranches merges each dependency branch, in order, into the node's
+// freshly-created branch and returns the post-seed HEAD (the base the develop
+// agent must advance past) and the tokens spent resolving conflicts. A clean
+// merge advances the head directly; a conflicting merge is resolved with a
+// bounded number of agent attempts (resolveCtx's retry policy). When a conflict
+// cannot be resolved within those attempts the in-progress merge is aborted —
+// leaving the branch clean, no conflict markers — and a non-retryable
+// SeedConflictBlockedErrType is returned so the fleet records the node as blocked
+// rather than failed.
+func seedBranches(ctx workflow.Context, quick, resolveCtx workflow.Context, workDir string, branches []string) (head string, tokens int, err error) {
+	var a *Activities
+	for _, b := range branches {
+		var mr MergeDependencyResult
+		if err := workflow.ExecuteActivity(quick, a.MergeDependency,
+			MergeDependencyRequest{WorkDir: workDir, Branch: b}).Get(quick, &mr); err != nil {
+			return "", tokens, err
+		}
+		if !mr.Conflicted {
+			head = mr.Head
+			continue
+		}
+		var rr ResolveMergeConflictResult
+		if rErr := workflow.ExecuteActivity(resolveCtx, a.ResolveMergeConflict,
+			ResolveMergeConflictRequest{WorkDir: workDir, Branch: b}).Get(resolveCtx, &rr); rErr != nil {
+			// Best-effort abort so the branch is left clean rather than half-merged.
+			_ = workflow.ExecuteActivity(quick, a.AbortMerge, AbortMergeRequest{WorkDir: workDir}).Get(quick, nil)
+			return "", tokens, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("cannot resolve conflict merging dependency branch %q", b),
+				SeedConflictBlockedErrType, rErr)
+		}
+		head = rr.Head
+		tokens += rr.Tokens
+	}
+	return head, tokens, nil
 }
 
 // developAndAwaitReview runs the Phase 1 tail the fleet uses: after development

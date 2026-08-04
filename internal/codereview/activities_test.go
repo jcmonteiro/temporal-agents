@@ -35,8 +35,15 @@ type fakeGit struct {
 	addWorktreeAt string
 	branchCreated bool
 
+	// Seeding controls: MergeBranch records branches and returns mergeErr;
+	// hasConflicts/dirty drive the conflict and clean-tree probes; AbortMerge sets
+	// aborted and returns abortErr.
 	mergeErr       error
 	mergedBranches []string
+	hasConflicts   bool
+	dirty          bool
+	aborted        bool
+	abortErr       error
 }
 
 func (f *fakeGit) CurrentBranch(_ context.Context, dir string) (string, error) {
@@ -60,7 +67,7 @@ func (f *fakeGit) CreateBranch(context.Context, string, string, string) error {
 }
 
 // The remaining Git methods are unused by CreateBranch's paths under test.
-func (f *fakeGit) HasChanges(context.Context, string) (bool, error) { return false, nil }
+func (f *fakeGit) HasChanges(context.Context, string) (bool, error) { return f.dirty, nil }
 func (f *fakeGit) Stash(context.Context, string) error              { return nil }
 func (f *fakeGit) StashPop(context.Context, string) error           { return nil }
 func (f *fakeGit) CommitsSince(context.Context, string, string) ([]string, error) {
@@ -70,6 +77,25 @@ func (f *fakeGit) Push(context.Context, string, string) error { return nil }
 func (f *fakeGit) MergeBranch(_ context.Context, _, branch string) error {
 	f.mergedBranches = append(f.mergedBranches, branch)
 	return f.mergeErr
+}
+func (f *fakeGit) HasConflicts(context.Context, string) (bool, error) { return f.hasConflicts, nil }
+func (f *fakeGit) AbortMerge(context.Context, string) error {
+	f.aborted = true
+	return f.abortErr
+}
+
+// fakeAgent is a hand-written Agent stub for the conflict-resolution activity
+// tests. It records the last prompt and returns canned output/tokens/err.
+type fakeAgent struct {
+	output     string
+	tokens     int
+	err        error
+	lastPrompt string
+}
+
+func (f *fakeAgent) Run(_ context.Context, prompt, _ string) (string, int, error) {
+	f.lastPrompt = prompt
+	return f.output, f.tokens, f.err
 }
 
 func TestCreateBranch_Worktree_CreatesWorktreeAndReportsItAsWorkDir(t *testing.T) {
@@ -199,37 +225,122 @@ func TestCreateBranch_InPlace_ExplicitBranchAlreadyExists_NonRetryable(t *testin
 	require.Equal(t, errBranchExists, appErr.Type())
 }
 
-func TestSeedBranches_MergesEachDependencyAndReportsPostSeedHead(t *testing.T) {
+func TestMergeDependency_CleanMerge_ReportsHead(t *testing.T) {
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestActivityEnvironment()
-	fg := &fakeGit{head: "seeded-head"}
+	fg := &fakeGit{head: "merged-head"}
 	act := &Activities{Git: fg}
 	env.RegisterActivity(act)
 
-	val, err := env.ExecuteActivity(act.SeedBranches, SeedBranchesRequest{
-		WorkDir: "/wt/node", Branches: []string{"dep-a", "dep-b"},
+	val, err := env.ExecuteActivity(act.MergeDependency, MergeDependencyRequest{
+		WorkDir: "/wt/node", Branch: "dep-a",
 	})
 	require.NoError(t, err)
 
-	var head string
-	require.NoError(t, val.Get(&head))
-	// Every dependency branch is merged in, in order, and the returned HEAD is the
-	// post-seed commit the caller validates development against.
-	require.Equal(t, []string{"dep-a", "dep-b"}, fg.mergedBranches)
-	require.Equal(t, "seeded-head", head)
+	var res MergeDependencyResult
+	require.NoError(t, val.Get(&res))
+	// A clean merge reports the resulting HEAD and no conflict.
+	require.False(t, res.Conflicted)
+	require.Equal(t, "merged-head", res.Head)
+	require.Equal(t, []string{"dep-a"}, fg.mergedBranches)
 }
 
-func TestSeedBranches_MergeFailureIsReported(t *testing.T) {
+func TestMergeDependency_Conflict_ReportsConflictedNotError(t *testing.T) {
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestActivityEnvironment()
-	// A conflicting (or otherwise failing) merge surfaces as an activity error so
-	// the orchestrator does not proceed to develop on a half-seeded branch.
-	fg := &fakeGit{mergeErr: errors.New("merge conflict")}
+	// The merge fails and leaves unmerged paths: the activity reports Conflicted
+	// rather than erroring, so the orchestrator can attempt resolution.
+	fg := &fakeGit{mergeErr: errors.New("merge conflict"), hasConflicts: true}
 	act := &Activities{Git: fg}
 	env.RegisterActivity(act)
 
-	_, err := env.ExecuteActivity(act.SeedBranches, SeedBranchesRequest{
-		WorkDir: "/wt/node", Branches: []string{"dep-a"},
+	val, err := env.ExecuteActivity(act.MergeDependency, MergeDependencyRequest{
+		WorkDir: "/wt/node", Branch: "dep-a",
+	})
+	require.NoError(t, err)
+
+	var res MergeDependencyResult
+	require.NoError(t, val.Get(&res))
+	require.True(t, res.Conflicted)
+}
+
+func TestMergeDependency_MergeFailsWithoutConflict_IsError(t *testing.T) {
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestActivityEnvironment()
+	// A merge failure with no unmerged paths is a genuine git failure, surfaced as
+	// an activity error rather than a resolvable conflict.
+	fg := &fakeGit{mergeErr: errors.New("fatal: not a git repository"), hasConflicts: false}
+	act := &Activities{Git: fg}
+	env.RegisterActivity(act)
+
+	_, err := env.ExecuteActivity(act.MergeDependency, MergeDependencyRequest{
+		WorkDir: "/wt/node", Branch: "dep-a",
 	})
 	require.Error(t, err)
+}
+
+func TestResolveMergeConflict_Resolved_ReportsHeadAndTokens(t *testing.T) {
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestActivityEnvironment()
+	// After the agent runs, no conflicts remain and the tree is clean (the merge
+	// was committed): the resolution succeeds and reports the new HEAD and usage.
+	fg := &fakeGit{head: "resolved-head", hasConflicts: false, dirty: false}
+	ag := &fakeAgent{tokens: 321}
+	act := &Activities{Git: fg, Agent: ag}
+	env.RegisterActivity(act)
+
+	val, err := env.ExecuteActivity(act.ResolveMergeConflict, ResolveMergeConflictRequest{
+		WorkDir: "/wt/node", Branch: "dep-a",
+	})
+	require.NoError(t, err)
+
+	var res ResolveMergeConflictResult
+	require.NoError(t, val.Get(&res))
+	require.Equal(t, "resolved-head", res.Head)
+	require.Equal(t, 321, res.Tokens)
+	require.Contains(t, ag.lastPrompt, "dep-a")
+}
+
+func TestResolveMergeConflict_StillConflicted_IsError(t *testing.T) {
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestActivityEnvironment()
+	// The agent ran but conflicts remain: the activity errors so its bounded retry
+	// policy re-runs the agent (and the orchestrator eventually aborts).
+	fg := &fakeGit{hasConflicts: true}
+	ag := &fakeAgent{}
+	act := &Activities{Git: fg, Agent: ag}
+	env.RegisterActivity(act)
+
+	_, err := env.ExecuteActivity(act.ResolveMergeConflict, ResolveMergeConflictRequest{
+		WorkDir: "/wt/node", Branch: "dep-a",
+	})
+	require.Error(t, err)
+}
+
+func TestResolveMergeConflict_ResolvedButNotCommitted_IsError(t *testing.T) {
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestActivityEnvironment()
+	// Conflicts are gone but the tree is dirty: the merge was not committed, so
+	// the activity errors rather than reporting a half-finished merge as done.
+	fg := &fakeGit{hasConflicts: false, dirty: true}
+	ag := &fakeAgent{}
+	act := &Activities{Git: fg, Agent: ag}
+	env.RegisterActivity(act)
+
+	_, err := env.ExecuteActivity(act.ResolveMergeConflict, ResolveMergeConflictRequest{
+		WorkDir: "/wt/node", Branch: "dep-a",
+	})
+	require.Error(t, err)
+}
+
+func TestAbortMerge_DelegatesToGit(t *testing.T) {
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestActivityEnvironment()
+	fg := &fakeGit{}
+	act := &Activities{Git: fg}
+	env.RegisterActivity(act)
+
+	_, err := env.ExecuteActivity(act.AbortMerge, AbortMergeRequest{WorkDir: "/wt/node"})
+	require.NoError(t, err)
+	require.True(t, fg.aborted, "the activity must abort the in-progress merge")
 }
