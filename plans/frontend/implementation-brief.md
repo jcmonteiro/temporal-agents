@@ -93,7 +93,20 @@ monorepo nesting. The following are therefore requirements, not suggestions:
 No HTTP API exists in this repo today — the Go side is a Temporal worker + CLI.
 The brief now requires a live read-only feed (Q2 = B), delivered by a Go read
 adapter (Slice 7). Development still proceeds fixtures-first behind the same
-boundary, so:
+boundary.
+
+**The plan/fleet concept is real (Q4):** PR #18 (`internal/fleet/`) adds
+`FleetPlanWorkflow` (goal → `FleetPlan` DAG, written to `fleet-plan.json`) and
+`FleetWorkflow` (executes the DAG in topological layers, one child
+`codereview.DevelopWorkflow` per node, child workflow IDs `<fleetID>-<nodeID>`).
+Domain: `FleetPlan{Goal, Nodes[]}`, `FleetNode{ID, Prompt, DependsOn[]}`,
+`NodeStatus{succeeded, failed, blocked, skipped}`. There are **no query
+handlers**, so the read adapter's sources are (a) the plan file(s) for the DAG
+and (b) Temporal executions (parent `FleetWorkflow` + child `<fleetID>-<nodeID>`
++ standalone `PromptWorkflow`/develop runs) for live status. The hand-authored
+manifest option is dropped — the plan file authored by `FleetPlanWorkflow` is the
+source of intent.
+
 
 - **Constraint:** UI components and pages must not read fixtures directly. Work
   data is reached through a **client boundary** under `src/clients/` (mirroring
@@ -113,25 +126,23 @@ boundary, so:
   behaviour, must be startable independently, and must serve the built frontend
   or run alongside the Vite dev proxy. The JSON contract mirrors `src/domain/`
   types so fixtures and live data are interchangeable.
-- **Mapping constraint (Q3 = A, honest subset):** the live adapter emits only
-  the statuses the backend can actually source. Native Temporal execution
-  status maps as: Running / ContinuedAsNew → `in-progress`; Completed → `done`;
-  Failed / TimedOut / Terminated / Canceled → `failed`. `waiting-input` and
-  `paused` have **no source today** and are **not** emitted by the live adapter
-  (they remain in the enum/legend/fixtures for completeness and future use). Do
-  not invent statuses the backend cannot produce, and do **not** instrument the
-  existing workflows to fabricate them (that is a separate future feature).
-- **Plan-derived `todo` / `waiting` (Q3 refinement):** a **fleet** carries a
-  **plan** — the ordered set of workflows it intends to run. The overview is the
-  reconciliation of a fleet's plan against live Temporal executions: a planned
-  workflow with no execution yet is `todo` if it is ready to start (its plan
-  predecessors are `done`) or `waiting` if it is still blocked by an unfinished
-  predecessor; planned workflows that have executions take their mapped live
-  status. "Up Next" is the set of `todo`/`waiting` planned workflows. The
-  **source of the plan/fleet definition is an open decision (Q4).**
-- Matching a planned workflow to its Temporal execution needs a stable key
-  (workflow ID convention or a plan-step identifier). The chosen key must be
-  named in Slice 7.
+- **Status mapping (Q3 = A honest subset, enriched by the real fleet domain):**
+  the adapter emits only statuses reconstructable from (plan DAG + executions),
+  never fabricated by instrumenting workflows. Per fleet node:
+  - no child execution, a dependency not yet succeeded → `waiting`
+  - no child execution, all dependencies succeeded (runnable) → `todo`
+  - no child execution, a dependency failed/skipped → `paused` (≈ `skipped`)
+  - child Running/ContinuedAsNew → `in-progress`
+  - child Completed (succeeded) → `done`
+  - child returned `SeedConflictBlocked` (recoverable, needs a human) →
+    `waiting-input` (≈ `blocked`); requires reading the child failure detail
+  - child Failed/TimedOut/Terminated → `failed`
+  Standalone `PromptWorkflow`/develop runs (no fleet) map by native status only
+  (`in-progress`/`done`/`failed`).
+- **"Up Next"** = the `todo`/`waiting` nodes. Match plan node ↔ execution by the
+  `<fleetID>-<nodeID>` workflow-ID convention (named here per IB).
+- Which reconstructions the first live slice implements vs defers (e.g.
+  `waiting-input` needs failure-detail inspection) is a Slice 7 scoping call.
 - **Domain types** (`src/domain/`) are the single source of truth for a work
   item, its status enum, groupings ("fleets"), progress, estimate, owner, and
   the "up next" queue. Fixtures and any future API both conform to these types.

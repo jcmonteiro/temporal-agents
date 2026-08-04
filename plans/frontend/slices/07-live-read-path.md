@@ -22,12 +22,14 @@ component changes.
       `in-progress`, Completed → `done`, Failed/TimedOut/Terminated/Canceled →
       `failed`. Do **not** emit `waiting-input`/`paused` (no source) and do
       **not** instrument the existing workflows (IB §3 mapping constraint).
-- [ ] Reconcile each fleet's **plan** (its known future workflows — source per
-      Q4) against live executions to derive `todo`/`waiting`: a planned step
-      with no execution is `todo` if its predecessors are `done`, else
-      `waiting`. Match planned step ↔ execution by the stable key named here
-      (workflow-ID convention or plan-step id). "Up Next" = the `todo`/`waiting`
-      planned steps (IB §3 plan-derived constraint).
+- [ ] Read the fleet **plan** DAG (`fleet-plan.json` written by
+      `FleetPlanWorkflow` — Q4) and reconcile against live child executions
+      matched by the `<fleetID>-<nodeID>` convention. Derive per-node status per
+      IB §3: no-exec+dep-pending → `waiting`; no-exec+deps-done → `todo`;
+      no-exec+dep-failed → `paused` (≈ skipped); Running → `in-progress`;
+      Completed → `done`; Failed → `failed`; `SeedConflictBlocked` →
+      `waiting-input` (≈ blocked, optional in first pass). "Up Next" =
+      `todo`/`waiting` nodes. Reuse `internal/fleet` domain types where possible.
 - [ ] Add an HTTP handler serving `GET /api/v1/overview` returning JSON that
       matches the frontend `src/domain/` types (items + up-next).
 - [ ] Expose it via a **new** entrypoint that does not alter existing commands:
