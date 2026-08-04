@@ -151,7 +151,8 @@ source of intent.
   carries a `kind` discriminator. A `fleet` item's single status is an
   **aggregation** of its node statuses (aggregation rule is a stated decision —
   see §5); a `workflow` item's status is its native execution status. Only
-  `fleet` items are navigable to the fleet view.
+  `fleet` items are navigable to the fleet view (which shows that fleet's node
+  DAG — §4b, Q6=A).
 - The status vocabulary is fixed by the concept: `todo`, `in-progress`,
   `paused`, `waiting-input`, `waiting`, `done`, `failed` (the concept's
   "Blocked" maps to `failed`). Each status has one color, defined once as a
@@ -187,26 +188,27 @@ Constraints:
   For a `fleet` item, "View Details" navigates to the **fleet view** route; for
   a `workflow` item it is inert (no dedicated view in scope).
 
-### 4b. Fleet view — relationship graph
+### 4b. Fleet view — the fleet's node DAG (Q6 = A)
 
 A dedicated route (the left-nav "Fleets" destination) rendering a **node-link
-graph** of a fleet and its relationships (per the fleet-view concept image),
-with a right rail: Selected Fleet (progress, estimate, owner, description),
-Connected Fleets, Related Workflows. Constraints:
+graph of one fleet's own node DAG**: nodes are the fleet's `FleetNode`s
+(features), edges are their `DependsOn` dependencies. **No cross-fleet concept**
+— "Connected Fleets" from the concept image is dropped, because PR #18 models no
+relationship between fleets. Constraints:
 
 - Nodes render with a short monogram + label + status dot (shared status token);
-  edges show relationships; selection drives the right rail.
+  edges are `DependsOn`; selection drives the right rail.
 - Same chrome as Overview (top bar, nav, legend, zoom/recenter controls).
 - Layout is deterministic enough to test node/edge presence and selection under
   jsdom. Force-directed physics is optional polish, not required for the demo.
-- **Backend-gap constraint (Q3=A philosophy):** the graph's fleet-to-fleet
-  "Connected Fleets" edges and per-fleet Progress/Estimate/Owner/Description
-  have **no source in PR #18** (which models only nodes *within* one fleet). The
-  live view must degrade honestly: render what exists (a fleet's own node DAG +
-  node statuses; progress derivable as done-node ratio) and omit or mark as
-  unavailable what the backend cannot yet provide. Fixtures may show the full
-  concept. Cross-fleet relationships are a documented future backend feature,
-  not to be fabricated.
+- **Right rail (honest fields only):** the fleet's goal/name, its status
+  (aggregated §3), and **derived progress** (done nodes / total). A selected
+  node shows its status and its child workflow execution. `owner`, `estimate`,
+  and free-text `description` have **no source in PR #18** and are **not** part
+  of the live model — they may appear in fixtures for design fidelity but are
+  omitted under live data (never fabricated).
+- Inter-fleet relationships and richer fleet metadata are a documented future
+  backend feature (own brief), not built here.
 
 ## 5. Known risks, unknowns, open decisions
 
@@ -215,10 +217,10 @@ Connected Fleets, Related Workflows. Constraints:
   `failed`; else any `waiting-input`/`blocked` → `waiting-input`; else any
   `in-progress` → `in-progress`; else any `waiting`/`todo` → `in-progress` if
   some node done else `todo`; all `done` → `done`. Decide and record in Slice 2.
-- **Graph rendering (fleet view)** — hand-rolled SVG vs a graph/force library.
-  Trade-off: a library eases layout but adds a dep and jsdom-test friction;
-  hand-rolled keeps the neutral-dependency stance (Q1). Decide in the fleet-view
-  slice.
+- **Graph rendering (fleet view)** — hand-rolled SVG vs a graph/force library
+  for the fleet's node DAG. Trade-off: a library eases layout but adds a dep and
+  jsdom-test friction; hand-rolled keeps the neutral-dependency stance (Q1).
+  Decide in the fleet-view slice.
 - **Orbit rendering approach** — SVG vs positioned DOM vs library. Trade-off:
   SVG gives precise geometry and easy dashed orbits; DOM gives easier CONNECT
   component embedding and accessibility. No mandate; pick and record the choice

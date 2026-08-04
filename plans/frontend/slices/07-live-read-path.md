@@ -36,10 +36,10 @@ component changes.
       develop` executions that are not fleet children), each tagged with its
       `kind`.
 - [ ] Add an HTTP handler serving `GET /api/v1/overview` (items + up-next) and
-      `GET /api/v1/fleets/:id` (fleet detail: nodes, edges, connected fleets,
-      related workflows) returning JSON matching `src/domain/` types. Where a
-      field has no backend source (cross-fleet edges, owner/estimate/
-      description), omit it or mark unavailable — do not fabricate (IB §4b).
+      `GET /api/v1/fleets/:id` (fleet detail: its `FleetNode` DAG — nodes +
+      `DependsOn` edges + per-node status + child workflow) returning JSON
+      matching `src/domain/` types. **No cross-fleet edges.** `owner`/`estimate`/
+      `description` are not in the live model — omit them (Q6=A, IB §4b).
 - [ ] Expose it via a **new** entrypoint that does not alter existing commands:
       a `serve`/`web` CLI subcommand (preferred) or a `--http` flag. Reads
       `TEMPORAL_ADDRESS` like the rest of the CLI.

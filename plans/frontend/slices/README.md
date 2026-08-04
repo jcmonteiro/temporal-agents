@@ -13,7 +13,7 @@ dependency. Every slice names the implementation-brief constraints it discharges
 | 5 | [Canvas controls](./05-canvas-controls.md) | Zoom %, zoom in/out, and recenter work on the orbit |
 | 6 | [Secondary destinations + top-bar affordances](./06-secondary-destinations.md) | Workflows/Templates/Insights/Settings placeholders; search + notifications present |
 | 7 | [Live read-path](./07-live-read-path.md) | Go read adapter serves real fleets + workflows; Orbit + fleet view show live data |
-| 8 | [Fleet view (relationship graph)](./08-fleet-view.md) | Fleets route renders a selectable fleet graph + right rail; reached via nav and "View Details" |
+| 8 | [Fleet view (node DAG)](./08-fleet-view.md) | Fleets route renders a selectable graph of one fleet's node DAG + right rail; reached via nav and "View Details" |
 
 Slices 1–6 and 8 are pure-frontend and fixtures-backed — each demoable offline.
 Slice 7 adds the Go read adapter and swaps the client to live data behind the
@@ -21,7 +21,8 @@ same boundary (feeding both Overview and the fleet view).
 
 Satellites (Q5) are top-level works: a **fleet** (aggregated status, navigable
 to the fleet view) or a **standalone workflow** (`run`/`schedule`/`code
-develop`). The Overview is an orbit; the fleet view is a relationship graph.
+develop`). The Overview is an orbit; the fleet view is one fleet's node DAG
+(no cross-fleet concept — Q6=A).
 
 ## Coverage of the implementation brief
 

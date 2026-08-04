@@ -41,7 +41,8 @@ the shipped outcome is wired to live data.)
 Each orbiting item is a top-level piece of work — either an entire **fleet** or a
 **standalone workflow** (a run started via `run`, `schedule`, or `code
 develop`). Selecting one shows its details; from a fleet's details the operator
-can open a dedicated **fleet view** that shows that fleet and its relationships.
+can open a dedicated **fleet view** that shows that fleet's work and how its
+pieces depend on one another.
 
 The **Overview** (orbit) and the **Fleet view** are the first-class
 deliverables. The remaining destinations (Workflows, Templates, Insights,
