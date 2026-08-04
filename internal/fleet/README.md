@@ -15,9 +15,11 @@ Both are driven from `workflow.go`; the pure domain logic (plan validation,
 `domain.go`; the driven adapters (Pi agent, Git) are wired through
 `activities.go` / `ports.go`.
 
-> Dependencies gate execution **ordering**, not code layering. Every node
-> develops on its own branch/worktree cut from a single pinned base, so a
-> dependent node does **not** inherit its prerequisites' commits.
+> Dependencies gate both **ordering** and **what a node builds on**. Every node
+> develops on its own run-scoped branch/worktree cut from a single pinned base,
+> and a dependent's branch is **seeded by merging in its dependencies' branches**
+> — so it is developed and reviewed on top of the committed, reviewed work of
+> the slices it depends on.
 
 ---
 
@@ -84,7 +86,7 @@ flowchart TD
         direction TB
         nodeCheck{"blockingDependency?<br/>(a dep failed/skipped)"}
         nodeCheck -->|yes| skip["record StatusSkipped<br/>(names blocking dep)"]
-        nodeCheck -->|no| spawn["ExecuteChildWorkflow<br/>codereview.DevelopWorkflow<br/>WorkflowID = fleetID-nodeID<br/>StartPoint = base"]
+        nodeCheck -->|no| spawn["ExecuteChildWorkflow codereview.DevelopWorkflow<br/>WorkflowID = fleetID-nodeID<br/>Branch = NodeBranch(fleetID, id)<br/>StartPoint = base<br/>MergeBranches = DependencyBranches(...)<br/>AwaitReview = true"]
     end
 
     layer --> layerBody
@@ -118,10 +120,14 @@ flowchart TD
 - **Skips propagate ordering, not code.** A node whose dependency failed or was
   skipped is marked `StatusSkipped` (running it would be pointless), while
   independent branches keep running.
-- **Pinned base.** `ResolveBase` captures repo HEAD once at the start; every
-  child worktree branches from that same commit via `StartPoint`, so a later
-  layer branches from the same base as the first even if the checkout moves —
-  and never inherits a prerequisite's commits.
+- **Pinned base + dependency seeding.** `ResolveBase` captures repo HEAD once at
+  the start; every child branch is cut from that same commit via `StartPoint`
+  (stable even if the checkout moves), then seeded by merging in the branches of
+  the node's dependencies (`DependencyBranches` → `DevelopInput.MergeBranches`),
+  so a dependent is developed on top of its prerequisites' committed work.
+- **Awaited review (Phase 1).** Each node runs with `AwaitReview = true`: the
+  child returns only after its local review loop has converged, so a dependent
+  starts once its prerequisites have been both developed **and** reviewed.
 - **Cancellation.** After the layer loop, `ctx.Err()` is surfaced so a canceled
   run terminates as *canceled* rather than building a summary and completing.
 
@@ -130,20 +136,28 @@ flowchart TD
 ## Child: `codereview.DevelopWorkflow` (per node)
 
 Each fleet node reuses the existing develop pipeline rather than reimplementing
-it. Behaviour forks on `WithRemote` (propagated from `FleetInput`).
+it. After creating the branch it optionally seeds it from `MergeBranches`, then
+forks on mode: the fleet drives every node with **`AwaitReview`** (Phase 1);
+the `default` and `WithRemote` modes are the standalone `code develop` paths.
 
 ```mermaid
 flowchart TD
-    start([DevelopInput: WorkDir, WorktreesDir, StartPoint=base, Prompt, Summary, WithRemote]) --> branch["CreateBranch<br/>(fresh worktree under WorktreesDir,<br/>cut from StartPoint; RetryPolicy: 5)"]
-    branch --> devAgent["RunDevelopAgent(prompt)<br/>long-running, heartbeats; RetryPolicy: 2"]
-    devAgent --> ensure["EnsureDeveloped<br/>(HEAD advanced + clean tree)"]
+    start([DevelopInput: WorkDir, WorktreesDir, Branch, StartPoint=base,<br/>MergeBranches, Prompt, Summary, AwaitReview / WithRemote]) --> branch["CreateBranch<br/>(fresh worktree under WorktreesDir,<br/>cut from StartPoint; RetryPolicy: 5)"]
+    branch --> seed{"MergeBranches?"}
+    seed -->|yes| seedAct["SeedBranches<br/>(merge each dependency branch;<br/>base := post-seed HEAD)"]
+    seed -->|no| devAgent
+    seedAct --> devAgent["RunDevelopAgent(prompt)<br/>long-running, heartbeats; RetryPolicy: 2"]
+    devAgent --> ensure["EnsureDeveloped<br/>(HEAD advanced past base + clean tree)"]
     ensure --> devSummary["summarizeForWebhook (against quiescent tree)"]
-    devSummary --> mode{"WithRemote?"}
+    devSummary --> mode{"mode"}
 
-    mode -->|false| reviewAbandon["ExecuteChildWorkflow ReviewWorkflow<br/>(ABANDON parent-close policy)"]
+    mode -->|"AwaitReview<br/>(fleet Phase 1)"| reviewAwait["ReviewWorkflow (awaited, no PR)"]
+    reviewAwait --> retPhase1([return: developed branch, review converged])
+
+    mode -->|default| reviewAbandon["ExecuteChildWorkflow ReviewWorkflow<br/>(ABANDON parent-close policy)"]
     reviewAbandon --> retLocal([return: developed branch, started review])
 
-    mode -->|true| review["ReviewWorkflow (awaited)"]
+    mode -->|WithRemote| review["ReviewWorkflow (awaited)"]
     review --> openpr["OpenPRWorkflow<br/>(open PR + request Copilot review)"]
     openpr --> pilot["PilotWorkflow (Chain: true, awaited)<br/>loops until no unresolved comments"]
     pilot --> retRemote([return: branch, PR URL, pilot complete])
@@ -151,14 +165,17 @@ flowchart TD
 
 **Notes**
 
-- In the **default** mode the child returns once the develop step landed its
-  commits and the review loop was *started* (abandoned child), so the fleet
-  releases dependents after the develop step — not after review converges.
-- With **`WithRemote`** the child supervises the full pipeline (review → open PR
-  → Copilot pilot) as awaited children and returns only once the pilot loop has
-  converged; the fleet then waits for that whole pipeline before a dependent
-  starts.
-- The PR URL is threaded into the child's summary string; `SummarizeFleet`
-  scans that summary (`extractPRURL`) to surface each node's PR link, and
-  `ParseTokenTotal` extracts the develop-step token usage aggregated across
-  nodes.
+- **Seeding.** When `MergeBranches` is set (a dependent node), `SeedBranches`
+  merges each dependency branch into the fresh branch before the agent runs and
+  reports the post-seed HEAD, which becomes `EnsureDeveloped`'s base — so that
+  check verifies the *develop agent* (not the seeding merges) advanced the
+  branch.
+- **`AwaitReview` (fleet Phase 1).** The child runs the local review loop as a
+  supervised, awaited child and returns once it converges, without opening a PR
+  or running the pilot. This is what lets the fleet gate a dependent on its
+  prerequisites being both developed and reviewed.
+- The **`default`** (abandoned review) and **`WithRemote`** (review → open PR →
+  Copilot pilot) modes are the standalone `code develop` behaviours; the fleet
+  does not use them for Phase 1. `ParseTokenTotal` extracts the develop-step
+  token usage aggregated across nodes, and `SummarizeFleet` scans a child's
+  summary (`extractPRURL`) for a PR link when the remote phase surfaces one.
