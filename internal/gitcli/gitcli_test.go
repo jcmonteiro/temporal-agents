@@ -380,6 +380,41 @@ func TestAddDisposableClone_DetachesOrigin(t *testing.T) {
 	require.Empty(t, strings.TrimSpace(remotes), "the sandbox must have no remote back to the source")
 }
 
+// TestIsAncestor pins the ancestry probe: it reports true for a commit reachable
+// from HEAD and false for an unrelated branch tip, without erroring on the
+// negative case (git exits 1, not a genuine failure).
+func TestIsAncestor(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := initRepo(t)
+	g := New()
+	ctx := context.Background()
+	git := gitRunner(t, dir)
+	git("config", "user.name", "t")
+	git("config", "user.email", "t@t")
+
+	base, err := g.Head(ctx, dir)
+	require.NoError(t, err)
+
+	// A branch that diverges from base: its tip is not reachable from main's HEAD.
+	git("checkout", "-b", "side")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "side.txt"), []byte("side\n"), 0o644))
+	git("add", "side.txt")
+	git("commit", "-m", "side work")
+	git("checkout", "main")
+
+	// The base commit is an ancestor of main's HEAD.
+	ancestor, err := g.IsAncestor(ctx, dir, base, "HEAD")
+	require.NoError(t, err)
+	require.True(t, ancestor, "base must be an ancestor of HEAD")
+
+	// The diverged branch tip is not reachable from main's HEAD.
+	ancestor, err = g.IsAncestor(ctx, dir, "side", "HEAD")
+	require.NoError(t, err)
+	require.False(t, ancestor, "an unmerged branch tip must not be an ancestor of HEAD")
+}
+
 func TestClassifyExists(t *testing.T) {
 	tests := []struct {
 		name         string

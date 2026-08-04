@@ -5,6 +5,7 @@ package gitcli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -308,6 +309,29 @@ func (g Git) HasConflicts(ctx context.Context, dir string) (bool, error) {
 		return false, err
 	}
 	return strings.TrimSpace(out) != "", nil
+}
+
+// IsAncestor reports whether commit ancestor is an ancestor of descendant in
+// dir. It runs `git merge-base --is-ancestor`, which exits 0 when the relation
+// holds and 1 when it does not; a non-zero exit other than 1 is a genuine git
+// failure (e.g. an unknown revision) and is returned as an error. It lets a
+// caller prove a dependency was actually merged rather than aborted: after a
+// resolution the dependency tip must be reachable from HEAD.
+func (g Git) IsAncestor(ctx context.Context, dir, ancestor, descendant string) (bool, error) {
+	full := []string{"-C", dir, "merge-base", "--is-ancestor", ancestor, descendant}
+	cmd := exec.CommandContext(ctx, "git", full...)
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %w: %s", ancestor, descendant, err, strings.TrimSpace(stderr.String()))
 }
 
 // parseRevList splits `git rev-list` output into SHAs, dropping blank lines.

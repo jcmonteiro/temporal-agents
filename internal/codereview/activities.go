@@ -478,11 +478,19 @@ func (a *Activities) MergeDependency(ctx context.Context, req MergeDependencyReq
 
 // ResolveMergeConflict runs the agent to resolve the conflicts left by an
 // in-progress merge of req.Branch in req.WorkDir and complete the merge commit.
-// Afterwards it verifies no unmerged paths and no uncommitted changes remain;
-// if either does it returns a (retryable) error so the activity's bounded retry
-// policy re-runs the agent, and the orchestrator aborts the merge once the
-// attempts are exhausted. On success it reports the post-resolution HEAD and the
+// Afterwards it verifies no unmerged paths and no uncommitted changes remain,
+// and that the dependency branch is actually reachable from HEAD; if any check
+// fails it returns a (retryable) error so the activity's bounded retry policy
+// re-runs the agent, and the orchestrator aborts the merge once the attempts
+// are exhausted. On success it reports the post-resolution HEAD and the
 // resolution agent's token usage.
+//
+// The ancestry check is what makes a genuine resolution provable: a clean tree
+// with no conflicts is also the state left by `git merge --abort`, which puts
+// HEAD back on its pre-merge commit and drops the dependency's work entirely.
+// Verifying the dependency tip is an ancestor of HEAD rejects that aborted
+// state, so a dependent can never proceed on a HEAD that lacks req.Branch's
+// commits.
 //
 // This deliberately shares the run's single Pi session (keyed by RunID, like
 // RunDevelopAgent): for a seeded node the subsequent develop step inherits the
@@ -506,6 +514,17 @@ func (a *Activities) ResolveMergeConflict(ctx context.Context, req ResolveMergeC
 	}
 	if dirty {
 		return ResolveMergeConflictResult{}, fmt.Errorf("merge of %q resolved but not committed", req.Branch)
+	}
+	// Prove the dependency actually landed: a clean, conflict-free tree is also
+	// what `git merge --abort` leaves behind, with HEAD back on its pre-merge
+	// commit and the dependency's work gone. Requiring the dependency tip to be an
+	// ancestor of HEAD rejects that aborted state.
+	merged, err := a.Git.IsAncestor(ctx, req.WorkDir, req.Branch, "HEAD")
+	if err != nil {
+		return ResolveMergeConflictResult{}, fmt.Errorf("verify %q merged into HEAD: %w", req.Branch, err)
+	}
+	if !merged {
+		return ResolveMergeConflictResult{}, fmt.Errorf("merge of %q was not applied to HEAD", req.Branch)
 	}
 	head, err := a.Git.Head(ctx, req.WorkDir)
 	if err != nil {

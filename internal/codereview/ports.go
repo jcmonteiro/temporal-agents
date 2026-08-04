@@ -56,6 +56,12 @@ type Git interface {
 	// by agent resolution or AbortMerge) apart from other git failures, and verify
 	// a resolution attempt left no conflict markers.
 	HasConflicts(ctx context.Context, dir string) (bool, error)
+	// IsAncestor reports whether commit ancestor is an ancestor of (i.e. reachable
+	// from) commit descendant in dir. It lets a caller prove a dependency branch
+	// was actually merged: after a resolution the dependency tip must be an
+	// ancestor of HEAD, which distinguishes a genuine merge commit from an aborted
+	// merge that left HEAD on its pre-merge commit.
+	IsAncestor(ctx context.Context, dir, ancestor, descendant string) (bool, error)
 }
 
 // PullRequests is the port for the GitHub operations the workflow needs.

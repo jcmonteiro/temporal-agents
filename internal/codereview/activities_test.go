@@ -44,6 +44,10 @@ type fakeGit struct {
 	dirty          bool
 	aborted        bool
 	abortErr       error
+	// depNotMerged makes IsAncestor report that the dependency tip is not
+	// reachable from HEAD, standing in for an aborted merge that dropped the
+	// dependency's work. The zero value means the dependency did land.
+	depNotMerged bool
 }
 
 func (f *fakeGit) CurrentBranch(_ context.Context, dir string) (string, error) {
@@ -79,6 +83,9 @@ func (f *fakeGit) MergeBranch(_ context.Context, _, branch string) error {
 	return f.mergeErr
 }
 func (f *fakeGit) HasConflicts(context.Context, string) (bool, error) { return f.hasConflicts, nil }
+func (f *fakeGit) IsAncestor(context.Context, string, string, string) (bool, error) {
+	return !f.depNotMerged, nil
+}
 func (f *fakeGit) AbortMerge(context.Context, string) error {
 	f.aborted = true
 	return f.abortErr
@@ -323,6 +330,24 @@ func TestResolveMergeConflict_ResolvedButNotCommitted_IsError(t *testing.T) {
 	// Conflicts are gone but the tree is dirty: the merge was not committed, so
 	// the activity errors rather than reporting a half-finished merge as done.
 	fg := &fakeGit{hasConflicts: false, dirty: true}
+	ag := &fakeAgent{}
+	act := &Activities{Git: fg, Agent: ag}
+	env.RegisterActivity(act)
+
+	_, err := env.ExecuteActivity(act.ResolveMergeConflict, ResolveMergeConflictRequest{
+		WorkDir: "/wt/node", Branch: "dep-a",
+	})
+	require.Error(t, err)
+}
+
+func TestResolveMergeConflict_MergeAbortedLeavesCleanTree_IsError(t *testing.T) {
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestActivityEnvironment()
+	// The agent ran `git merge --abort`: no conflicts and a clean tree, but HEAD
+	// is back on its pre-merge commit so the dependency's work is absent. The
+	// activity must reject this rather than report success on a HEAD that lacks
+	// the dependency's commits.
+	fg := &fakeGit{hasConflicts: false, dirty: false, depNotMerged: true}
 	ag := &fakeAgent{}
 	act := &Activities{Git: fg, Agent: ag}
 	env.RegisterActivity(act)
