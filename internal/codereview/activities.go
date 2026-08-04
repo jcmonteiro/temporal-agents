@@ -483,6 +483,11 @@ func (a *Activities) MergeDependency(ctx context.Context, req MergeDependencyReq
 // policy re-runs the agent, and the orchestrator aborts the merge once the
 // attempts are exhausted. On success it reports the post-resolution HEAD and the
 // resolution agent's token usage.
+//
+// This deliberately shares the run's single Pi session (keyed by RunID, like
+// RunDevelopAgent): for a seeded node the subsequent develop step inherits the
+// conflict-resolution conversation, giving the develop agent context on how the
+// dependency branches were merged.
 func (a *Activities) ResolveMergeConflict(ctx context.Context, req ResolveMergeConflictRequest) (ResolveMergeConflictResult, error) {
 	_, tokens, err := a.Agent.Run(ctx, BuildMergeConflictPrompt(req.Branch), req.WorkDir)
 	if err != nil {
