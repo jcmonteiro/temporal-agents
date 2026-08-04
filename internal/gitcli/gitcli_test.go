@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -356,6 +357,27 @@ func TestMergeBranch_ConflictErrorsAndAbortRestores(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(dir, "file.txt"))
 	require.NoError(t, err)
 	require.Equal(t, "node\n", string(got), "abort must restore the node branch's content")
+}
+
+// TestAddDisposableClone_DetachesOrigin pins the source-repo detachment: the
+// sandbox must carry no `origin` remote pointing back at the source, so a
+// `git push origin ...` from the read-only sandbox has no configured path to
+// create refs or objects in the source repository.
+func TestAddDisposableClone_DetachesOrigin(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := initRepo(t)
+	g := New()
+	ctx := context.Background()
+
+	sandbox, err := g.AddDisposableClone(ctx, dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = g.RemoveDisposableClone(ctx, sandbox) })
+
+	remotes, err := run(ctx, sandbox, "remote")
+	require.NoError(t, err)
+	require.Empty(t, strings.TrimSpace(remotes), "the sandbox must have no remote back to the source")
 }
 
 func TestClassifyExists(t *testing.T) {

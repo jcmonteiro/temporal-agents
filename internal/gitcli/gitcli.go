@@ -69,6 +69,15 @@ func (g Git) AddWorktree(ctx context.Context, dir, worktreePath, branch, startPo
 // writes escape the read-only boundary even though the working tree is separate.
 // --no-hardlinks copies the object database rather than hardlinking it, so the
 // sandbox shares no storage with the source at all.
+//
+// The clone is also detached from its writable source before it is returned:
+// `git clone` records an `origin` remote pointing back at dir, and because
+// read-only mode intentionally leaves `bash` enabled a `git push origin
+// refs/...` from the sandbox could still create refs or objects in the source
+// repository — an escape the fingerprint tripwire cannot catch, as it only
+// covers the sandbox's HEAD, index, and worktree. Removing the remote leaves
+// the sandbox with no configured path back to the source. Partial clones left
+// behind by a failure are removed so a failed call leaves nothing behind.
 func (g Git) AddDisposableClone(ctx context.Context, dir string) (string, error) {
 	// Reserve a unique path without leaving a directory behind: `git clone` wants
 	// to create the destination directory itself and refuses a pre-existing
@@ -86,6 +95,16 @@ func (g Git) AddDisposableClone(ctx context.Context, dir string) (string, error)
 	// path. --no-hardlinks forces a full object-database copy so the sandbox is
 	// storage-independent from the source repo.
 	if _, err := run(ctx, dir, "clone", "--no-hardlinks", ".", path); err != nil {
+		// git may have created a partial destination before failing; discard it so a
+		// failed call leaves nothing behind.
+		_ = os.RemoveAll(path)
+		return "", err
+	}
+	// Detach the clone from its writable source by dropping the `origin` remote
+	// git recorded, so no `git push origin ...` from the sandbox can reach the
+	// source repo's refs or objects.
+	if _, err := run(ctx, path, "remote", "remove", "origin"); err != nil {
+		_ = os.RemoveAll(path)
 		return "", err
 	}
 	return path, nil
