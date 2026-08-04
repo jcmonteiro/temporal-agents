@@ -42,8 +42,8 @@ func fleetCmd(args []string) {
 			fleetExecuteHelp(os.Stdout)
 			return
 		}
-		planFile, summary, withRemote := parseFleetExecuteFlags(args[1:])
-		runFleetExecute(planFile, summary, withRemote)
+		planFile, summary := parseFleetExecuteFlags(args[1:])
+		runFleetExecute(planFile, summary)
 	default:
 		fatalf("unknown fleet subcommand %q (try: plan, execute)", args[0])
 	}
@@ -88,9 +88,9 @@ func parseFleetPlanFlags(args []string) (prompt, out string) {
 }
 
 // parseFleetExecuteFlags reads the optional --plan <file> (or --plan=<file>)
-// plan source (defaulting to fleet-plan.json) plus the --summary and
-// --with-remote toggles propagated to every node's develop workflow.
-func parseFleetExecuteFlags(args []string) (planFile string, summary, withRemote bool) {
+// plan source (defaulting to fleet-plan.json) plus the --summary toggle
+// propagated to every node's develop workflow.
+func parseFleetExecuteFlags(args []string) (planFile string, summary bool) {
 	planFile = defaultPlanFile
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -98,7 +98,10 @@ func parseFleetExecuteFlags(args []string) (planFile string, summary, withRemote
 		case a == "--summary":
 			summary = true
 		case a == "--with-remote":
-			withRemote = true
+			// The remote pipeline (PR open / Copilot pilot / tracking) is not yet
+			// wired into FleetWorkflow (Phase 2). Reject the flag explicitly rather
+			// than accept it and silently run local-review-only behavior.
+			fatalf("--with-remote is not yet implemented (the remote pipeline lands in a later phase)")
 		case a == "--plan":
 			if i+1 >= len(args) {
 				fatalf("--plan requires a file path")
@@ -114,7 +117,7 @@ func parseFleetExecuteFlags(args []string) (planFile string, summary, withRemote
 			fatalf("unexpected argument %q", a)
 		}
 	}
-	return planFile, summary, withRemote
+	return planFile, summary
 }
 
 // runFleetPlan starts the planning workflow, waits for the generated dependency
@@ -165,7 +168,7 @@ func runFleetPlan(prompt, out string) {
 
 // runFleetExecute reads the approved plan file and starts the fleet workflow,
 // returning immediately (like `run`) with a watch hint.
-func runFleetExecute(planFile string, summary, withRemote bool) {
+func runFleetExecute(planFile string, summary bool) {
 	data, err := os.ReadFile(planFile)
 	if err != nil {
 		fatalf("Could not read plan %s: %v", planFile, err)
@@ -203,7 +206,6 @@ func runFleetExecute(planFile string, summary, withRemote bool) {
 		WorkDir:      cwd(),
 		WorktreesDir: wtDir,
 		Summary:      summary,
-		WithRemote:   withRemote,
 	})
 	if err != nil {
 		fatalf("Could not start fleet: %v", err)
@@ -216,9 +218,6 @@ func runFleetExecute(planFile string, summary, withRemote bool) {
 	fmt.Printf("  workdir: %s (each node develops in its own worktree under %s)\n", cwd(), wtDir)
 	if summary {
 		fmt.Printf("  summary: on (propagated to each node)\n")
-	}
-	if withRemote {
-		fmt.Printf("  remote:  on (each node runs review + PR + Copilot pilot)\n")
 	}
 	fmt.Printf("  watch:   temporal-agents watch %s\n", we.GetID())
 }
@@ -235,7 +234,7 @@ depends on.
 
 USAGE
   temporal-agents fleet plan "<prompt>" [--out <file>]
-  temporal-agents fleet execute [--plan <file>] [--summary] [--with-remote]
+  temporal-agents fleet execute [--plan <file>] [--summary]
 
 SUBCOMMANDS
   plan     Have the agent decompose a prompt into a dependency graph and write
@@ -280,18 +279,15 @@ nodes settle, a single summary notification aggregates each node's status, PR
 link, and develop-step token usage.
 
 USAGE
-  temporal-agents fleet execute [--plan <file>] [--summary] [--with-remote]
+  temporal-agents fleet execute [--plan <file>] [--summary]
 
 FLAGS
   --plan <file>   Plan file to execute (default: fleet-plan.json)
   --summary       Propagate --summary to each node's develop workflow
-  --with-remote   Run each node's full remote pipeline (review, PR, Copilot
-                  pilot); the fleet waits for a node's whole pipeline before its
-                  dependents start
 
 EXAMPLES
   temporal-agents fleet execute
-  temporal-agents fleet execute --plan tenant-plan.json --with-remote
+  temporal-agents fleet execute --plan tenant-plan.json
   temporal-agents watch <workflow-id>
 `)
 }
