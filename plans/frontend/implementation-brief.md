@@ -91,7 +91,9 @@ monorepo nesting. The following are therefore requirements, not suggestions:
 ## 3. The data seam (constraints, design left open)
 
 No HTTP API exists in this repo today — the Go side is a Temporal worker + CLI.
-The brief allows a stand-in data source, so:
+The brief now requires a live read-only feed (Q2 = B), delivered by a Go read
+adapter (Slice 7). Development still proceeds fixtures-first behind the same
+boundary, so:
 
 - **Constraint:** UI components and pages must not read fixtures directly. Work
   data is reached through a **client boundary** under `src/clients/` (mirroring
@@ -101,8 +103,21 @@ The brief allows a stand-in data source, so:
   changing callers.
 - **Constraint:** the proxy/fetch layer keeps the reference's
   `/{service}/{path}` shape and the Vite dev proxy (`/api/v1` → backend target)
-  so a later Go read-adapter can be introduced without reshaping the client.
-  (Providing that Go adapter is **out of scope** here.)
+  so the Go read adapter plugs in without reshaping the client.
+- **Constraint (Go read adapter, in scope — Slice 7):** a read-only HTTP
+  endpoint (e.g. `GET /api/v1/overview`) served by a **new, additive** Go
+  package (e.g. `internal/httpapi/` + a `serve`/`web` CLI subcommand or a flag
+  on the worker). Hexagonal: it depends on a **driven port** that abstracts the
+  Temporal query (list workflow executions → map to work items), with the
+  Temporal SDK client as the adapter. It must **not** change worker/CLI
+  behaviour, must be startable independently, and must serve the built frontend
+  or run alongside the Vite dev proxy. The JSON contract mirrors `src/domain/`
+  types so fixtures and live data are interchangeable.
+- **Mapping constraint:** Temporal execution status + a status
+  signal/memo/attribute maps to the seven-value `WorkStatus`. Where Temporal
+  has no direct equivalent (e.g. `waiting-input`, `paused`), the mapping source
+  (search attribute, memo, or workflow query) must be named in Slice 7; do not
+  invent statuses the backend cannot produce.
 - **Domain types** (`src/domain/`) are the single source of truth for a work
   item, its status enum, groupings ("fleets"), progress, estimate, owner, and
   the "up next" queue. Fixtures and any future API both conform to these types.
@@ -155,7 +170,10 @@ This is the novel piece with no reference precedent. Constraints:
 
 ## 6. Seams this work must not cross
 
-- Must not modify Go source, the worker, the CLI, or their behaviour.
-- Must not couple the Go build/test to Node tooling or vice versa.
+- May **add** Go source (the read adapter + its port/tests) but must not change
+  the behaviour of the existing worker, CLI commands, or workflows.
+- Must not couple the Go build/test to Node tooling or vice versa (the read
+  adapter is pure Go; serving the built assets is via embed or static dir, not a
+  Node dependency).
 - Must not read fixtures outside the `clients/` boundary.
 - Must not introduce auth or token handling.

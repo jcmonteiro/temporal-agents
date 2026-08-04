@@ -33,6 +33,11 @@ When this ships, the operator opens Agent Hub and sees, on one screen:
 - Enough spatial control (zoom, recenter) to keep the overview readable as the
   amount of work grows.
 
+The overview reflects **real agent work** from the Temporal server this repo
+already runs against — an operator sees actual workflow executions and their
+states, not a mockup. (Development proceeds against a stand-in data source, but
+the shipped outcome is wired to live data.)
+
 The overview is the first-class deliverable. The other destinations named in the
 concept (Fleets, Workflows, Templates, Insights, Settings) exist as reachable
 places but are not required to be functional for this outcome to be met.
@@ -52,9 +57,10 @@ places but are not required to be functional for this outcome to be met.
 
 - **Authentication / authorization** — no login, no identity, no roles. The app
   assumes a single trusted local operator.
-- **A production backend / live data source** — this brief does not require the
-  overview to be wired to real running workflows. Being fed by a stand-in data
-  source is acceptable for the outcome; a real data feed is a later concern.
+- **A production backend, hosting, or persistence layer** — no new services,
+  databases, or deployment. The only data path added is a **minimal, local,
+  read-only feed** that reads existing Temporal workflow state and exposes it to
+  the frontend. Anything beyond read-only local observation is out.
 - **The non-overview destinations** — Fleets, Workflows, Templates, Insights,
   Settings are navigable placeholders only.
 - **Mutating agent work from the UI** — starting, stopping, or editing workflows

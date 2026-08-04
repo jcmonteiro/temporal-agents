@@ -12,12 +12,17 @@ dependency. Every slice names the implementation-brief constraints it discharges
 | 4 | [Selection + right rail](./04-selection-and-right-rail.md) | Click an item → legend, selected details, and "up next" populate |
 | 5 | [Canvas controls](./05-canvas-controls.md) | Zoom %, zoom in/out, and recenter work on the orbit |
 | 6 | [Secondary destinations + top-bar affordances](./06-secondary-destinations.md) | Nav links resolve to placeholder pages; search + notifications present |
+| 7 | [Live read-path](./07-live-read-path.md) | Go read adapter serves real Temporal executions; Orbit shows live runs |
+
+Slices 1–6 are pure-frontend and fixtures-backed — each demoable offline. Slice 7
+adds the Go read adapter and swaps the client to live data behind the same
+boundary.
 
 ## Coverage of the implementation brief
 
 - IB §1 (Go coexistence): slice 1.
-- IB §2 (stack + structure mirror, auth dropped): slice 1, extended per-layer by 2–6.
-- IB §3 (data seam): slice 2.
+- IB §2 (stack + structure mirror, auth + @lego dropped, themeable dark): slice 1, extended per-layer by 2–6.
+- IB §3 (data seam): slice 2 (boundary + fixtures), slice 7 (Go read adapter + live client).
 - IB §4 (orbit visualization): slices 3, 4, 5.
-- IB §5 (open decisions — rendering, Faro, pkg manager): recorded in slices 1 and 3.
-- IB §6 (seams not to cross): honored by every slice; asserted in slice 1's CI.
+- IB §5 (open decisions — rendering, pkg manager): recorded in slices 1 and 3.
+- IB §6 (seams not to cross): honored by every slice; asserted in slice 1's CI and slice 7 (additive Go only).
