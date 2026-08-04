@@ -80,20 +80,20 @@ type GeneratePlanResult struct {
 //
 // Planning is contracted to be read-only, and that contract is enforced rather
 // than merely requested: a prompt cannot stop an agent (or one of its bash tool
-// calls) from editing or committing files. Two mechanisms enforce it. First, the
-// agent runs against a disposable, detached worktree — a throwaway copy of the
-// repository the user's working tree, branch, and index never see — created and
-// removed here. Second, the run uses a read-only tool policy (RunReadOnly) that
-// denies the file-mutating tools outright. Finally a tripwire re-reads the source
-// repository and fails non-retryably if it changed, so a plan is never returned
-// from a run that escaped the sandbox.
+// calls) from editing or committing files. Three mechanisms enforce it. First,
+// the agent runs against a disposable, standalone clone — a throwaway copy with
+// its own independent .git (refs and object database) the user's repository
+// never sees — created and removed here. Because the clone shares no git storage
+// with the source, nothing the agent does (including a bash-driven git
+// branch/tag/commit) can reach the source repository's working tree, branch,
+// index, refs, or objects. Second, the run uses a read-only tool policy
+// (RunReadOnly) that denies the file-mutating tools outright. Finally a tripwire
+// re-reads the source repository and fails non-retryably if it changed, so a
+// plan is never returned from a run that escaped the sandbox.
 //
-// The tripwire's guarantee covers the source repository's working-tree, index,
-// and HEAD content, not ref creation: the disposable worktree shares the source
-// .git object store and ref namespace, so a bash-driven branch/commit inside the
-// sandbox would leave dangling objects/refs the fingerprint does not observe.
-// The detached HEAD (dangling, gc-able commits) and the read-only tool policy
-// keep this from being an active hole.
+// The clone's isolation is what makes ref and object writes impossible to leak;
+// the tripwire therefore only needs to cover the source repository's working
+// tree, index, and HEAD content, which the fingerprint captures.
 func (a *Activities) GeneratePlan(ctx context.Context, req GeneratePlanRequest) (GeneratePlanResult, error) {
 	// Snapshot the source repository's complete content up front so the tripwire
 	// below can confirm planning left it exactly where it started. A content
@@ -105,13 +105,13 @@ func (a *Activities) GeneratePlan(ctx context.Context, req GeneratePlanRequest) 
 		return GeneratePlanResult{}, fmt.Errorf("read repository state: %w", err)
 	}
 
-	// Run the agent against a disposable copy so it operates in isolation. Always
-	// discard it, even on failure, so a planning run leaves no worktree behind.
-	sandbox, err := a.Git.AddDisposableWorktree(ctx, req.WorkDir)
+	// Run the agent against a disposable clone so it operates in isolation. Always
+	// discard it, even on failure, so a planning run leaves no sandbox behind.
+	sandbox, err := a.Git.AddDisposableClone(ctx, req.WorkDir)
 	if err != nil {
 		return GeneratePlanResult{}, fmt.Errorf("create planning sandbox: %w", err)
 	}
-	defer func() { _ = a.Git.RemoveWorktree(ctx, req.WorkDir, sandbox) }()
+	defer func() { _ = a.Git.RemoveDisposableClone(ctx, sandbox) }()
 
 	out, tokens, err := a.Agent.RunReadOnly(ctx, BuildPlanPrompt(req.Goal), sandbox)
 	if err != nil {

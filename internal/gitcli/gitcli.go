@@ -54,35 +54,52 @@ func (g Git) AddWorktree(ctx context.Context, dir, worktreePath, branch, startPo
 	return classifyExists(err)
 }
 
-// AddDisposableWorktree creates a throwaway detached-HEAD worktree of the repo
-// in dir at a fresh temporary path and returns that path. It lets a read-only
-// step (e.g. fleet planning) run against an isolated copy of the repository so
-// the step cannot touch the user's working tree, branch, or index; callers pair
-// it with RemoveWorktree to discard the copy afterward.
-func (g Git) AddDisposableWorktree(ctx context.Context, dir string) (string, error) {
-	// Reserve a unique path without leaving a directory behind: `git worktree add`
-	// wants to create the directory itself and refuses a pre-existing non-empty
-	// one. MkdirTemp is the simplest race-free way to reserve a name, so create it
-	// then immediately remove the empty directory and hand the bare path to git.
+// AddDisposableClone creates a throwaway standalone clone of the repo in dir at
+// a fresh temporary path and returns that path. It lets a read-only step (e.g.
+// fleet planning) run against an isolated copy of the repository so the step
+// cannot touch the user's working tree, branch, or index; callers pair it with
+// RemoveDisposableClone to discard the copy afterward.
+//
+// A standalone clone is used deliberately over a linked worktree: the clone has
+// its own .git directory with an independent ref namespace and object database,
+// so a command run inside the sandbox — git branch, git tag, a detached commit,
+// anything a bash tool call might invoke — lands in the throwaway clone and can
+// never persist refs or objects in the source repository. A linked worktree
+// (git worktree add) would instead share the source's common .git, letting such
+// writes escape the read-only boundary even though the working tree is separate.
+// --no-hardlinks copies the object database rather than hardlinking it, so the
+// sandbox shares no storage with the source at all.
+func (g Git) AddDisposableClone(ctx context.Context, dir string) (string, error) {
+	// Reserve a unique path without leaving a directory behind: `git clone` wants
+	// to create the destination directory itself and refuses a pre-existing
+	// non-empty one. MkdirTemp is the simplest race-free way to reserve a name, so
+	// create it then immediately remove the empty directory and hand the bare path
+	// to git.
 	path, err := os.MkdirTemp("", "fleet-plan-*")
 	if err != nil {
-		return "", fmt.Errorf("reserve worktree path: %w", err)
+		return "", fmt.Errorf("reserve sandbox path: %w", err)
 	}
 	if err := os.Remove(path); err != nil {
-		return "", fmt.Errorf("clear worktree path: %w", err)
+		return "", fmt.Errorf("clear sandbox path: %w", err)
 	}
-	if _, err := run(ctx, dir, "worktree", "add", "--detach", path); err != nil {
+	// Clone dir ("." resolves to it under `git -C dir`) into the absolute temp
+	// path. --no-hardlinks forces a full object-database copy so the sandbox is
+	// storage-independent from the source repo.
+	if _, err := run(ctx, dir, "clone", "--no-hardlinks", ".", path); err != nil {
 		return "", err
 	}
 	return path, nil
 }
 
-// RemoveWorktree discards a worktree previously created at path, including any
-// uncommitted changes in it (--force), so a disposable sandbox leaves nothing
-// behind.
-func (g Git) RemoveWorktree(ctx context.Context, dir, path string) error {
-	_, err := run(ctx, dir, "worktree", "remove", "--force", path)
-	return err
+// RemoveDisposableClone discards a disposable clone previously created at path,
+// deleting its directory and its independent .git so the sandbox leaves nothing
+// behind. Unlike a linked worktree there is no source-repo bookkeeping to
+// update, so a plain recursive remove suffices.
+func (g Git) RemoveDisposableClone(_ context.Context, path string) error {
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("remove disposable clone: %w", err)
+	}
+	return nil
 }
 
 // classifyExists wraps err with codereview.ErrBranchOrWorktreeExists when git's

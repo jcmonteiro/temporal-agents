@@ -203,6 +203,63 @@ func TestFingerprintWritesNoObjectsToSourceRepo(t *testing.T) {
 	require.ElementsMatch(t, before, after, "fingerprinting must not write objects into the source repository")
 }
 
+// TestAddDisposableCloneIsolatesSourceRepo pins the read-only boundary at the
+// git-storage level: the sandbox is a standalone clone with its own .git, so
+// the ref- and object-writing commands the reviewer flagged (git branch, git
+// tag, a commit) stay inside the throwaway clone and leave the source repo's
+// refs and object database untouched. A shared linked worktree would let them
+// escape.
+func TestAddDisposableCloneIsolatesSourceRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := initRepo(t)
+	g := New()
+	ctx := context.Background()
+
+	objectsDir := filepath.Join(dir, ".git", "objects")
+	listObjects := func() []string {
+		t.Helper()
+		var files []string
+		err := filepath.Walk(objectsDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if !info.IsDir() {
+				files = append(files, path)
+			}
+			return nil
+		})
+		require.NoError(t, err)
+		return files
+	}
+	before := listObjects()
+
+	sandbox, err := g.AddDisposableClone(ctx, dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = g.RemoveDisposableClone(ctx, sandbox) })
+
+	// Perform exactly the ref- and object-mutating operations that would persist
+	// in a shared .git: a branch, a tag, and a commit, all inside the sandbox.
+	sb := gitRunner(t, sandbox)
+	sb("config", "user.name", "t")
+	sb("config", "user.email", "t@t")
+	sb("branch", "sandbox-branch")
+	sb("tag", "sandbox-tag")
+	require.NoError(t, os.WriteFile(filepath.Join(sandbox, "sandbox.txt"), []byte("x\n"), 0o644))
+	sb("add", "sandbox.txt")
+	sb("commit", "-m", "sandbox commit")
+
+	// The source repo's object database is byte-for-byte unchanged.
+	require.ElementsMatch(t, before, listObjects(), "sandbox writes must not reach the source object database")
+
+	// And the source repo gained none of the sandbox's refs.
+	refs, err := run(ctx, dir, "for-each-ref", "--format=%(refname)")
+	require.NoError(t, err)
+	require.NotContains(t, refs, "sandbox-branch", "sandbox branch must not appear in the source repo")
+	require.NotContains(t, refs, "sandbox-tag", "sandbox tag must not appear in the source repo")
+}
+
 // gitRunner returns a helper that runs pinned-identity git commands in dir and
 // fails the test on error. Identity is set both via env and (by the caller)
 // local config so merge commits succeed without reading the developer's global

@@ -32,7 +32,7 @@ flowchart TD
     subgraph gp["GeneratePlan activity (RetryPolicy: MaxAttempts 1)"]
         direction TB
         fpBefore["Git.Fingerprint(WorkDir) → before"]
-        fpBefore --> sandbox["Git.AddDisposableWorktree → sandbox<br/>(discarded on defer)"]
+        fpBefore --> sandbox["Git.AddDisposableClone → sandbox<br/>(discarded on defer)"]
         sandbox --> agent["Agent.RunReadOnly(BuildPlanPrompt, sandbox)<br/>read-only tool policy"]
         agent --> fpAfter["Git.Fingerprint(WorkDir) → after"]
         fpAfter --> tripwire{"after == before?"}
@@ -58,7 +58,8 @@ flowchart TD
 **Notes**
 
 - Planning is contracted read-only and *enforced*: the agent runs in a
-  disposable detached worktree under a read-only tool policy, and a content
+  disposable standalone clone (its own independent .git) under a read-only tool
+  policy, and a content
   **fingerprint tripwire** re-reads the source repo afterwards — a mismatch
   fails non-retryably (`PlanningMutatedRepo`) so a plan is never returned from a
   run that escaped the sandbox.

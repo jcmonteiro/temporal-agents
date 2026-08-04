@@ -33,12 +33,12 @@ func (f *fakeGit) Head(_ context.Context, _ string) (string, error) {
 	return f.head, nil
 }
 
-func (f *fakeGit) AddDisposableWorktree(_ context.Context, _ string) (string, error) {
+func (f *fakeGit) AddDisposableClone(_ context.Context, _ string) (string, error) {
 	f.added = true
 	return f.sandbox, nil
 }
 
-func (f *fakeGit) RemoveWorktree(_ context.Context, _, _ string) error {
+func (f *fakeGit) RemoveDisposableClone(_ context.Context, _ string) error {
 	f.removed = true
 	return nil
 }
@@ -73,7 +73,7 @@ func TestGeneratePlan_RunsAgentInDisposableSandbox(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1234, res.Tokens)
 	require.Equal(t, "expose the core", res.Plan.Goal)
-	// The agent ran against the disposable worktree, never the user's repo.
+	// The agent ran against the disposable clone, never the user's repo.
 	require.Equal(t, "/tmp/sandbox", agent.gotDir)
 	require.True(t, git.added)
 	// The sandbox is always discarded.

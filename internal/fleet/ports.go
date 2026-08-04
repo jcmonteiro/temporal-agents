@@ -16,8 +16,8 @@ type Agent interface {
 }
 
 // Git is the port for the disposable-sandbox git operations planning uses to
-// enforce its read-only contract: it runs the agent against a throwaway
-// worktree and confirms the source repository was left untouched. Implementations
+// enforce its read-only contract: it runs the agent against a throwaway clone
+// and confirms the source repository was left untouched. Implementations
 // are driven adapters over the `git` CLI (gitcli.Git satisfies this port).
 type Git interface {
 	// Fingerprint returns a value that changes whenever any content in dir's
@@ -33,11 +33,12 @@ type Git interface {
 	// cannot shift; a dependent's branch is then seeded by merging its dependency
 	// branches on top of this fixed base.
 	Head(ctx context.Context, dir string) (string, error)
-	// AddDisposableWorktree creates a throwaway detached worktree of the repo in
-	// dir and returns its path, so a read-only step can run against an isolated
-	// copy that never touches the user's working tree, branch, or index.
-	AddDisposableWorktree(ctx context.Context, dir string) (string, error)
-	// RemoveWorktree discards the worktree previously created at path, including
-	// any changes made in it.
-	RemoveWorktree(ctx context.Context, dir, path string) error
+	// AddDisposableClone creates a throwaway standalone clone of the repo in dir
+	// and returns its path, so a read-only step can run against an isolated copy
+	// with its own independent .git (refs and object database) that never touches
+	// the user's working tree, branch, index, refs, or objects.
+	AddDisposableClone(ctx context.Context, dir string) (string, error)
+	// RemoveDisposableClone discards the clone previously created at path,
+	// including any changes made in it.
+	RemoveDisposableClone(ctx context.Context, path string) error
 }
