@@ -34,22 +34,25 @@ component changes.
       Completed → `done`; Failed → `failed`; `SeedConflictBlocked` →
       `waiting-input` (≈ blocked, optional in first pass). "Up Next" =
       `todo`/`waiting` nodes. Reuse `internal/fleet` domain types where possible.
-- [ ] Compose the **overview** satellites (Q5): one item per **fleet**
-      (aggregated status via the domain rule, derived progress = done/total
-      nodes) and one per **standalone workflow** (`run`/`schedule`/`code
-      develop` executions that are not fleet children), each tagged with its
-      `kind`.
-- [ ] Add an HTTP handler serving `GET /api/v1/overview` (items + up-next) and
-      `GET /api/v1/fleets/:id` (fleet detail: its `FleetNode` DAG — nodes +
-      `DependsOn` edges + per-node status + child workflow) returning JSON
-      matching `src/domain/` types. **No cross-fleet edges.** `owner`/`estimate`/
-      `description` are not in the live model — omit them (Q6=A, IB §4b).
-- [ ] Expose it via a **new** entrypoint that does not alter existing commands:
-      a `serve`/`web` CLI subcommand (preferred) or a `--http` flag. Reads
-      `TEMPORAL_ADDRESS` like the rest of the CLI.
-- [ ] Serve the built frontend (`web/dist`) as static files from the same
-      binary (embed or static dir), so `serve` gives a single local URL. Dev
-      still uses the Vite `/api/v1` proxy against this endpoint.
+- [ ] Serve **resource endpoints** (Q19): `GET /api/v1/fleets` (fleets with
+      backend-**aggregated** status + derived progress — Q15), `GET /api/v1/runs`
+      (`run`/`code develop` executions), `GET /api/v1/schedules` (`schedule`s),
+      and `GET /api/v1/fleets/:id` (a fleet's `FleetNode` DAG — nodes +
+      `DependsOn` edges + per-node status + child workflow). JSON matches
+      `src/domain/` types, **payloads portable / DB-agnostic** so a future DB
+      swaps only the adapter. **No cross-fleet edges**; `owner`/`estimate`/
+      `description` are not modelled (Q6=A, Q10). The Overview satellites are
+      composed by the frontend from fleets + runs + schedules (each tagged with
+      its `kind`).
+- [ ] Implement the fleet **status aggregation** in the Go adapter (Q15), not
+      the frontend.
+- [ ] Expose via a **new `serve` CLI subcommand** (Q17) that does not alter
+      existing commands; reads `TEMPORAL_ADDRESS` like the rest of the CLI.
+- [ ] Serve the built SPA (`web/dist`) as **independently hostable static
+      assets** (Q18): `serve` serves the bundle locally for convenience, but the
+      API (JSON under `/api/v1`) stays decoupled from asset hosting so the same
+      bundle can later sit behind **S3 + a CDN** unchanged. Configurable base
+      path. Dev uses the Vite `/api/v1` proxy against this API.
 - [ ] Tests: port has a fake/stub in unit tests for the handler (assert JSON
       contract + status mapping); the Temporal adapter is covered per the repo's
       existing adapter-testing approach. `go build .` and existing Go tests/CI
@@ -58,8 +61,8 @@ component changes.
 ### Frontend side
 
 - [ ] Add the live implementation of the `clients/agent-hub` boundary that calls
-      `GET /api/v1/overview` and `GET /api/v1/fleets/:id` via `proxyFetch`,
-      returning `Result<T, E>`.
+      `/api/v1/fleets`, `/api/v1/runs`, `/api/v1/schedules`, and
+      `/api/v1/fleets/:id` via `proxyFetch`, returning `Result<T, E>`.
 - [ ] Select fixtures vs live via config/env (`Config` flag) so tests and
       offline dev keep using fixtures; no component changes (IB §3).
 - [ ] Test: live client maps a sample payload to domain types and surfaces

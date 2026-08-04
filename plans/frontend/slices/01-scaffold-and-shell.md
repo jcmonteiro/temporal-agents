@@ -17,9 +17,10 @@ and the Go CI still pass, untouched.
       `react-router` (**no `@lego/*` packages** — Q1), and dev deps: `vite`,
       `@vitejs/plugin-react`, `vite-plugin-svgr`, `typescript`, `@biomejs/biome`,
       `vitest`, `jsdom`, `@testing-library/react`, `@testing-library/jest-dom`,
-      `@testing-library/user-event`. Scripts: `dev`, `build`
-      (`tsc --build && vite build`), `lint`, `test` (IB §2). No private-registry
-      `.npmrc`; installs from public npm only.
+      `@testing-library/user-event`, a **public icon library** (Lucide-style,
+      Q9). **No Playwright (Q21).** Scripts: `dev`, `build`
+      (`tsc --build && vite build`), `lint`, `test` (IB §2). Use **pnpm** (Q12);
+      no private-registry `.npmrc`; installs from public npm only.
 - [ ] Add `web/vite.config.mts` mirroring the reference: `root: 'src'`,
       `outDir: '../dist'`, react + svgr plugins, dev proxy `/api/v1` → backend
       target env var, vitest `environment: 'jsdom'`, `setupFiles`,
@@ -36,6 +37,8 @@ and the Go CI still pass, untouched.
       set + switcher is additive.
 - [ ] Add `src/components/ui/` local primitives used by the shell (Button,
       IconButton, Card, Tag/Badge) styled via tokens (Q1 neutral UI layer).
+- [ ] Add an `Icon` component wrapping the public icon library (Q9); use
+      `vite-plugin-svgr` only for the bespoke logo/planet mark.
 - [ ] Add `src/router.tsx`: browser router, `RouterErrorBoundary`, `App` shell,
       lazy Overview route as index. **No** `RequireAuth`/`RequireRole` (IB §2).
 - [ ] Add `src/app.tsx` shell: fixed `TopBar` + left nav + `<Outlet/>` content
@@ -48,8 +51,9 @@ and the Go CI still pass, untouched.
 - [ ] Add `src/config/index.ts` with only non-auth config (env, backend base
       url, optional Faro flag) (IB §2 dropped auth fields).
 - [ ] Add `src/test/setup.ts` and `src/test/render.tsx` (`renderWithRouter`).
-- [ ] Confirm + record: Faro/observability **dropped** with `@lego` (Q1); pick
-      package manager (IB §5).
+- [ ] Confirm: Faro/observability **dropped** (Q1); package manager = **pnpm**
+      (Q12); avatar is **static**, **no greeting** and no operator identity
+      (Q10).
 - [ ] Update root `.gitignore` to ignore `web/node_modules`, `web/dist`,
       `web/*.tsbuildinfo` (IB §1). Commit the lockfile.
 - [ ] Add `.github/workflows/web.yml` (Node install + `lint` + `test` +

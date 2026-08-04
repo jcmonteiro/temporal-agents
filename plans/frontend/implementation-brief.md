@@ -53,8 +53,11 @@ monorepo nesting. The following are therefore requirements, not suggestions:
   CSS / CSS custom properties. **No third-party design-system runtime dep.**
 - **Design conventions kept as house rules** (they were the valuable part of the
   reference, independent of CONNECT): **no layout primitives** — layout is
-  native HTML elements + inline `style`, no shorthand props; icons are local
-  SVGs imported via `vite-plugin-svgr`.
+  native HTML elements + inline `style`, no shorthand props.
+- **Icons (Q9 = A):** one **public icon library** (Lucide-style React icons) is
+  the source for satellite glyphs and chrome icons; `vite-plugin-svgr` is kept
+  for bespoke marks (logo / planet). The `WorkItem` icon field maps to library
+  icon names.
 - **Theming (hard constraint):** ship a **dark theme by default**. There is
   **no theme switcher** now, but all color/spacing/typography values must be
   **design tokens as CSS custom properties** on a single root scope (e.g.
@@ -67,8 +70,14 @@ monorepo nesting. The following are therefore requirements, not suggestions:
 - **Testing:** Vitest + jsdom + `@testing-library/react` for unit/component
   tests (`describe`/`it`/`expect`/`vi`, `render`/`screen`/`waitFor`/`within`,
   `userEvent`); fixtures in `test/fixtures.ts`; a `renderWithRouter` helper for
-  components containing `<Link>`. Playwright for e2e is **optional** for this
-  work and may be deferred.
+  components containing `<Link>`. **No Playwright / e2e for now (Q21)** — unit
+  and component tests only.
+- **Package manager (Q12 = pnpm):** `pnpm`, for parity with the reference.
+  Lockfile committed; `node_modules` git-ignored.
+- **No personalization (Q10 = B):** auth is gone and there is **no operator
+  identity**. The greeting line is **removed entirely**; the avatar is static;
+  item-level `owner` is not part of the model (backend does not expose it — see
+  Q6). No greeting, no configured operator name.
 - **React patterns:** functional components with explicit `(): ReactNode`
   return type; no class components.
 - **Directory layout inside the package** mirrors the reference layers:
@@ -82,9 +91,9 @@ monorepo nesting. The following are therefore requirements, not suggestions:
 - Auth-derived `Config` fields (authority, clientId, redirect URIs, proxy auth).
 - All `@lego/*` packages and the private-registry `.npmrc` scope, the CONNECT
   theme CSS imports, and CONNECT-specific test quirks.
-- Observability (`observability/faro/`, Grafana Faro deps) is **optional**;
-  default to leaving it out to reduce surface, but mirroring it is acceptable if
-  kept behind an enable flag. This is an open decision (see §5).
+- Observability (`observability/faro/`, Grafana Faro deps) — **dropped** with
+  `@lego`. Errors surface via the `ErrorBoundary` only.
+- Playwright/e2e harness (Q21) — not carried over.
 - Domain-specific reference code (SKU/dispensation/inventory tables, TanStack
   table/virtual, OData) — not carried over; Agent Hub has its own domain.
 
@@ -117,15 +126,26 @@ source of intent.
 - **Constraint:** the proxy/fetch layer keeps the reference's
   `/{service}/{path}` shape and the Vite dev proxy (`/api/v1` → backend target)
   so the Go read adapter plugs in without reshaping the client.
-- **Constraint (Go read adapter, in scope — Slice 7):** a read-only HTTP
-  endpoint (e.g. `GET /api/v1/overview`) served by a **new, additive** Go
-  package (e.g. `internal/httpapi/` + a `serve`/`web` CLI subcommand or a flag
-  on the worker). Hexagonal: it depends on a **driven port** that abstracts the
-  Temporal query (list workflow executions → map to work items), with the
-  Temporal SDK client as the adapter. It must **not** change worker/CLI
-  behaviour, must be startable independently, and must serve the built frontend
-  or run alongside the Vite dev proxy. The JSON contract mirrors `src/domain/`
-  types so fixtures and live data are interchangeable.
+- **Constraint (REST resources, Q19):** the API exposes **resource endpoints**
+  `GET /api/v1/fleets`, `GET /api/v1/runs`, `GET /api/v1/schedules` (and
+  `GET /api/v1/fleets/:id` for a fleet's node DAG). The Overview composes its
+  satellites from these (fleets + runs + schedules). **Payloads must be
+  portable** — defined by the backend contract, DB-agnostic — so a future switch
+  from workflow-id reconstruction to a real database changes only the adapter,
+  not the contract or the frontend.
+- **Constraint (Go read adapter, in scope — Slice 7):** read-only HTTP endpoints
+  served by a **new, additive** Go package (e.g. `internal/httpapi/`) via a
+  `serve` CLI subcommand (Q17). Hexagonal: it depends on a **driven port** that
+  abstracts the query (list fleets/runs/schedules → map to work items), with the
+  Temporal SDK client as the adapter; the **first implementation uses the
+  workflow-id convention** (Q19), replaceable by a DB-backed adapter later. It
+  must **not** change worker/CLI behaviour and must be startable independently.
+- **Constraint (asset hosting, Q18):** the SPA is built to **independently
+  hostable static assets**. The API serves only JSON under `/api/v1` (no
+  coupling to the assets); `serve` may serve the static bundle locally for
+  convenience, but the architecture must allow the same bundle to be fronted by
+  **S3 + a CDN** later without changing the API. Configurable base path; no
+  hard embed that couples assets to the API binary lifecycle.
 - **Status mapping (Q3 = A honest subset, enriched by the real fleet domain):**
   the adapter emits only statuses reconstructable from (plan DAG + executions),
   never fabricated by instrumenting workflows. Per fleet node:
@@ -140,19 +160,19 @@ source of intent.
   Standalone `PromptWorkflow`/develop runs (no fleet) map by native status only
   (`in-progress`/`done`/`failed`).
 - **"Up Next"** = the `todo`/`waiting` nodes. Match plan node ↔ execution by the
-  `<fleetID>-<nodeID>` workflow-ID convention (named here per IB).
-- Which reconstructions the first live slice implements vs defers (e.g.
-  `waiting-input` needs failure-detail inspection) is a Slice 7 scoping call.
+  `<fleetID>-<nodeID>` workflow-ID convention (Q19 first implementation).
+- `waiting-input` (≈ `blocked`) reconstruction is **deferred** in the first pass
+  (Q16) — it needs child-failure-detail inspection.
 - **Domain types** (`src/domain/`) are the single source of truth for a work
-  item, its status enum, groupings ("fleets"), progress, estimate, owner, and
-  the "up next" queue. Fixtures and any future API both conform to these types.
-- **Item kinds (Q5):** an overview satellite is one of two kinds — `fleet` or
-  `workflow` (a standalone run from `run`/`schedule`/`code develop`). The type
-  carries a `kind` discriminator. A `fleet` item's single status is an
-  **aggregation** of its node statuses (aggregation rule is a stated decision —
-  see §5); a `workflow` item's status is its native execution status. Only
-  `fleet` items are navigable to the fleet view (which shows that fleet's node
-  DAG — §4b, Q6=A).
+  item, its status enum, and groupings ("fleets"). Fixtures and the API both
+  conform. Fields the backend does not expose (e.g. `owner`) are not modelled.
+- **Item kinds (Q5/Q19):** an overview satellite has a `kind` discriminator —
+  `fleet`, `run`, or `schedule` (matching the three resource endpoints). Only
+  `fleet` items are navigable to the fleet view (§4b, Q6=A).
+- **Fleet status aggregation is the backend's job (Q15):** the API returns a
+  fleet's already-aggregated status (and derived progress); the frontend does
+  **not** compute it. The aggregation rule is defined and exercised in the Go
+  read adapter (Slice 7), not in the client.
 - The status vocabulary is fixed by the concept: `todo`, `in-progress`,
   `paused`, `waiting-input`, `waiting`, `done`, `failed` (the concept's
   "Blocked" maps to `failed`). Each status has one color, defined once as a
@@ -191,10 +211,10 @@ Constraints:
 - The canvas supports **zoom** (with a readable percentage) and **recenter**,
   matching the concept's bottom-left controls. Zoom is a view transform, not a
   data change.
-- Rendering technology is **open**: inline SVG, absolutely-positioned DOM
-  elements, or a mix are all acceptable. It must be testable under jsdom
-  (assert item presence/labels/status and selection), which argues against a
-  `<canvas>`-only approach — but the choice is the implementer's to justify.
+- Rendering technology is **deferred to the slice implementation (Q13)**. The
+  definition of done for the chosen approach: **reactive, clickable,
+  (future) draggable, animated, and low host-resource usage**, and testable
+  under jsdom (assert item presence/labels/status and selection).
 - Selecting a satellite fills the right rail (State Legend, Selected, Up Next).
   For a `fleet` item, "View Details" navigates to the **fleet view** route; for
   a `workflow` item it is inert (no dedicated view in scope).
@@ -211,7 +231,9 @@ relationship between fleets. Constraints:
   edges are `DependsOn`; selection drives the right rail.
 - Same chrome as Overview (top bar, nav, legend, zoom/recenter controls).
 - Layout is deterministic enough to test node/edge presence and selection under
-  jsdom. Force-directed physics is optional polish, not required for the demo.
+  jsdom. Rendering technology is **deferred to the slice (Q14, same DoD as
+  Q13):** reactive, clickable, future-draggable, animated, low host-resource
+  usage. Force-directed physics is optional polish, not required for the demo.
 - **Right rail (honest fields only):** the fleet's goal/name, its status
   (aggregated §3), and **derived progress** (done nodes / total). A selected
   node shows its status and its child workflow execution. `owner`, `estimate`,
@@ -223,29 +245,21 @@ relationship between fleets. Constraints:
 
 ## 5. Known risks, unknowns, open decisions
 
-- **Fleet → single status aggregation rule (Q5)** — how a fleet's node statuses
-  collapse to one satellite status. Suggested precedence: any `failed` →
-  `failed`; else any `waiting-input`/`blocked` → `waiting-input`; else any
-  `in-progress` → `in-progress`; else any `waiting`/`todo` → `in-progress` if
-  some node done else `todo`; all `done` → `done`. Decide and record in Slice 2.
-- **Graph rendering (fleet view)** — hand-rolled SVG vs a graph/force library
-  for the fleet's node DAG. Trade-off: a library eases layout but adds a dep and
-  jsdom-test friction; hand-rolled keeps the neutral-dependency stance (Q1).
-  Decide in the fleet-view slice.
-- **Orbit rendering approach** — SVG vs positioned DOM vs library. Trade-off:
-  SVG gives precise geometry and easy dashed orbits; DOM gives easier CONNECT
-  component embedding and accessibility. No mandate; pick and record the choice
-  in the first orbit slice.
-- **Custom UI layer scope** — with CONNECT dropped, the local `ui/` primitives
-  (Button, Tag/Badge, Popover, Card, ProgressBar, Icon) must stay minimal and
-  purpose-built for this app; avoid growing a general design system. Contain
-  visualization CSS to the orbit component.
-- **Observability** — Faro is LEGO/Grafana-tied; **dropped** along with `@lego`
-  (confirm in scaffold slice). If lightweight error reporting is wanted later,
-  add a neutral one behind the `ErrorBoundary`.
-- **Package manager** — the reference uses `pnpm`. Not load-bearing here; pick
-  one (`pnpm` recommended for parity) and use it consistently. Lockfile is
-  committed; `node_modules` is git-ignored.
+**Resolved (recorded here, implemented in slices):** icons = public library
+(Q9); no personalization / no greeting (Q10); dir = `web/` (Q11); pnpm (Q12);
+rendering tech deferred to slices with the reactive/clickable/future-draggable/
+animated/low-resource DoD (Q13/Q14); fleet status aggregation owned by the
+backend API (Q15); `waiting-input`/`blocked` deferred (Q16); `serve` subcommand
+(Q17); assets independently hostable for future S3+CDN (Q18); resource endpoints
+`/api/v1/fleets|runs|schedules` with portable, DB-agnostic payloads, workflow-id
+convention first (Q19); search + notifications present but disconnected
+(Q20/Q22); no Playwright (Q21).
+
+Remaining genuinely open:
+
+- **Custom UI layer scope** — the local `ui/` primitives (Button, Tag/Badge,
+  Popover, Card, ProgressBar, Icon) must stay minimal and purpose-built; avoid
+  growing a general design system. Contain visualization CSS to the canvas.
 - **Responsive behaviour** at small widths for a fundamentally spatial view is
   unspecified by the concept; treat desktop-first, degrade rather than reflow.
 
@@ -254,7 +268,7 @@ relationship between fleets. Constraints:
 - May **add** Go source (the read adapter + its port/tests) but must not change
   the behaviour of the existing worker, CLI commands, or workflows.
 - Must not couple the Go build/test to Node tooling or vice versa (the read
-  adapter is pure Go; serving the built assets is via embed or static dir, not a
-  Node dependency).
+  adapter is pure Go; the SPA bundle is independently hostable static assets —
+  Q18 — not a Node dependency of the Go binary).
 - Must not read fixtures outside the `clients/` boundary.
 - Must not introduce auth or token handling.

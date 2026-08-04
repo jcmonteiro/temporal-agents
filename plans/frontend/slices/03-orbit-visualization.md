@@ -10,8 +10,10 @@ concept's core visual. A decorative starfield background may be included.
 
 ## Tasks
 
-- [ ] Decide and record the rendering approach (inline SVG vs positioned DOM);
-      justify against jsdom testability (IB §4, §5). Record in this file/PR.
+- [ ] Rendering approach is decided **during this slice's implementation**
+      (Q13). DoD for the chosen approach: **reactive, clickable,
+      (future) draggable, animated, low host-resource usage**, testable under
+      jsdom. Record the choice in this file/PR.
 - [ ] Add the **shared canvas primitive** `src/components/canvas/` (Q8=A, IB
       §4.0): owns pan/zoom view transform, node selection, and starfield;
       parameterized by a `layout` function + a `node` renderer. Slice 5 adds its
@@ -23,8 +25,8 @@ concept's core visual. A decorative starfield background may be included.
       status-hiding overlap and degrades gracefully as N grows (IB §4).
 - [ ] Render the central body, the concentric orbit rings (dashed), and each
       orbiting item (icon + label + status dot using the shared status token).
-- [ ] Add the greeting header ("Good morning, …" / "Here's what's orbiting your
-      work today.") above/over the canvas as in the concept.
+- [ ] **No greeting header (Q10)** — the concept's "Good morning, …" line is
+      omitted; the canvas fills the content area directly.
 - [ ] Keep custom CSS contained to the canvas/orbit components; chrome stays on
       the local `ui/` primitives; all colors from tokens incl. status (IB §5).
 - [ ] Test: layout function is deterministic (same input → same positions) and

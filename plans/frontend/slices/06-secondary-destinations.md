@@ -6,9 +6,8 @@ placeholders; search + notifications presentational), IB §2 (routing, chrome).
 **Demo:** clicking Workflows, Templates, Insights, or Settings navigates to a
 placeholder page that renders its title (and marks the nav item active).
 (Overview is Slices 3–5; Fleets is the real fleet view in Slice 8.) The top-bar
-search field and notification bell are present and interactive at a
-presentational level (search input accepts text; bell opens an empty/placeholder
-popover). Help is reachable.
+search field and notification bell are **present but disconnected** (Q20/Q22) —
+no search and no notifications behaviour. Help is reachable.
 
 ## Tasks
 
@@ -18,16 +17,15 @@ popover). Help is reachable.
       Slice 8.)
 - [ ] Wire left-nav links to the routes; active state reflects the current route
       (IB §2 routing).
-- [ ] Make the top-bar search a controlled input (no backend search — brief
-      scope); optionally filter/scroll to a matching orbit item as a nicety,
-      but do not require it.
-- [ ] Make the notification bell open a placeholder popover (no delivery — brief
-      scope).
+- [ ] Add the top-bar search field but leave it **disconnected — no search
+      implemented** (Q20): present, visibly inert (e.g. disabled/no-op input).
+- [ ] Add the notification bell as a **disconnected placeholder** (Q22), same
+      treatment as search: present but non-functional.
 - [ ] Test: each placeholder nav link resolves to its page and sets active
-      state; search input updates on type; bell toggles its popover.
+      state; search + bell render as inert placeholders.
 
 ## Done when
 
 All nav destinations resolve to routes with correct active state (Overview,
 Fleets, and four placeholders), and the search + notification affordances are
-present and behave at the presentational level defined by the brief.
+present but disconnected (Q20/Q22).

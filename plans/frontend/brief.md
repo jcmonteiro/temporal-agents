@@ -28,7 +28,7 @@ When this ships, the operator opens Agent Hub and sees, on one screen:
   waiting input, waiting, done, failed/blocked), with a legend that names each
   state.
 - The ability to **select** any item and read its details (which grouping it
-  belongs to, progress, estimate, owner) in a dedicated panel.
+  belongs to, progress, and status) in a dedicated panel.
 - A short **"up next"** queue of work that has not yet started.
 - Enough spatial control (zoom, recenter) to keep the overview readable as the
   amount of work grows.
@@ -42,7 +42,8 @@ Each orbiting item is a top-level piece of work — either an entire **fleet** o
 **standalone workflow** (a run started via `run`, `schedule`, or `code
 develop`). Selecting one shows its details; from a fleet's details the operator
 can open a dedicated **fleet view** that shows that fleet's work and how its
-pieces depend on one another.
+pieces depend on one another. The app is single-operator with no identity: there
+is no personalized greeting or owner attribution.
 
 The **Overview** (orbit) and the **Fleet view** are the first-class
 deliverables. The remaining destinations (Workflows, Templates, Insights,

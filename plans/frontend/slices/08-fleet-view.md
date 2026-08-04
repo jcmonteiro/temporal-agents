@@ -16,8 +16,9 @@ Slice 7. **No cross-fleet "Connected Fleets" concept.**
 
 ## Tasks
 
-- [ ] Decide + record the graph rendering approach (hand-rolled SVG vs library),
-      keeping the neutral-dependency stance (IB §5, Q1).
+- [ ] Graph rendering approach decided **during implementation** (Q14), same DoD
+      as the orbit (Q13): reactive, clickable, future-draggable, animated, low
+      host-resource usage; keep the neutral-dependency stance (Q1). Record it.
 - [ ] Add route `fleets` (and `fleets/:id`) in `router.tsx`; lazy
       `src/pages/fleets/page.tsx`. Wire the left-nav Fleets link and Slice 4's
       "View Details" to it.
