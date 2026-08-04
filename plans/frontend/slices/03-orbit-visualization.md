@@ -20,8 +20,8 @@ concept's core visual. A decorative starfield background may be included.
       orbiting item (icon + label + status dot using the shared status token).
 - [ ] Add the greeting header ("Good morning, …" / "Here's what's orbiting your
       work today.") above/over the canvas as in the concept.
-- [ ] Keep custom CSS contained to the orbit component; chrome stays on CONNECT
-      (IB §5 risk).
+- [ ] Keep custom CSS contained to the orbit component; chrome stays on the
+      local `ui/` primitives; all colors from tokens incl. status colors (IB §5).
 - [ ] Test: layout function is deterministic (same input → same positions) and
       produces non-overlapping placements for representative N; component test
       asserts every item renders with label + correct status color under jsdom.

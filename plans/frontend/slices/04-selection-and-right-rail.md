@@ -1,7 +1,7 @@
 # Slice 4 — Selection + right rail
 
-**Discharges:** IB §4 (selectable items, observable selection), IB §2 (CONNECT
-chrome, testing).
+**Discharges:** IB §4 (selectable items, observable selection), IB §2 (local
+`ui/` primitives, token styling, testing).
 
 **Demo:** the right rail from the concept appears with three sections — **State
 Legend** (all seven statuses named with their color), **Selected** (details of

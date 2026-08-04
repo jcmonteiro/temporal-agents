@@ -14,39 +14,49 @@ and the Go CI still pass, untouched.
 - [ ] Create top-level `web/` directory as the frontend package root (IB §1).
       Do **not** nest a second wrapper dir.
 - [ ] Add `web/package.json` (private) with React 19, `react-dom`,
-      `react-router`, the four `@lego/*` packages, and dev deps: `vite`,
+      `react-router` (**no `@lego/*` packages** — Q1), and dev deps: `vite`,
       `@vitejs/plugin-react`, `vite-plugin-svgr`, `typescript`, `@biomejs/biome`,
       `vitest`, `jsdom`, `@testing-library/react`, `@testing-library/jest-dom`,
       `@testing-library/user-event`. Scripts: `dev`, `build`
-      (`tsc --build && vite build`), `lint`, `test` (IB §2).
+      (`tsc --build && vite build`), `lint`, `test` (IB §2). No private-registry
+      `.npmrc`; installs from public npm only.
 - [ ] Add `web/vite.config.mts` mirroring the reference: `root: 'src'`,
       `outDir: '../dist'`, react + svgr plugins, dev proxy `/api/v1` → backend
       target env var, vitest `environment: 'jsdom'`, `setupFiles`,
-      `deps.inline` for CONNECT components (IB §2, §3).
+      (no CONNECT `deps.inline` needed) (IB §2, §3).
 - [ ] Add `web/tsconfig.json`, `web/biome.json`, `web/vite-env.d.ts`.
-- [ ] Add `src/index.html`, `src/index.tsx` (theme + utilities CSS imports,
-      `ErrorBoundary`, `Router`; **no** MSAL/auth providers — IB §2 dropped),
-      `src/styles/global.css`, `src/styles/theme.ts` (constants + status color
-      tokens placeholder), `src/styles/favicon`.
+- [ ] Add `src/index.html`, `src/index.tsx` (import `global.css`,
+      `ErrorBoundary`, `Router`; **no** MSAL/auth providers, **no** CONNECT
+      theme import — IB §2 dropped), `src/styles/favicon`.
+- [ ] Add theming (IB §2): set `data-theme="dark"` on the root element; define
+      the token set as CSS custom properties under `:root[data-theme="dark"]`
+      in `src/styles/tokens.css` (colors incl. the seven status colors, spacing,
+      typography, radii). `src/styles/global.css` and `src/styles/theme.ts`
+      reference tokens only — no hard-coded values. Structure so a future light
+      set + switcher is additive.
+- [ ] Add `src/components/ui/` local primitives used by the shell (Button,
+      IconButton, Card, Tag/Badge) styled via tokens (Q1 neutral UI layer).
 - [ ] Add `src/router.tsx`: browser router, `RouterErrorBoundary`, `App` shell,
       lazy Overview route as index. **No** `RequireAuth`/`RequireRole` (IB §2).
 - [ ] Add `src/app.tsx` shell: fixed `TopBar` + left nav + `<Outlet/>` content
       area, native HTML + inline `style` only (IB §2 no layout primitives).
 - [ ] Add `src/navigation/top-bar.tsx` (logo, search placeholder, bell, avatar)
-      and the left nav component with the six destinations + Help, using CONNECT
-      components and `@lego/icons`.
+      and the left nav component with the six destinations + Help, using the
+      local `ui/` primitives and local SVG icons (via `vite-plugin-svgr`).
 - [ ] Add `src/utils/result.ts`, `src/utils/error-boundary.tsx`,
       `src/utils/router-error-boundary.tsx` (ported from reference).
 - [ ] Add `src/config/index.ts` with only non-auth config (env, backend base
       url, optional Faro flag) (IB §2 dropped auth fields).
 - [ ] Add `src/test/setup.ts` and `src/test/render.tsx` (`renderWithRouter`).
-- [ ] Decide + record: drop Faro (default) and pick package manager (IB §5).
+- [ ] Confirm + record: Faro/observability **dropped** with `@lego` (Q1); pick
+      package manager (IB §5).
 - [ ] Update root `.gitignore` to ignore `web/node_modules`, `web/dist`,
       `web/*.tsbuildinfo` (IB §1). Commit the lockfile.
 - [ ] Add `.github/workflows/web.yml` (Node install + `lint` + `test` +
       `build`) scoped to `web/**` paths; leave `go.yml` untouched (IB §1, §6).
-- [ ] Add `web/AGENTS.md` capturing the carried-over conventions (CONNECT
-      quirks in tests, functional components, Result usage).
+- [ ] Add `web/AGENTS.md` capturing the carried-over conventions (functional
+      components, `Result` usage, no layout primitives / native HTML + inline
+      style, token-only styling, dark-theme-by-default + themeable rule).
 - [ ] Test: a component test asserts the shell renders the nav destinations and
       marks Overview active.
 

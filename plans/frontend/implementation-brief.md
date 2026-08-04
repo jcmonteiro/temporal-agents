@@ -44,11 +44,24 @@ monorepo nesting. The following are therefore requirements, not suggestions:
   where they apply (`dev`, `build`, `lint`, `test`).
 - **Runtime libraries:** React 19 + `react-dom`; `react-router` (browser router
   with lazy-loaded route modules and a router error boundary).
-- **Design system:** LEGO CONNECT — `@lego/connect-components-react`,
-  `@lego/connect-theme-enterprise` (theme is a **CSS import**, not a React
-  provider), `@lego/connect-utilities`, `@lego/icons`. **Light theme only.**
-  **No layout primitives** — layout is native HTML elements + inline `style`;
-  no Chakra-style shorthand props.
+- **UI layer (diverges from reference — see decision below):** the `@lego/*`
+  CONNECT packages are **dropped entirely**. They resolve from LEGO's private
+  GitHub Packages registry (org membership + `read:packages` token) and would
+  make this repo unbuildable outside LEGO and complicate CI, with no benefit to
+  the Orbit concept. Replace them with a **neutral, public** UI layer: a small
+  set of local primitive components (`src/components/ui/`) styled with plain
+  CSS / CSS custom properties. **No third-party design-system runtime dep.**
+- **Design conventions kept as house rules** (they were the valuable part of the
+  reference, independent of CONNECT): **no layout primitives** — layout is
+  native HTML elements + inline `style`, no shorthand props; icons are local
+  SVGs imported via `vite-plugin-svgr`.
+- **Theming (hard constraint):** ship a **dark theme by default**. There is
+  **no theme switcher** now, but all color/spacing/typography values must be
+  **design tokens as CSS custom properties** on a single root scope (e.g.
+  `:root[data-theme="dark"]`), never hard-coded in components. Adding a light
+  theme (and a switcher) later must be a matter of defining a second token set
+  and toggling the scope attribute — no component changes. Status colors
+  (IB §3) are part of this token set.
 - **Error handling:** `Result<T, E>` from `utils/result.ts` for fallible
   operations; async wrapped in try/catch; route-level `RouterErrorBoundary`.
 - **Testing:** Vitest + jsdom + `@testing-library/react` for unit/component
@@ -62,11 +75,13 @@ monorepo nesting. The following are therefore requirements, not suggestions:
   `src/{clients,components,config,domain,hooks,navigation,pages,styles,utils,test}`
   plus `app.tsx`, `index.tsx`, `router.tsx`, `index.html`.
 
-### Explicitly dropped from the reference (per brief scope)
+### Explicitly dropped from the reference (per brief scope + Q1 decision)
 
 - All of `auth/` (MSAL, providers, login, require-auth/role) — removed, not
   stubbed. `router.tsx` has no auth guards; `proxyFetch` does not attach tokens.
 - Auth-derived `Config` fields (authority, clientId, redirect URIs, proxy auth).
+- All `@lego/*` packages and the private-registry `.npmrc` scope, the CONNECT
+  theme CSS imports, and CONNECT-specific test quirks.
 - Observability (`observability/faro/`, Grafana Faro deps) is **optional**;
   default to leaving it out to reduce surface, but mirroring it is acceptable if
   kept behind an enable flag. This is an open decision (see §5).
@@ -125,12 +140,13 @@ This is the novel piece with no reference precedent. Constraints:
   SVG gives precise geometry and easy dashed orbits; DOM gives easier CONNECT
   component embedding and accessibility. No mandate; pick and record the choice
   in the first orbit slice.
-- **CONNECT + custom visualization fit** — the design system has no orbit/graph
-  primitive and no layout primitives. Risk that heavy custom CSS is needed;
-  contain it to the visualization component and keep chrome (top bar, nav, rail,
-  cards) on CONNECT components.
-- **Observability** — keep Faro or drop it (§2). Decide in the scaffold slice;
-  default drop.
+- **Custom UI layer scope** — with CONNECT dropped, the local `ui/` primitives
+  (Button, Tag/Badge, Popover, Card, ProgressBar, Icon) must stay minimal and
+  purpose-built for this app; avoid growing a general design system. Contain
+  visualization CSS to the orbit component.
+- **Observability** — Faro is LEGO/Grafana-tied; **dropped** along with `@lego`
+  (confirm in scaffold slice). If lightweight error reporting is wanted later,
+  add a neutral one behind the `ErrorBoundary`.
 - **Package manager** — the reference uses `pnpm`. Not load-bearing here; pick
   one (`pnpm` recommended for parity) and use it consistently. Lockfile is
   committed; `node_modules` is git-ignored.

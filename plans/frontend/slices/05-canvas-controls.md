@@ -1,6 +1,7 @@
 # Slice 5 — Canvas controls (zoom + recenter)
 
-**Discharges:** IB §4 (zoom as view transform, recenter), IB §2 (CONNECT chrome).
+**Discharges:** IB §4 (zoom as view transform, recenter), IB §2 (local `ui/`
+primitives).
 
 **Demo:** the bottom-left control cluster from the concept appears — zoom out
 (`−`), a readable zoom **percentage** (e.g. `100%`), zoom in (`+`), and a
@@ -10,7 +11,7 @@ success signal).
 
 ## Tasks
 
-- [ ] Add a `canvas-controls` component (CONNECT buttons + icons) fixed at the
+- [ ] Add a `canvas-controls` component (local `ui/` icon buttons) fixed at the
       bottom-left of the Overview canvas.
 - [ ] Implement zoom as a **view transform** over the orbit (scale/translate),
       not a change to the underlying layout/data (IB §4).
