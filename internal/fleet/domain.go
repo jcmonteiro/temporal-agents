@@ -266,10 +266,11 @@ type NodeResult struct {
 // variant "Develop step token usage: 1,234 tokens." The captured group is the
 // comma-grouped number.
 //
-// In both fleet modes the child DevelopWorkflow returns only its develop-step
-// usage: the review loop is an abandoned child (default mode) or reports its own
-// total (--with-remote), so the number parsed here is always the develop step's,
-// which is why SummarizeFleet labels the aggregate as develop-step usage. This
+// The fleet runs each node's DevelopWorkflow in AwaitReview mode, whose awaited
+// review child runs in its own session and reports its own total, so the summary
+// the child DevelopWorkflow returns carries only its develop-step usage. The
+// number parsed here is therefore always the develop step's, which is why
+// SummarizeFleet labels the aggregate as develop-step usage. This
 // is a hidden coupling to codereview's human summary wording; a structured token
 // count would be more robust but would change DevelopWorkflow's string result
 // type and every caller, so the regex is kept deliberately.
