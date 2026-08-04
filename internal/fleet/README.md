@@ -144,9 +144,15 @@ the `default` and `WithRemote` modes are the standalone `code develop` paths.
 flowchart TD
     start([DevelopInput: WorkDir, WorktreesDir, Branch, StartPoint=base,<br/>MergeBranches, Prompt, Summary, AwaitReview / WithRemote]) --> branch["CreateBranch<br/>(fresh worktree under WorktreesDir,<br/>cut from StartPoint; RetryPolicy: 5)"]
     branch --> seed{"MergeBranches?"}
-    seed -->|yes| seedAct["SeedBranches<br/>(merge each dependency branch;<br/>base := post-seed HEAD)"]
     seed -->|no| devAgent
-    seedAct --> devAgent["RunDevelopAgent(prompt)<br/>long-running, heartbeats; RetryPolicy: 2"]
+    seed -->|yes| merge["MergeDependency (per dependency branch)"]
+    merge --> conflict{"Conflicted?"}
+    conflict -->|no| seeded["base := post-merge HEAD"]
+    conflict -->|yes| resolve["ResolveMergeConflict<br/>(agent; bounded retries)"]
+    resolve -->|resolved| seeded
+    resolve -->|exhausted| abort["AbortMerge<br/>(clean branch) → return blocked"]
+    abort --> blocked([return: SeedConflictBlocked → node BLOCKED])
+    seeded --> devAgent["RunDevelopAgent(prompt)<br/>long-running, heartbeats; RetryPolicy: 2"]
     devAgent --> ensure["EnsureDeveloped<br/>(HEAD advanced past base + clean tree)"]
     ensure --> devSummary["summarizeForWebhook (against quiescent tree)"]
     devSummary --> mode{"mode"}
@@ -165,11 +171,17 @@ flowchart TD
 
 **Notes**
 
-- **Seeding.** When `MergeBranches` is set (a dependent node), `SeedBranches`
-  merges each dependency branch into the fresh branch before the agent runs and
-  reports the post-seed HEAD, which becomes `EnsureDeveloped`'s base — so that
+- **Seeding.** When `MergeBranches` is set (a dependent node), each dependency
+  branch is merged into the fresh branch before the agent runs (`MergeDependency`
+  per branch); the post-seed HEAD becomes `EnsureDeveloped`'s base — so that
   check verifies the *develop agent* (not the seeding merges) advanced the
   branch.
+- **Seed conflicts.** A conflicting dependency merge is resolved by the agent
+  (`ResolveMergeConflict`, bounded retries). If resolution is exhausted the
+  merge is aborted (`AbortMerge`, leaving the branch clean — no conflict markers)
+  and the workflow returns the non-retryable `SeedConflictBlocked` type, which
+  the fleet records as the node being **blocked** (recoverable) rather than
+  failed; its dependents are still gated.
 - **`AwaitReview` (fleet Phase 1).** The child runs the local review loop as a
   supervised, awaited child and returns once it converges, without opening a PR
   or running the pilot. This is what lets the fleet gate a dependent on its
