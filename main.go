@@ -686,7 +686,14 @@ func workflowResult(ctx context.Context, run client.WorkflowRun, id string) (str
 	case "open-pr":
 		var res codereview.OpenPRResult
 		if err := run.Get(ctx, &res); err != nil {
-			return "", err
+			// A pre-change open-pr workflow completed with a plain string result, which
+			// cannot decode into OpenPRResult. Fall back to string decode so watching a
+			// legacy completed run still renders instead of erroring.
+			var out string
+			if serr := run.Get(ctx, &out); serr != nil {
+				return "", err
+			}
+			return out, nil
 		}
 		if res.URL != "" {
 			return res.Summary + "\n" + res.URL, nil
