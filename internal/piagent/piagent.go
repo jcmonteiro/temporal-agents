@@ -21,9 +21,17 @@ import (
 )
 
 // piArgs builds the pi CLI arguments for a run. Kept separate from Run so the
-// argument wiring is unit-testable without spawning pi.
-func piArgs(sessionID string) []string {
-	return []string{"-p", "--mode", "json", "--session-id", sessionID}
+// argument wiring is unit-testable without spawning pi. When readOnly is set it
+// appends a tool denylist for the built-in file-mutating tools (edit, write) so
+// a run contracted to only read the repository cannot persist changes through
+// them even if the agent tries; exploration tools (read, bash) stay enabled and
+// any bash-driven mutation is contained by the caller's disposable sandbox.
+func piArgs(sessionID string, readOnly bool) []string {
+	args := []string{"-p", "--mode", "json", "--session-id", sessionID}
+	if readOnly {
+		args = append(args, "--exclude-tools", "edit,write")
+	}
+	return args
 }
 
 // maxResumes bounds how many times Run resumes the session after a threshold
@@ -276,6 +284,15 @@ func (Agent) Run(ctx context.Context, prompt, workDir string) (output string, to
 	return r.Output, r.Tokens, err
 }
 
+// RunReadOnly runs the Pi agent under a read-only tool policy: the built-in
+// file-mutating tools are denied so the run cannot persist changes through them
+// even when instructed to. Used by callers such as fleet planning whose
+// contract is to read the repository without changing it.
+func (Agent) RunReadOnly(ctx context.Context, prompt, workDir string) (output string, tokens int, err error) {
+	r, err := runAgent(ctx, prompt, workDir, true)
+	return r.Output, r.Tokens, err
+}
+
 // Run runs the Pi agent for prompt in workDir, streaming Pi's JSON events as
 // Temporal heartbeat details. Each heartbeat carries the full progress
 // transcript so far; the final assistant message is returned as the result.
@@ -286,6 +303,13 @@ func (Agent) Run(ctx context.Context, prompt, workDir string) (output string, to
 // constant across activity retries but changes on continue-as-new, so each
 // chained iteration still gets its own fresh session.
 func Run(ctx context.Context, prompt, workDir string) (Result, error) {
+	return runAgent(ctx, prompt, workDir, false)
+}
+
+// runAgent is the shared body of Run and the read-only variant: it resolves the
+// session id, warms the context-window cache, builds the CLI arguments (with the
+// read-only tool policy when requested), and drives the resume loop.
+func runAgent(ctx context.Context, prompt, workDir string, readOnly bool) (Result, error) {
 	sessionID := activity.GetInfo(ctx).WorkflowExecution.RunID
 
 	// Resolve context-window sizes from the pi model catalog for the token
@@ -293,7 +317,7 @@ func Run(ctx context.Context, prompt, workDir string) (Result, error) {
 	// percentage without blocking the stream loop on the catalog subprocess.
 	go warmContextWindows()
 
-	args := piArgs(sessionID)
+	args := piArgs(sessionID, readOnly)
 	return runLoop(ctx, runOnce, args, workDir, prompt)
 }
 

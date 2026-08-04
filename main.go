@@ -21,6 +21,7 @@ import (
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/worker"
 	"temporal-agents/internal/codereview"
+	"temporal-agents/internal/fleet"
 	"temporal-agents/internal/ghcli"
 	"temporal-agents/internal/gitcli"
 	"temporal-agents/internal/notification"
@@ -62,6 +63,8 @@ func main() {
 		templateCmd(os.Args[2:])
 	case "code":
 		codeCmd(os.Args[2:])
+	case "fleet":
+		fleetCmd(os.Args[2:])
 	case "cleanup":
 		cleanupCmd(os.Args[2:])
 	case "watch":
@@ -84,6 +87,7 @@ COMMANDS
   worker [--no-desktop] [--webhook <url>]
                                          Start the Temporal worker
   code <subcommand>                      Agent workflows for the current repo
+  fleet <subcommand>                     Fan-out orchestration across a dependency graph
   cleanup                                Remove worktrees created by 'code develop --worktree'
   run "<prompt>" [--save <name>] [--chain]
                                          Start a workflow (returns immediately)
@@ -101,6 +105,8 @@ EXAMPLES
   temporal-agents schedule "0 9 * * *" "post the daily digest" --save digest
   temporal-agents template list
   temporal-agents template run triage
+  temporal-agents fleet plan "expose the pricing domain via REST and gRPC"
+  temporal-agents fleet execute --plan fleet-plan.json
   temporal-agents cleanup
 
 FLAGS
@@ -445,6 +451,13 @@ func runWorker(opts notifyOptions) {
 		Agent: piagent.Agent{},
 	})
 
+	// The fleet workflows fan out over a dependency graph, reusing the codereview
+	// develop workflow for each node. FleetWorkflow runs codereview.DevelopWorkflow
+	// as children, which is already registered above.
+	w.RegisterWorkflow(fleet.FleetPlanWorkflow)
+	w.RegisterWorkflow(fleet.FleetWorkflow)
+	w.RegisterActivity(&fleet.Activities{Agent: piagent.Agent{}, Git: gitcli.New()})
+
 	// A single notification activity, shared by every workflow that notifies.
 	w.RegisterActivity(&notification.Activity{Notifier: buildNotifier(opts)})
 
@@ -555,7 +568,7 @@ func listRunning() {
 			fatalf("Could not list workflows: %v", err)
 		}
 		for _, e := range resp.Executions {
-			rows = append(rows, row{"run", e.Execution.WorkflowId})
+			rows = append(rows, row{classifyWorkflow(e.Execution.WorkflowId), e.Execution.WorkflowId})
 		}
 		next = resp.NextPageToken
 		if len(next) == 0 {
@@ -591,6 +604,35 @@ func listRunning() {
 	fmt.Printf("\n%d active\n", len(rows))
 }
 
+// classifyWorkflow labels a workflow row by its ID prefix so `list` surfaces
+// what each running workflow is. Fleet parents ("fleet-<uuid>") and their
+// per-node develop children ("fleet-<uuid>-<nodeid>") share the "fleet-" prefix,
+// so the two are told apart by whether the text after the prefix is a bare
+// UUID (the parent) or a UUID with a "-<nodeid>" suffix (a child node).
+func classifyWorkflow(id string) string {
+	switch {
+	case strings.HasPrefix(id, "fleet-plan-"):
+		return "fleet-plan"
+	case strings.HasPrefix(id, "fleet-"):
+		if _, err := uuid.Parse(strings.TrimPrefix(id, "fleet-")); err == nil {
+			return "fleet"
+		}
+		return "fleet-node"
+	case strings.HasPrefix(id, "develop-"):
+		return "develop"
+	case strings.HasPrefix(id, "review-"):
+		return "review"
+	case strings.HasPrefix(id, "pilot-"):
+		return "pilot"
+	case strings.HasPrefix(id, "open-pr-"):
+		return "open-pr"
+	case strings.HasPrefix(id, "schedule-"):
+		return "schedule"
+	default:
+		return "run"
+	}
+}
+
 // watchRun polls the workflow and prints Pi's live progress (from activity
 // heartbeat details), then prints the final result on completion.
 func watchRun(id string) {
@@ -618,12 +660,80 @@ func watchRun(id string) {
 		time.Sleep(time.Second)
 	}
 
-	var out string
-	if err := c.GetWorkflow(ctx, id, "").Get(ctx, &out); err != nil {
+	out, err := workflowResult(ctx, c.GetWorkflow(ctx, id, ""), id)
+	if err != nil {
 		fatalf("Workflow ended with error: %v", err)
 	}
 	fmt.Println("\n─── result ───")
 	fmt.Println(out)
+}
+
+// workflowResult decodes a completed workflow's result into the concrete type
+// that workflow returns and renders it for display. Most workflows return a
+// plain string summary, but a few return structured values — FleetPlanWorkflow a
+// fleet.FleetPlan and OpenPRWorkflow a codereview.OpenPRResult — that cannot be
+// decoded into a string. It picks the decode target from the workflow-ID class
+// (see classifyWorkflow) so `watch` also works for the structured-result
+// workflows advertised by `fleet plan` and the open-PR stage.
+func workflowResult(ctx context.Context, run client.WorkflowRun, id string) (string, error) {
+	switch classifyWorkflow(id) {
+	case "fleet-plan":
+		var plan fleet.FleetPlan
+		if err := run.Get(ctx, &plan); err != nil {
+			return "", err
+		}
+		return formatFleetPlan(plan), nil
+	case "open-pr":
+		var res codereview.OpenPRResult
+		if err := run.Get(ctx, &res); err != nil {
+			// A pre-change open-pr workflow completed with a plain string result, which
+			// cannot decode into OpenPRResult. Fall back to string decode so watching a
+			// legacy completed run still renders instead of erroring.
+			var out string
+			if serr := run.Get(ctx, &out); serr != nil {
+				return "", err
+			}
+			return out, nil
+		}
+		if res.URL != "" {
+			return res.Summary + "\n" + res.URL, nil
+		}
+		return res.Summary, nil
+	case "review":
+		var outcome codereview.ReviewOutcome
+		if err := run.Get(ctx, &outcome); err != nil {
+			// A pre-change review workflow completed with a plain string result, which
+			// cannot decode into ReviewOutcome. Fall back to string decode so watching a
+			// legacy completed run still renders instead of erroring.
+			var out string
+			if serr := run.Get(ctx, &out); serr != nil {
+				return "", err
+			}
+			return out, nil
+		}
+		return outcome.Summary, nil
+	default:
+		var out string
+		if err := run.Get(ctx, &out); err != nil {
+			return "", err
+		}
+		return out, nil
+	}
+}
+
+// formatFleetPlan renders a fleet plan's goal and its node list (with each
+// node's ordering dependencies) for display.
+func formatFleetPlan(plan fleet.FleetPlan) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Fleet plan (%d node(s)) for: %s\n", len(plan.Nodes), plan.Goal)
+	for _, n := range plan.Nodes {
+		if len(n.DependsOn) == 0 {
+			fmt.Fprintf(&b, "  - %s\n", n.ID)
+		} else {
+			fmt.Fprintf(&b, "  - %s (depends on %s)\n", n.ID, strings.Join(n.DependsOn, ", "))
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // printNewLines prints lines from cur that differ from the already-printed

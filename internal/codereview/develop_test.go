@@ -1,6 +1,7 @@
 package codereview
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -35,7 +36,7 @@ func TestDevelopWorkflow_HappyPath_DevelopsThenTriggersReview(t *testing.T) {
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1", "sha2"}, nil)
 	// The review loop is triggered as a child workflow; mock it so the child
 	// starts and completes without running its own activities.
-	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
 
 	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing"})
 
@@ -45,6 +46,156 @@ func TestDevelopWorkflow_HappyPath_DevelopsThenTriggersReview(t *testing.T) {
 	require.NoError(t, env.GetWorkflowResult(&out))
 	require.Contains(t, out, "feat/x")
 	require.Contains(t, out, "started review")
+	env.AssertExpectations(t)
+}
+
+func TestDevelopWorkflow_AwaitReview_SeedsFromDependencyBranchesAndAwaitsReview(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
+		Return(CreateBranchResult{Branch: "feat/b", WorkDir: "/wt/b", BaseSHA: "base"}, nil)
+	// Each dependency branch is merged into the fresh branch before development;
+	// a clean merge reports the post-seed HEAD.
+	env.OnActivity(a.MergeDependency, mock.Anything, mock.MatchedBy(func(req MergeDependencyRequest) bool {
+		return req.WorkDir == "/wt/b" && req.Branch == "feat/a"
+	})).Return(MergeDependencyResult{Head: "seeded-head"}, nil)
+	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
+	// EnsureDeveloped validates against the post-seed HEAD, so the check confirms
+	// the develop agent (not the seeding merges) advanced the branch.
+	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.MatchedBy(func(req EnsureDevelopedRequest) bool {
+		return req.BaseSHA == "seeded-head"
+	})).Return([]string{"sha1"}, nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{
+		WorkDir: "/repo", Branch: "feat/b", WorktreesDir: "/wt", Prompt: "expose via REST",
+		MergeBranches: []string{"feat/a"}, AwaitReview: true,
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	var out string
+	require.NoError(t, env.GetWorkflowResult(&out))
+	// Phase 1 waits for the review loop to converge (not merely start it).
+	require.Contains(t, out, "local review converged")
+	env.AssertExpectations(t)
+}
+
+func TestDevelopWorkflow_AwaitReview_ReviewDidNotConverge_FailsWithBlockingError(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
+		Return(CreateBranchResult{Branch: "feat/b", WorkDir: "/wt/b", BaseSHA: "base"}, nil)
+	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
+	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	// The review loop stopped at the pass cap with feedback still outstanding, so
+	// the child reports a non-converged outcome.
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).
+		Return(ReviewOutcome{Summary: "Review stopped after 5 pass(es).", Converged: false}, nil)
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{
+		WorkDir: "/repo", Branch: "feat/b", WorktreesDir: "/wt", Prompt: "expose via REST",
+		AwaitReview: true,
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	// A non-converged review must not read as success: the node fails with the
+	// dedicated, non-retryable type so the fleet gates its dependents (as blocked)
+	// rather than starting them against un-addressed review feedback.
+	var appErr *temporal.ApplicationError
+	require.ErrorAs(t, env.GetWorkflowError(), &appErr)
+	require.Equal(t, ReviewNotConvergedErrType, appErr.Type())
+}
+
+func TestDevelopWorkflow_SeedConflict_Resolved_ProceedsToDevelop(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
+		Return(CreateBranchResult{Branch: "feat/b", WorkDir: "/wt/b", BaseSHA: "base"}, nil)
+	// The dependency merge conflicts; the agent resolves it and the seed reports
+	// the resolved HEAD, which becomes the develop base.
+	env.OnActivity(a.MergeDependency, mock.Anything, mock.Anything).
+		Return(MergeDependencyResult{Conflicted: true}, nil)
+	env.OnActivity(a.ResolveMergeConflict, mock.Anything, mock.Anything).
+		Return(ResolveMergeConflictResult{Head: "resolved-head", Tokens: 100}, nil)
+	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
+	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.MatchedBy(func(req EnsureDevelopedRequest) bool {
+		return req.BaseSHA == "resolved-head"
+	})).Return([]string{"sha1"}, nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{
+		WorkDir: "/repo", Branch: "feat/b", WorktreesDir: "/wt", Prompt: "expose via REST",
+		MergeBranches: []string{"feat/a"}, AwaitReview: true,
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	env.AssertExpectations(t)
+}
+
+func TestDevelopWorkflow_SeedConflict_Unresolved_AbortsAndBlocks(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
+		Return(CreateBranchResult{Branch: "feat/b", WorkDir: "/wt/b", BaseSHA: "base"}, nil)
+	env.OnActivity(a.MergeDependency, mock.Anything, mock.Anything).
+		Return(MergeDependencyResult{Conflicted: true}, nil)
+	// The agent cannot resolve the conflict (its bounded attempts fail).
+	env.OnActivity(a.ResolveMergeConflict, mock.Anything, mock.Anything).
+		Return(ResolveMergeConflictResult{}, errors.New("still conflicted"))
+	// The workflow aborts the in-progress merge so the branch is left clean.
+	var aborted bool
+	env.OnActivity(a.AbortMerge, mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) { aborted = true }).Return(nil)
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{
+		WorkDir: "/repo", Branch: "feat/b", WorktreesDir: "/wt", Prompt: "expose via REST",
+		MergeBranches: []string{"feat/a"}, AwaitReview: true,
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	require.Error(t, err)
+	// The failure carries the blocked type so the fleet records the node as
+	// blocked (recoverable) rather than failed, and the develop agent never ran.
+	var appErr *temporal.ApplicationError
+	require.True(t, errors.As(err, &appErr))
+	require.Equal(t, SeedConflictBlockedErrType, appErr.Type())
+	require.True(t, aborted, "the in-progress merge must be aborted to leave a clean branch")
+	env.AssertExpectations(t)
+}
+
+func TestDevelopWorkflow_SeedConflict_AbortFailure_FailsNotBlocked(t *testing.T) {
+	env := newDevelopEnv(t)
+
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
+		Return(CreateBranchResult{Branch: "feat/b", WorkDir: "/wt/b", BaseSHA: "base"}, nil)
+	env.OnActivity(a.MergeDependency, mock.Anything, mock.Anything).
+		Return(MergeDependencyResult{Conflicted: true}, nil)
+	env.OnActivity(a.ResolveMergeConflict, mock.Anything, mock.Anything).
+		Return(ResolveMergeConflictResult{}, errors.New("still conflicted"))
+	// The cleanup abort itself fails, so the branch may remain half-merged with
+	// conflict markers and the "blocked, branch left clean" classification cannot
+	// be trusted.
+	env.OnActivity(a.AbortMerge, mock.Anything, mock.Anything).
+		Return(errors.New("abort failed"))
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{
+		WorkDir: "/repo", Branch: "feat/b", WorktreesDir: "/wt", Prompt: "expose via REST",
+		MergeBranches: []string{"feat/a"}, AwaitReview: true,
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	err := env.GetWorkflowError()
+	require.Error(t, err)
+	// A failed abort must not be classified as blocked: the failure carries no
+	// SeedConflictBlockedErrType, so the fleet records the node as failed rather
+	// than claiming the branch was left clean.
+	var appErr *temporal.ApplicationError
+	if errors.As(err, &appErr) {
+		require.NotEqual(t, SeedConflictBlockedErrType, appErr.Type())
+	}
 	env.AssertExpectations(t)
 }
 
@@ -66,7 +217,7 @@ func TestDevelopWorkflow_Worktree_PassesWorktreesDirAndDevelopsInReturnedWorktre
 	})).Return([]string{"sha1"}, nil)
 	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.MatchedBy(func(in ReviewInput) bool {
 		return in.WorkDir == worktree
-	})).Return("reviewed", nil)
+	})).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
 
 	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", WorktreesDir: "/cfg/worktrees", Prompt: "do the thing"})
 
@@ -85,7 +236,7 @@ func TestDevelopWorkflow_GeneratedBranch_ReportsResolvedBranchName(t *testing.T)
 	})).Return(CreateBranchResult{Branch: "flaming-duck-2026-jul-29", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
-	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
 
 	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Prompt: "do the thing"})
 
@@ -110,7 +261,7 @@ func TestDevelopWorkflow_SeedsReviewWithDevelopTokenUsageAndReportsItInResult(t 
 	// workflows").
 	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.MatchedBy(func(in ReviewInput) bool {
 		return in.TokensSoFar == 4200
-	})).Return("reviewed", nil)
+	})).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
 
 	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing"})
 
@@ -128,7 +279,7 @@ func TestDevelopWorkflow_Complete_NotifiesReviewWillCommence(t *testing.T) {
 	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
-	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
 	var got notification.Notification
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
@@ -153,7 +304,7 @@ func TestDevelopWorkflow_Summary_SetsWebhookBodyAndPropagatesToReview(t *testing
 	// --summary is propagated to the review loop this workflow spawns.
 	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.MatchedBy(func(in ReviewInput) bool {
 		return in.Summary
-	})).Return("reviewed", nil)
+	})).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
 	env.OnActivity(a.SummarizeLastRun, mock.Anything, mock.Anything).Return("develop summary for webhook", nil)
 	var got notification.Notification
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
@@ -174,7 +325,7 @@ func TestDevelopWorkflow_NoSummaryFlag_DoesNotSummarize(t *testing.T) {
 	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
-	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
 	var got notification.Notification
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { got = args.Get(1).(notification.Notification) }).Return(nil)
@@ -233,8 +384,9 @@ func TestDevelopWorkflow_WithRemote_OrchestratesReviewOpenPRAndPilot(t *testing.
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
 	// The full remote pipeline runs as supervised children this workflow waits on.
-	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
-	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).Return("opened", nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
+	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).
+		Return(OpenPRResult{Summary: "opened", URL: "https://github.com/acme/widgets/pull/7"}, nil)
 	// The pilot loop is triggered with chaining enabled so it loops until Copilot
 	// has nothing left; here it is mocked to return once.
 	env.OnWorkflow(PilotWorkflow, mock.Anything, mock.MatchedBy(func(in PilotInput) bool {
@@ -250,6 +402,9 @@ func TestDevelopWorkflow_WithRemote_OrchestratesReviewOpenPRAndPilot(t *testing.
 	// The result reflects the whole pipeline having completed, not just review.
 	require.Contains(t, out, "opened the PR")
 	require.Contains(t, out, "pilot")
+	// The PR URL is threaded through the develop result so the fleet orchestrator
+	// can surface it as the node's PR link.
+	require.Contains(t, out, "https://github.com/acme/widgets/pull/7")
 	env.AssertExpectations(t)
 }
 
@@ -265,8 +420,8 @@ func TestDevelopWorkflow_WithRemote_SeedsReviewTokensAndPropagatesSummary(t *tes
 	// --summary propagated, exactly like the non-remote path.
 	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.MatchedBy(func(in ReviewInput) bool {
 		return in.TokensSoFar == 4200 && in.Summary
-	})).Return("reviewed", nil)
-	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).Return("opened", nil)
+	})).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
+	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).Return(OpenPRResult{Summary: "opened"}, nil)
 	env.OnWorkflow(PilotWorkflow, mock.Anything, mock.Anything).Return("piloted", nil)
 	var sent []notification.Notification
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
@@ -300,10 +455,10 @@ func TestDevelopWorkflow_WithRemote_OpenPRFailure_StopsBeforePilot(t *testing.T)
 	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
-	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
 	// Opening the PR fails, so the pilot loop must never start.
 	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).
-		Return("", temporal.NewNonRetryableApplicationError("no commits to open a PR", "OpenPR", nil))
+		Return(OpenPRResult{}, temporal.NewNonRetryableApplicationError("no commits to open a PR", "OpenPR", nil))
 
 	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing", WithRemote: true})
 
@@ -318,10 +473,10 @@ func TestDevelopWorkflow_WithRemote_PipelineFailure_NotifiesPipelineNotDevelopme
 	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
-	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return("reviewed", nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
 	// Opening the PR fails after development has already landed its commits.
 	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).
-		Return("", temporal.NewNonRetryableApplicationError("push rejected", "OpenPR", nil))
+		Return(OpenPRResult{}, temporal.NewNonRetryableApplicationError("push rejected", "OpenPR", nil))
 	var sent []notification.Notification
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { sent = append(sent, args.Get(1).(notification.Notification)) }).Return(nil)

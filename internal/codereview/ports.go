@@ -17,14 +17,17 @@ var ErrBranchOrWorktreeExists = errors.New("branch or worktree already exists")
 type Git interface {
 	// CurrentBranch returns the checked-out branch name in dir.
 	CurrentBranch(ctx context.Context, dir string) (string, error)
-	// CreateBranch creates and checks out a new branch at the current HEAD in
-	// dir. It wraps ErrBranchOrWorktreeExists when the branch already exists.
-	CreateBranch(ctx context.Context, dir, branch string) error
+	// CreateBranch creates and checks out a new branch in dir. When startPoint is
+	// non-empty the branch is created at that commit-ish; an empty startPoint
+	// falls back to dir's current HEAD. It wraps ErrBranchOrWorktreeExists when
+	// the branch already exists.
+	CreateBranch(ctx context.Context, dir, branch, startPoint string) error
 	// AddWorktree creates a new worktree at worktreePath checked out on a new
-	// branch created at the current HEAD of the repository in dir. It wraps
-	// ErrBranchOrWorktreeExists when the branch or the worktree path already
-	// exists.
-	AddWorktree(ctx context.Context, dir, worktreePath, branch string) error
+	// branch created off the repository in dir. When startPoint is non-empty the
+	// branch is created at that commit-ish; an empty startPoint falls back to the
+	// repository's current HEAD. It wraps ErrBranchOrWorktreeExists when the
+	// branch or the worktree path already exists.
+	AddWorktree(ctx context.Context, dir, worktreePath, branch, startPoint string) error
 	// Head returns the commit SHA that HEAD points at in dir.
 	Head(ctx context.Context, dir string) (string, error)
 	// HasChanges reports whether dir has uncommitted changes (tracked or
@@ -39,6 +42,26 @@ type Git interface {
 	CommitsSince(ctx context.Context, dir, sha string) ([]string, error)
 	// Push publishes HEAD to the named branch on the origin remote.
 	Push(ctx context.Context, dir, branch string) error
+	// MergeBranch merges branch into the branch currently checked out in dir
+	// (creating a merge commit or fast-forwarding). It seeds a dependent's branch
+	// with the committed work of the branches it depends on. A conflict returns an
+	// error and leaves the merge in progress for the caller to resolve or abort.
+	MergeBranch(ctx context.Context, dir, branch string) error
+	// AbortMerge aborts an in-progress merge in dir, restoring the pre-merge state
+	// so a branch that could not be seeded cleanly is left clean rather than
+	// half-merged with conflict markers.
+	AbortMerge(ctx context.Context, dir string) error
+	// HasConflicts reports whether dir has unmerged paths from an in-progress
+	// merge. It lets a caller tell a merge that stopped on conflict (recoverable
+	// by agent resolution or AbortMerge) apart from other git failures, and verify
+	// a resolution attempt left no conflict markers.
+	HasConflicts(ctx context.Context, dir string) (bool, error)
+	// IsAncestor reports whether commit ancestor is an ancestor of (i.e. reachable
+	// from) commit descendant in dir. It lets a caller prove a dependency branch
+	// was actually merged: after a resolution the dependency tip must be an
+	// ancestor of HEAD, which distinguishes a genuine merge commit from an aborted
+	// merge that left HEAD on its pre-merge commit.
+	IsAncestor(ctx context.Context, dir, ancestor, descendant string) (bool, error)
 }
 
 // PullRequests is the port for the GitHub operations the workflow needs.

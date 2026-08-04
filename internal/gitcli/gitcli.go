@@ -5,9 +5,11 @@ package gitcli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"temporal-agents/internal/codereview"
@@ -28,17 +30,95 @@ func (g Git) CurrentBranch(ctx context.Context, dir string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// CreateBranch creates and checks out a new branch at the current HEAD in dir.
-func (g Git) CreateBranch(ctx context.Context, dir, branch string) error {
-	_, err := run(ctx, dir, "checkout", "-b", branch)
+// CreateBranch creates and checks out a new branch in dir. When startPoint is
+// non-empty the branch is created at that commit-ish; an empty startPoint lets
+// git default to dir's current HEAD.
+func (g Git) CreateBranch(ctx context.Context, dir, branch, startPoint string) error {
+	args := []string{"checkout", "-b", branch}
+	if startPoint != "" {
+		args = append(args, startPoint)
+	}
+	_, err := run(ctx, dir, args...)
 	return classifyExists(err)
 }
 
 // AddWorktree creates a new worktree at worktreePath checked out on a new
-// branch created at the current HEAD of the repository in dir.
-func (g Git) AddWorktree(ctx context.Context, dir, worktreePath, branch string) error {
-	_, err := run(ctx, dir, "worktree", "add", worktreePath, "-b", branch)
+// branch created off the repository in dir. When startPoint is non-empty the
+// branch is created at that commit-ish; an empty startPoint lets git default to
+// the repository's current HEAD.
+func (g Git) AddWorktree(ctx context.Context, dir, worktreePath, branch, startPoint string) error {
+	args := []string{"worktree", "add", worktreePath, "-b", branch}
+	if startPoint != "" {
+		args = append(args, startPoint)
+	}
+	_, err := run(ctx, dir, args...)
 	return classifyExists(err)
+}
+
+// AddDisposableClone creates a throwaway standalone clone of the repo in dir at
+// a fresh temporary path and returns that path. It lets a read-only step (e.g.
+// fleet planning) run against an isolated copy of the repository so the step
+// cannot touch the user's working tree, branch, or index; callers pair it with
+// RemoveDisposableClone to discard the copy afterward.
+//
+// A standalone clone is used deliberately over a linked worktree: the clone has
+// its own .git directory with an independent ref namespace and object database,
+// so a command run inside the sandbox — git branch, git tag, a detached commit,
+// anything a bash tool call might invoke — lands in the throwaway clone and can
+// never persist refs or objects in the source repository. A linked worktree
+// (git worktree add) would instead share the source's common .git, letting such
+// writes escape the read-only boundary even though the working tree is separate.
+// --no-hardlinks copies the object database rather than hardlinking it, so the
+// sandbox shares no storage with the source at all.
+//
+// The clone is also detached from its writable source before it is returned:
+// `git clone` records an `origin` remote pointing back at dir, and because
+// read-only mode intentionally leaves `bash` enabled a `git push origin
+// refs/...` from the sandbox could still create refs or objects in the source
+// repository — an escape the fingerprint tripwire cannot catch, as it only
+// covers the sandbox's HEAD, index, and worktree. Removing the remote leaves
+// the sandbox with no configured path back to the source. Partial clones left
+// behind by a failure are removed so a failed call leaves nothing behind.
+func (g Git) AddDisposableClone(ctx context.Context, dir string) (string, error) {
+	// Reserve a unique path race-free with MkdirTemp, which creates the directory
+	// with restrictive 0700 permissions. Clone into that existing empty directory
+	// rather than removing it first: `git clone` accepts an empty destination and
+	// only refuses a non-empty one, so keeping the directory preserves its 0700
+	// mode. Removing it and letting `git clone` recreate the destination would
+	// reintroduce it under the process umask (commonly 0755), briefly exposing the
+	// private repository copy to other local users.
+	path, err := os.MkdirTemp("", "fleet-plan-*")
+	if err != nil {
+		return "", fmt.Errorf("reserve sandbox path: %w", err)
+	}
+	// Clone dir ("." resolves to it under `git -C dir`) into the absolute temp
+	// path. --no-hardlinks forces a full object-database copy so the sandbox is
+	// storage-independent from the source repo.
+	if _, err := run(ctx, dir, "clone", "--no-hardlinks", ".", path); err != nil {
+		// git may have created a partial destination before failing; discard it so a
+		// failed call leaves nothing behind.
+		_ = os.RemoveAll(path)
+		return "", err
+	}
+	// Detach the clone from its writable source by dropping the `origin` remote
+	// git recorded, so no `git push origin ...` from the sandbox can reach the
+	// source repo's refs or objects.
+	if _, err := run(ctx, path, "remote", "remove", "origin"); err != nil {
+		_ = os.RemoveAll(path)
+		return "", err
+	}
+	return path, nil
+}
+
+// RemoveDisposableClone discards a disposable clone previously created at path,
+// deleting its directory and its independent .git so the sandbox leaves nothing
+// behind. Unlike a linked worktree there is no source-repo bookkeeping to
+// update, so a plain recursive remove suffices.
+func (g Git) RemoveDisposableClone(_ context.Context, path string) error {
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("remove disposable clone: %w", err)
+	}
+	return nil
 }
 
 // classifyExists wraps err with codereview.ErrBranchOrWorktreeExists when git's
@@ -76,6 +156,99 @@ func (g Git) HasChanges(ctx context.Context, dir string) (bool, error) {
 	return strings.TrimSpace(out) != "", nil
 }
 
+// Fingerprint returns a value that changes whenever any content in dir's
+// worktree or index changes — not merely whether the repository is dirty.
+// It combines the HEAD commit SHA with two independent tree object hashes: the
+// real index tree (the staging area) and a synthesized tree of the complete
+// worktree (tracked, staged, untracked, and ignored content). Because it
+// captures content rather than a dirty/clean boolean, it detects a mutation to
+// a file that was already modified before the fingerprint was taken, which a
+// dirty-flag comparison cannot.
+//
+// Hashing the real index separately is what makes staged-only changes visible:
+// if a file has an unstaged edit and something runs `git add` on it, HEAD and
+// worktree bytes are unchanged, so a worktree-only fingerprint would be
+// identical before and after even though the user's index was mutated. The
+// real index tree captures that staging. It never disturbs the user's real
+// index: `git write-tree` only reads the index, and the worktree tree is
+// synthesized in a throwaway index file via GIT_INDEX_FILE.
+//
+// Crucially it also writes no objects into the source repository. Both
+// write-tree calls (and the worktree `git add`) would otherwise persist new
+// blob and tree objects — including ignored secrets like .env and large
+// ignored trees pulled in by --force — under the source repo's .git/objects,
+// contradicting the read-only guarantee even for planning that never commits.
+// GIT_OBJECT_DIRECTORY redirects every new object into a disposable directory
+// that is removed when the fingerprint returns, while
+// GIT_ALTERNATE_OBJECT_DIRECTORIES lets git still read the repository's
+// existing objects (HEAD's tree, tracked blobs) to synthesize the trees.
+func (g Git) Fingerprint(ctx context.Context, dir string) (string, error) {
+	head, err := g.Head(ctx, dir)
+	if err != nil {
+		return "", err
+	}
+	// Locate the source repo's real object database so it can be exposed as a
+	// read-only alternate: new objects go to the disposable dir below, existing
+	// ones are read from here. Resolve to an absolute path so it does not depend
+	// on any git process's working directory.
+	realObjects, err := run(ctx, dir, "rev-parse", "--git-path", "objects")
+	if err != nil {
+		return "", err
+	}
+	realObjects = strings.TrimSpace(realObjects)
+	if !filepath.IsAbs(realObjects) {
+		realObjects = filepath.Join(dir, realObjects)
+	}
+	// Disposable object directory: every object git writes while fingerprinting
+	// lands here and is discarded, so the source repo's .git/objects is never
+	// written to. The alternate keeps existing objects readable.
+	objDir, err := os.MkdirTemp("", "fleet-fp-obj-*")
+	if err != nil {
+		return "", fmt.Errorf("reserve fingerprint object dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(objDir) }()
+	objEnv := []string{
+		"GIT_OBJECT_DIRECTORY=" + objDir,
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES=" + realObjects,
+	}
+	// Hash the real index tree so staged-only changes are covered. write-tree
+	// reads the current index and writes the corresponding tree object (now into
+	// the disposable object dir) without mutating the staged content, so it
+	// leaves the user's index intact.
+	indexTree, err := runEnv(ctx, dir, objEnv, "write-tree")
+	if err != nil {
+		return "", err
+	}
+	// Reserve a throwaway index path and seed it from HEAD before staging the
+	// worktree, all against GIT_INDEX_FILE so the user's real index is never
+	// touched. `git add --force -A` stages everything the plain form would
+	// (tracked, staged, unstaged, and untracked changes, deletions included) and,
+	// crucially, ignored files too: plain `git add -A` skips ignored paths, so an
+	// escaped command could overwrite a common ignored file such as .env while
+	// HEAD, the real index, and the worktree tree all stayed identical, letting
+	// the tripwire miss the mutation and contradicting the read-only guarantee.
+	// --force folds those ignored files into the synthesized tree so a change to
+	// one moves the fingerprint. read-tree HEAD seeds the index first so a
+	// committed-but-now-ignored file stays fingerprinted as a further guard.
+	idx, err := os.MkdirTemp("", "fleet-fp-*")
+	if err != nil {
+		return "", fmt.Errorf("reserve fingerprint index dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(idx) }()
+	env := append([]string{"GIT_INDEX_FILE=" + idx + "/index"}, objEnv...)
+	if _, err := runEnv(ctx, dir, env, "read-tree", "HEAD"); err != nil {
+		return "", err
+	}
+	if _, err := runEnv(ctx, dir, env, "add", "--force", "-A"); err != nil {
+		return "", err
+	}
+	worktreeTree, err := runEnv(ctx, dir, env, "write-tree")
+	if err != nil {
+		return "", err
+	}
+	return head + ":" + strings.TrimSpace(indexTree) + ":" + strings.TrimSpace(worktreeTree), nil
+}
+
 // Stash saves local changes (including untracked files) off to the side.
 func (g Git) Stash(ctx context.Context, dir string) error {
 	_, err := run(ctx, dir, "stash", "push", "--include-untracked")
@@ -104,6 +277,97 @@ func (g Git) Push(ctx context.Context, dir, branch string) error {
 	return err
 }
 
+// MergeBranch merges branch into the branch currently checked out in dir,
+// creating a merge commit (or fast-forwarding) with a default message
+// (--no-edit). It is used to seed a dependent's branch with the work of the
+// branches it depends on and, later, to keep it current as those branches move.
+// A merge conflict leaves the merge in progress and returns an error; the caller
+// is responsible for aborting (see AbortMerge) so the branch is not left with
+// conflict markers.
+func (g Git) MergeBranch(ctx context.Context, dir, branch string) error {
+	_, err := run(ctx, dir, "merge", "--no-edit", branch)
+	return err
+}
+
+// AbortMerge aborts a merge left in progress in dir (e.g. after a conflict),
+// restoring the branch to its pre-merge state so no conflict markers are
+// committed or pushed. It is idempotent so it stays safe under activity
+// retries: with no merge in progress (a prior attempt already aborted, or the
+// merge never started) `git merge --abort` fails with "no merge to abort", so
+// the ref is probed first and the abort is skipped when there is nothing to
+// undo. This keeps a retry after a successful abort from resurfacing as a
+// failure.
+func (g Git) AbortMerge(ctx context.Context, dir string) error {
+	inProgress, err := g.mergeInProgress(ctx, dir)
+	if err != nil {
+		return err
+	}
+	if !inProgress {
+		return nil
+	}
+	_, err = run(ctx, dir, "merge", "--abort")
+	return err
+}
+
+// mergeInProgress reports whether dir has a merge in progress by probing for
+// MERGE_HEAD, the ref git writes while a merge is underway (including one
+// stopped on conflicts). `git rev-parse -q --verify MERGE_HEAD` exits 0 when
+// the ref exists and 1 when it is absent; any other non-zero exit is a genuine
+// git failure and is returned as an error. It lets AbortMerge no-op cleanly
+// when there is nothing to abort.
+func (g Git) mergeInProgress(ctx context.Context, dir string) (bool, error) {
+	full := []string{"-C", dir, "rev-parse", "-q", "--verify", "MERGE_HEAD"}
+	cmd := exec.CommandContext(ctx, "git", full...)
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("git rev-parse --verify MERGE_HEAD: %w: %s", err, strings.TrimSpace(stderr.String()))
+}
+
+// HasConflicts reports whether dir has unmerged paths: files left in a
+// conflicted state by an in-progress merge. It lets a caller tell a merge that
+// stopped on conflict (recoverable by agent resolution, or by AbortMerge) apart
+// from other git failures, and lets it verify that a resolution attempt left no
+// conflict markers before treating the merge as done.
+func (g Git) HasConflicts(ctx context.Context, dir string) (bool, error) {
+	out, err := run(ctx, dir, "ls-files", "--unmerged")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
+// IsAncestor reports whether commit ancestor is an ancestor of descendant in
+// dir. It runs `git merge-base --is-ancestor`, which exits 0 when the relation
+// holds and 1 when it does not; a non-zero exit other than 1 is a genuine git
+// failure (e.g. an unknown revision) and is returned as an error. It lets a
+// caller prove a dependency was actually merged rather than aborted: after a
+// resolution the dependency tip must be reachable from HEAD.
+func (g Git) IsAncestor(ctx context.Context, dir, ancestor, descendant string) (bool, error) {
+	full := []string{"-C", dir, "merge-base", "--is-ancestor", ancestor, descendant}
+	cmd := exec.CommandContext(ctx, "git", full...)
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("git merge-base --is-ancestor %s %s: %w: %s", ancestor, descendant, err, strings.TrimSpace(stderr.String()))
+}
+
 // parseRevList splits `git rev-list` output into SHAs, dropping blank lines.
 func parseRevList(out string) []string {
 	var shas []string
@@ -118,12 +382,20 @@ func parseRevList(out string) []string {
 // run executes `git -C dir <args...>` and returns stdout, wrapping failures
 // with stderr for context.
 func run(ctx context.Context, dir string, args ...string) (string, error) {
+	return runEnv(ctx, dir, nil, args...)
+}
+
+// runEnv is run with extra environment variables appended (after LC_ALL=C), so
+// callers can point git at a throwaway index via GIT_INDEX_FILE without leaking
+// that setting into the process environment.
+func runEnv(ctx context.Context, dir string, extraEnv []string, args ...string) (string, error) {
 	full := append([]string{"-C", dir}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	// Pin the locale to C so git emits stable, English stderr. classifyExists
 	// matches the "already exists" substring, which would silently stop matching
 	// under a localized LANG/LC_ALL and degrade the fast-fail path to opaque retry.
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	cmd.Env = append(cmd.Env, extraEnv...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

@@ -247,6 +247,20 @@ type ReviewInput struct {
 	Summary bool
 }
 
+// ReviewOutcome is the result of ReviewWorkflow. Summary is the human-readable
+// summary line (carrying the token-total the fleet parses). Converged is an
+// explicit signal of *why* the loop ended: true only when the review agent
+// found nothing left to change, false when the loop stopped at MaxReviewPasses
+// with feedback still outstanding. The fleet gates a node's dependents on
+// Converged so a pass-capped node does not read as a clean success.
+type ReviewOutcome struct {
+	// Summary is the terminal pass's human-readable summary line.
+	Summary string
+	// Converged reports whether the loop ended by converging (true) rather than
+	// by reaching the pass cap with outstanding feedback (false).
+	Converged bool
+}
+
 // ReviewPrompt is the instruction handed to the Pi agent to review the current
 // branch. It is deliberately terse; the agent decides how to review.
 const ReviewPrompt = "Perform a thorough code review of the current branch"
@@ -274,6 +288,18 @@ type DevelopInput struct {
 	// worktree created under this directory (at <WorktreesDir>/<branch>) instead of
 	// switching the branch in WorkDir, leaving WorkDir untouched.
 	WorktreesDir string
+	// StartPoint, when non-empty, is the commit-ish the new branch is created at
+	// instead of WorkDir's current HEAD. The fleet orchestrator sets it so every
+	// node branches from the same repository base captured once at run start,
+	// keeping each node's branch start point stable even if the checkout moves
+	// while earlier layers run (dependency branches are then merged on top via
+	// MergeBranches). Empty (the standalone default) branches from HEAD.
+	StartPoint string
+	// MergeBranches, when non-empty, are branches merged (in order) into the
+	// freshly-created branch before the develop agent runs, seeding it with their
+	// committed work. The fleet passes a dependent node's dependency branches here
+	// so a dependent is developed on top of the slices it depends on.
+	MergeBranches []string
 	// Prompt is the caller's instruction describing what to implement.
 	Prompt string
 	// Summary, when true, runs a final activity before the workflow returns
@@ -287,12 +313,30 @@ type DevelopInput struct {
 	// to complete before returning. When false the workflow keeps its original
 	// behavior: it starts the review loop as an abandoned child and returns.
 	WithRemote bool
+	// AwaitReview, when true (and WithRemote is false), makes the workflow run the
+	// local review loop as a supervised, awaited child and return only once it has
+	// converged — without opening a PR or running the pilot. It is the fleet's
+	// Phase 1 unit: it lets a dependent node be gated on its prerequisites having
+	// been both developed and reviewed. When false the workflow keeps its original
+	// behavior of starting the review loop as an abandoned child and returning.
+	AwaitReview bool
 }
 
 // OpenPRInput is the input to OpenPRWorkflow.
 type OpenPRInput struct {
 	// WorkDir is the repository directory the CLI was invoked from.
 	WorkDir string
+}
+
+// OpenPRResult is the structured outcome of OpenPRWorkflow. It carries both the
+// human-readable summary and the PR URL so callers (e.g. the remote develop
+// pipeline, and in turn the fleet orchestrator) can surface the link rather
+// than having to scrape it out of prose.
+type OpenPRResult struct {
+	// Summary is the outcome-neutral, human-readable summary line.
+	Summary string
+	// URL is the pull request's web URL.
+	URL string
 }
 
 // branchAdjectives and branchAnimals seed the auto-generated branch alias used
@@ -456,6 +500,14 @@ func BuildDevelopPrompt(prompt string) string {
 	return `Implement the task described below. Read the referenced code and relevant in-repo documentation for context, then make the changes. Confirm lint/typecheck/build (and synth, if infra) pass, then commit all your work.
 
 ` + strings.TrimSpace(prompt)
+}
+
+// BuildMergeConflictPrompt renders the instruction that has the Pi agent resolve
+// the conflicts of an in-progress merge of branch and finish the merge. It asks
+// the agent to commit the completed merge (so the caller can confirm no
+// conflict markers or uncommitted changes remain) and not to push.
+func BuildMergeConflictPrompt(branch string) string {
+	return `A git merge of the branch "` + branch + `" into the current branch has stopped with conflicts. Resolve every conflict by reconciling both sides' intent (do not discard either side's changes), keep lint/typecheck/build (and synth, if infra) passing, then stage the resolved files and commit to complete the merge. Do not push and do not abort the merge.`
 }
 
 // BuildImplementPrompt renders the instruction that has the Pi agent act on a

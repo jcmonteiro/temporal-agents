@@ -342,7 +342,7 @@ func runPilotOnce(ctx workflow.Context, in PilotInput, agentRan *bool) (string, 
 // PR simply succeeds. It is used as a supervised stage of the
 // `develop --with-remote` pipeline but is a standalone workflow in its own
 // right.
-func OpenPRWorkflow(ctx workflow.Context, in OpenPRInput) (result string, err error) {
+func OpenPRWorkflow(ctx workflow.Context, in OpenPRInput) (result OpenPRResult, err error) {
 	// No agent runs here, so there is never a Pi session to summarize; pass
 	// summaryEnabled/agentRan false so the notification simply carries the plain
 	// body.
@@ -359,10 +359,10 @@ func OpenPRWorkflow(ctx workflow.Context, in OpenPRInput) (result string, err er
 
 	var pr PullRequest
 	if err := workflow.ExecuteActivity(quick, a.OpenPR, in).Get(quick, &pr); err != nil {
-		return "", err
+		return OpenPRResult{}, err
 	}
 	if err := workflow.ExecuteActivity(quick, a.RequestCopilotReview, pr).Get(quick, nil); err != nil {
-		return "", err
+		return OpenPRResult{}, err
 	}
 
 	// OpenPR is idempotent: it returns an already-open PR unchanged rather than
@@ -372,7 +372,7 @@ func OpenPRWorkflow(ctx workflow.Context, in OpenPRInput) (result string, err er
 	summary := fmt.Sprintf("PR #%d is open and a Copilot review was requested.", pr.Number)
 	notifyComplete(ctx, false, false, in.WorkDir, notification.Notification{
 		Title: "Pull request ready", Body: summary, URL: pr.URL}, "")
-	return summary, nil
+	return OpenPRResult{Summary: summary, URL: pr.URL}, nil
 }
 
 // DevelopWorkflow drives the "code develop" flow. In sequence it:
@@ -406,15 +406,16 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	// agentRan gates summarizing the last run: a failure before the develop agent
 	// runs has no Pi session to resume.
 	//
-	// remoteOwned is set once development has landed and ownership passes to the
-	// supervised remote pipeline (developWithRemote). From that point a child
-	// failure is a pipeline failure, not a development failure: developWithRemote
-	// emits its own stage-specific failure notification, so this defer stands down
-	// to avoid a second, misleading "Development failed" heads-up.
+	// failureNotified is set once a more specific failure notification has been (or
+	// will be) emitted elsewhere, so this generic "Development failed" defer stands
+	// down to avoid a second, misleading heads-up. It guards all three such paths:
+	// a blocked seed conflict (its own "Node blocked" notification), the supervised
+	// remote pipeline (developWithRemote emits stage-specific failures), and the
+	// await-review path (the supervised review child emits its own failure).
 	var agentRan bool
-	var remoteOwned bool
+	var failureNotified bool
 	defer func() {
-		if remoteOwned {
+		if failureNotified {
 			return
 		}
 		notifyFailure(ctx, "Development failed", in.WorkDir, in.Summary, agentRan, err)
@@ -446,7 +447,7 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 
 	var created CreateBranchResult
 	if err := workflow.ExecuteActivity(branchCtx, a.CreateBranch,
-		CreateBranchRequest{WorkDir: in.WorkDir, Branch: in.Branch, WorktreesDir: in.WorktreesDir}).Get(branchCtx, &created); err != nil {
+		CreateBranchRequest{WorkDir: in.WorkDir, Branch: in.Branch, WorktreesDir: in.WorktreesDir, StartPoint: in.StartPoint}).Get(branchCtx, &created); err != nil {
 		return "", err
 	}
 	// Adopt the actual branch and working directory for the rest of the flow: the
@@ -458,11 +459,42 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	in.WorkDir = created.WorkDir
 	base := created.BaseSHA
 
+	// Seed the fresh branch with the committed work of the branches it depends on
+	// (the fleet passes them for a dependent node), so the develop agent starts
+	// from its dependencies' code. The post-seed HEAD becomes the base for
+	// EnsureDeveloped, so that check verifies the develop agent — not these seeding
+	// merges — advanced the branch.
+	var seedTokens int
+	if len(in.MergeBranches) > 0 {
+		seededHead, tokens, err := seedBranches(ctx, quick, agentCtx, in.WorkDir, in.MergeBranches)
+		if err != nil {
+			// A seed conflict the agent could not resolve leaves the node blocked, not
+			// failed: the branch was aborted clean and a later re-sync may succeed. A
+			// dedicated notification is emitted here, so stand the generic
+			// develop-failure defer down (as the remote and await-review paths do).
+			var appErr *temporal.ApplicationError
+			if errors.As(err, &appErr) && appErr.Type() == SeedConflictBlockedErrType {
+				failureNotified = true
+				wfnotify.NotifyBestEffort(ctx, notification.Notification{
+					Title: "Node blocked: unresolved seed conflict",
+					Body: fmt.Sprintf("Could not merge a dependency branch into %s and the conflict could not be resolved automatically. The branch was left clean (no conflict markers); a later sync may succeed once the conflicting branches move.",
+						in.Branch),
+				})
+			}
+			return "", err
+		}
+		base = seededHead
+		seedTokens = tokens
+	}
+
 	var agentResult AgentResult
 	if err := workflow.ExecuteActivity(agentCtx, a.RunDevelopAgent,
 		RunDevelopRequest{WorkDir: in.WorkDir, Prompt: in.Prompt}).Get(agentCtx, &agentResult); err != nil {
 		return "", err
 	}
+	// Fold any conflict-resolution token usage from seeding into the develop
+	// total, so the tree's reported usage covers the whole develop step.
+	agentResult.Tokens += seedTokens
 	// The develop agent has run: a Pi session now exists for this run that a
 	// later SummarizeLastRun step could resume.
 	agentRan = true
@@ -485,8 +517,16 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	}
 
 	if in.WithRemote {
-		remoteOwned = true
+		failureNotified = true
 		return developWithRemote(ctx, in, commits, agentResult.Tokens, webhookBody)
+	}
+
+	if in.AwaitReview {
+		// Development has landed; ownership passes to the supervised review child,
+		// which emits its own failure notification, so stand the develop-failure
+		// defer down (as the remote path does).
+		failureNotified = true
+		return developAndAwaitReview(ctx, in, commits, agentResult.Tokens, webhookBody)
 	}
 
 	// Trigger the review loop as an abandoned child so it outlives this workflow.
@@ -516,6 +556,95 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	wfnotify.NotifyBestEffort(ctx, notification.Notification{
 		Title: "Development complete",
 		Body: fmt.Sprintf("Developed branch %s with %d commit(s) successfully. The review cycle will now commence.",
+			in.Branch, len(commits)),
+		WebhookBody: webhookBody,
+	})
+	return summary, nil
+}
+
+// seedBranches merges each dependency branch, in order, into the node's
+// freshly-created branch and returns the post-seed HEAD (the base the develop
+// agent must advance past) and the tokens spent resolving conflicts. A clean
+// merge advances the head directly; a conflicting merge is resolved with a
+// bounded number of agent attempts (resolveCtx's retry policy). When a conflict
+// cannot be resolved within those attempts the in-progress merge is aborted —
+// leaving the branch clean, no conflict markers — and a non-retryable
+// SeedConflictBlockedErrType is returned so the fleet records the node as blocked
+// rather than failed.
+func seedBranches(ctx workflow.Context, quick, resolveCtx workflow.Context, workDir string, branches []string) (head string, tokens int, err error) {
+	var a *Activities
+	for _, b := range branches {
+		var mr MergeDependencyResult
+		if err := workflow.ExecuteActivity(quick, a.MergeDependency,
+			MergeDependencyRequest{WorkDir: workDir, Branch: b}).Get(quick, &mr); err != nil {
+			return "", tokens, err
+		}
+		if !mr.Conflicted {
+			head = mr.Head
+			continue
+		}
+		var rr ResolveMergeConflictResult
+		if rErr := workflow.ExecuteActivity(resolveCtx, a.ResolveMergeConflict,
+			ResolveMergeConflictRequest{WorkDir: workDir, Branch: b}).Get(resolveCtx, &rr); rErr != nil {
+			// Abort so the branch is left clean rather than half-merged. The abort
+			// result is honoured: only once cleanup is confirmed may the node be
+			// classified as blocked (branch left clean). If the abort itself fails the
+			// branch may remain half-merged with conflict markers, so surface a plain
+			// (retryable) failure instead of the non-retryable SeedConflictBlocked
+			// classification, which the fleet records as failed rather than blocked and
+			// which does not claim the branch was left clean.
+			if aErr := workflow.ExecuteActivity(quick, a.AbortMerge, AbortMergeRequest{WorkDir: workDir}).Get(quick, nil); aErr != nil {
+				return "", tokens, fmt.Errorf("abort merge of dependency branch %q after failed conflict resolution: %w", b, aErr)
+			}
+			return "", tokens, temporal.NewNonRetryableApplicationError(
+				fmt.Sprintf("cannot resolve conflict merging dependency branch %q", b),
+				SeedConflictBlockedErrType, rErr)
+		}
+		head = rr.Head
+		tokens += rr.Tokens
+	}
+	return head, tokens, nil
+}
+
+// developAndAwaitReview runs the Phase 1 tail the fleet uses: after development
+// has landed, it runs the local review loop as a supervised, awaited child and
+// returns only once that loop has converged — without opening a PR or running
+// the pilot. Because a parent's child future resolves only when the review
+// loop's continue-as-new chain converges, waiting on it keeps this workflow the
+// review's parent and lets the fleet gate a dependent node on its prerequisites
+// having been both developed and reviewed.
+func developAndAwaitReview(ctx workflow.Context, in DevelopInput, commits []string, tokens int, webhookBody string) (result string, err error) {
+	reviewID := "review-" + workflow.GetInfo(ctx).WorkflowExecution.ID
+	reviewCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: reviewID})
+	var outcome ReviewOutcome
+	if err := workflow.ExecuteChildWorkflow(reviewCtx, ReviewWorkflow,
+		ReviewInput{WorkDir: in.WorkDir, TokensSoFar: tokens, Summary: in.Summary}).Get(ctx, &outcome); err != nil {
+		return "", fmt.Errorf("review workflow: %w", err)
+	}
+	// The review loop can end two ways: it converged (the review agent found
+	// nothing left to change) or it stopped at MaxReviewPasses with feedback still
+	// outstanding. Only convergence is a clean prerequisite for a dependent node, so
+	// gate on it explicitly: a pass-capped node must not read as succeeded and let
+	// its dependents start against un-addressed review feedback. The review child
+	// already emitted its own "stopped after N pass(es)" completion notification, so
+	// surface the non-converged outcome as a non-retryable, node-blocking error
+	// rather than a second heads-up; the fleet records it as blocked (branch left
+	// clean, development landed) rather than a hard failure.
+	if !outcome.Converged {
+		return "", temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("local review did not converge for branch %s: %s", in.Branch, outcome.Summary),
+			ReviewNotConvergedErrType, nil)
+	}
+	// Report only the develop step's own token usage: the awaited ReviewWorkflow
+	// child is a separate, billable session whose tokens are discarded via
+	// .Get(ctx, nil) and which reports its own total, so an "across all sessions"
+	// figure computed from develop tokens alone would exclude the review session
+	// yet claim to cover it. Mirror developWithRemote's develop-step-scoped label.
+	summary := withDevelopStepTokens(fmt.Sprintf("Developed branch %s with %d commit(s); local review converged.",
+		in.Branch, len(commits)), tokens)
+	wfnotify.NotifyBestEffort(ctx, notification.Notification{
+		Title: "Development and review complete",
+		Body: fmt.Sprintf("Developed branch %s with %d commit(s); the local review loop has converged.",
 			in.Branch, len(commits)),
 		WebhookBody: webhookBody,
 	})
@@ -578,11 +707,28 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 		return "", fmt.Errorf("review workflow: %w", err)
 	}
 
-	// Open the PR and request a Copilot review.
+	// Open the PR and request a Copilot review. Capture its structured result so
+	// the PR URL can be threaded into this workflow's own summary below; that
+	// summary is what the fleet orchestrator surfaces as the node's PR link.
 	openCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "open-pr-" + id})
-	if err := workflow.ExecuteChildWorkflow(openCtx, OpenPRWorkflow,
-		OpenPRInput{WorkDir: in.WorkDir}).Get(ctx, nil); err != nil {
-		return "", fmt.Errorf("open PR workflow: %w", err)
+	openFut := workflow.ExecuteChildWorkflow(openCtx, OpenPRWorkflow, OpenPRInput{WorkDir: in.WorkDir})
+	// OpenPRWorkflow's result type changed from a plain string to the structured
+	// OpenPRResult. The decode is gated behind a workflow version so an in-flight
+	// DevelopWorkflow still replays cleanly: a history recorded before this change
+	// holds a *string* OpenPRWorkflow completion, and unmarshalling that string into
+	// OpenPRResult would fail replay and diverge from the recorded pilot commands.
+	// Pre-version executions therefore discard the legacy payload exactly as the
+	// original code did (it passed nil) and fall back to generic PR wording below;
+	// new executions capture the structured result and thread its URL through.
+	var openPR OpenPRResult
+	if workflow.GetVersion(ctx, "open-pr-structured-result", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
+		if err := openFut.Get(ctx, nil); err != nil {
+			return "", fmt.Errorf("open PR workflow: %w", err)
+		}
+	} else {
+		if err := openFut.Get(ctx, &openPR); err != nil {
+			return "", fmt.Errorf("open PR workflow: %w", err)
+		}
 	}
 
 	// The pilot loop. It always chains (Chain: true), so waiting on it here blocks
@@ -598,9 +744,16 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 	// run in their own sessions (their results are discarded via .Get(ctx, nil)) and
 	// emit their own totals, so a "across all sessions" figure computed from develop
 	// tokens alone would under-report and mislead.
+	// Include the PR URL so callers (notably the fleet orchestrator, which scans
+	// this summary for a link) can surface it. Guard on a non-empty URL so the
+	// wording stays clean if OpenPRWorkflow ever reports none.
+	prClause := "opened the PR"
+	if openPR.URL != "" {
+		prClause = fmt.Sprintf("opened the PR (%s)", openPR.URL)
+	}
 	summary := withDevelopStepTokens(fmt.Sprintf(
-		"Developed branch %s with %d commit(s); ran the review loop, opened the PR, and completed the Copilot pilot loop.",
-		in.Branch, len(commits)), tokens)
+		"Developed branch %s with %d commit(s); ran the review loop, %s, and completed the Copilot pilot loop.",
+		in.Branch, len(commits), prClause), tokens)
 	// The terminal pipeline notification carries no summary body: the develop
 	// summary was delivered up front with the develop-completion notification, and
 	// the review and pilot children have since emitted their own fresher summaries.
@@ -630,7 +783,7 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 //
 // The loop is also bounded: it stops after MaxReviewPasses passes even when the
 // implement pass keeps making commits, so it cannot run forever.
-func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err error) {
+func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome, err error) {
 	// Notify best-effort when the review loop fails. Continue-as-new is a control
 	// signal (looping passes), not a failure, so NotifyFailureBestEffort excludes
 	// it. agentRan gates summarizing the last run: a failure before any agent step
@@ -670,13 +823,13 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 	var cp Checkpoint
 	if strings.TrimSpace(in.Payload) != "" {
 		if err := workflow.ExecuteActivity(quick, a.MarkHeadAndStash, PilotInput{WorkDir: in.WorkDir}).Get(quick, &cp); err != nil {
-			return "", err
+			return ReviewOutcome{}, err
 		}
 
 		var implResult AgentResult
 		implReq := RunImplementRequest{WorkDir: in.WorkDir, Payload: in.Payload}
 		if err := workflow.ExecuteActivity(agentCtx, a.RunImplementAgent, implReq).Get(agentCtx, &implResult); err != nil {
-			return "", err
+			return ReviewOutcome{}, err
 		}
 		// The implement agent has run: a Pi session now exists for this run that a
 		// later SummarizeLastRun step could resume.
@@ -695,18 +848,18 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 				// No carried summary here: this terminal pass ran the implement agent, so
 				// agentRan is true and summarizeForWebhook summarizes this run directly.
 				if err := notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary}, ""); err != nil {
-					return "", err
+					return ReviewOutcome{}, err
 				}
-				return summary, nil
+				return ReviewOutcome{Summary: summary, Converged: true}, nil
 			}
-			return "", err
+			return ReviewOutcome{}, err
 		}
 	}
 
 	// Review the current branch. This blocks until the review completes.
 	var reviewResult AgentResult
 	if err := workflow.ExecuteActivity(agentCtx, a.RunReviewAgent, ReviewInput{WorkDir: in.WorkDir}).Get(agentCtx, &reviewResult); err != nil {
-		return "", err
+		return ReviewOutcome{}, err
 	}
 	// The review agent has run: a Pi session now exists for this run that a later
 	// SummarizeLastRun step could resume.
@@ -732,10 +885,10 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result string, err er
 		// No carried summary here: this terminal pass ran the review agent, so
 		// agentRan is true and summarizeForWebhook summarizes this run directly.
 		if err := notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary}, ""); err != nil {
-			return "", err
+			return ReviewOutcome{}, err
 		}
-		return summary, nil
+		return ReviewOutcome{Summary: summary, Converged: false}, nil
 	}
-	return "", workflow.NewContinueAsNewError(ctx, ReviewWorkflow,
+	return ReviewOutcome{}, workflow.NewContinueAsNewError(ctx, ReviewWorkflow,
 		ReviewInput{WorkDir: in.WorkDir, Payload: reviewOutput, Pass: nextPass, TokensSoFar: total, Summary: in.Summary})
 }
