@@ -113,11 +113,25 @@ boundary, so:
   behaviour, must be startable independently, and must serve the built frontend
   or run alongside the Vite dev proxy. The JSON contract mirrors `src/domain/`
   types so fixtures and live data are interchangeable.
-- **Mapping constraint:** Temporal execution status + a status
-  signal/memo/attribute maps to the seven-value `WorkStatus`. Where Temporal
-  has no direct equivalent (e.g. `waiting-input`, `paused`), the mapping source
-  (search attribute, memo, or workflow query) must be named in Slice 7; do not
-  invent statuses the backend cannot produce.
+- **Mapping constraint (Q3 = A, honest subset):** the live adapter emits only
+  the statuses the backend can actually source. Native Temporal execution
+  status maps as: Running / ContinuedAsNew → `in-progress`; Completed → `done`;
+  Failed / TimedOut / Terminated / Canceled → `failed`. `waiting-input` and
+  `paused` have **no source today** and are **not** emitted by the live adapter
+  (they remain in the enum/legend/fixtures for completeness and future use). Do
+  not invent statuses the backend cannot produce, and do **not** instrument the
+  existing workflows to fabricate them (that is a separate future feature).
+- **Plan-derived `todo` / `waiting` (Q3 refinement):** a **fleet** carries a
+  **plan** — the ordered set of workflows it intends to run. The overview is the
+  reconciliation of a fleet's plan against live Temporal executions: a planned
+  workflow with no execution yet is `todo` if it is ready to start (its plan
+  predecessors are `done`) or `waiting` if it is still blocked by an unfinished
+  predecessor; planned workflows that have executions take their mapped live
+  status. "Up Next" is the set of `todo`/`waiting` planned workflows. The
+  **source of the plan/fleet definition is an open decision (Q4).**
+- Matching a planned workflow to its Temporal execution needs a stable key
+  (workflow ID convention or a plan-step identifier). The chosen key must be
+  named in Slice 7.
 - **Domain types** (`src/domain/`) are the single source of truth for a work
   item, its status enum, groupings ("fleets"), progress, estimate, owner, and
   the "up next" queue. Fixtures and any future API both conform to these types.

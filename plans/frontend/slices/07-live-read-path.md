@@ -17,11 +17,17 @@ component changes.
       abstracting "list current work items" — not the Temporal SDK directly
       (IB §3).
 - [ ] Implement the driven adapter over the Temporal client
-      (`ListWorkflowExecutions` / `DescribeWorkflowExecution`), mapping
-      execution status + the chosen status source (search attribute, memo, or a
-      workflow query — **decide and document here**) to the seven-value
-      `WorkStatus`. Name how `waiting-input`, `paused`, `waiting` are derived
-      (IB §3 mapping constraint).
+      (`ListWorkflowExecutions` / `DescribeWorkflowExecution`), mapping native
+      execution status to `WorkStatus` (Q3 = A): Running/ContinuedAsNew →
+      `in-progress`, Completed → `done`, Failed/TimedOut/Terminated/Canceled →
+      `failed`. Do **not** emit `waiting-input`/`paused` (no source) and do
+      **not** instrument the existing workflows (IB §3 mapping constraint).
+- [ ] Reconcile each fleet's **plan** (its known future workflows — source per
+      Q4) against live executions to derive `todo`/`waiting`: a planned step
+      with no execution is `todo` if its predecessors are `done`, else
+      `waiting`. Match planned step ↔ execution by the stable key named here
+      (workflow-ID convention or plan-step id). "Up Next" = the `todo`/`waiting`
+      planned steps (IB §3 plan-derived constraint).
 - [ ] Add an HTTP handler serving `GET /api/v1/overview` returning JSON that
       matches the frontend `src/domain/` types (items + up-next).
 - [ ] Expose it via a **new** entrypoint that does not alter existing commands:

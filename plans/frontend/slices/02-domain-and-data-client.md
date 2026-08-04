@@ -12,7 +12,10 @@ Loading and error states are visible.
 - [ ] Define `src/domain/types.ts`: `WorkItem` (id, label, icon kind, status,
       fleet, progress, estimate, owner), the `WorkStatus` union
       (`todo | in-progress | paused | waiting-input | waiting | done | failed`),
-      `Fleet`, and the "up next" item shape (IB §3).
+      `Fleet` (incl. its **plan**: an ordered set of planned workflow steps with
+      predecessor links — the source of derived `todo`/`waiting` and "Up Next",
+      per Q3), and the "up next" item shape (IB §3). The full seven-status enum
+      stays in the domain even though the live feed only emits a subset (Q3=A).
 - [ ] Define status color tokens once in `src/styles/theme.ts` keyed by
       `WorkStatus`, consumed by list + (later) legend + orbit (IB §3).
 - [ ] Add `src/clients/proxy-fetch.ts` mirroring the reference `/{service}/{path}`
