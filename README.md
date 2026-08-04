@@ -52,7 +52,7 @@ The CLI connects to `localhost:17233` by default. Override with `TEMPORAL_ADDRES
 | `code review [--summary]` | Review the current branch locally, then implement + re-review in a loop. |
 | `code develop "<prompt>" [--branch <name>] [--worktree] [--summary] [--with-remote]` | Create a branch, implement the prompt, then run the review loop (and PR + pilot with `--with-remote`). |
 | `fleet plan "<prompt>" [--out <file>]` | Have the agent decompose a change into a dependency graph, written to a file to review. |
-| `fleet execute [--plan <file>] [--summary] [--with-remote]` | Orchestrate an approved plan: a develop workflow per node, run in dependency order. |
+| `fleet execute [--plan <file>] [--summary]` | Orchestrate an approved plan: a develop workflow per node, run in dependency order. |
 | `watch <workflow-id>` | Stream a workflow's live Pi progress, then its result. |
 | `list` | List running workflows and schedules (fleet parents and per-node children included). |
 
@@ -72,7 +72,7 @@ The `fleet` command orchestrates exactly that:
 temporal-agents fleet plan "expose the pricing domain via REST and gRPC"
 
 # 2. Review/edit fleet-plan.json, then run it.
-temporal-agents fleet execute --plan fleet-plan.json --with-remote
+temporal-agents fleet execute --plan fleet-plan.json
 ```
 
 `fleet execute` runs a `code develop` workflow per node, processing the graph in
@@ -80,17 +80,14 @@ dependency layers: independent nodes run in parallel, and a node starts only
 once every node it depends on has succeeded (a node whose dependency did not
 succeed is skipped). Each node develops in its own git worktree so parallel
 nodes never share a working tree. When every node settles, a single summary
-notification aggregates each node's status, PR link, and develop-step token
-usage.
+notification aggregates each node's status and develop-step token usage.
 
 Dependencies control execution **order only**, not code layering: each node
 develops on its own branch cut from the repository base and does not inherit the
 commits of the nodes it depends on, so author each node's prompt as a
-self-contained instruction. By default a node counts as "succeeded" once its
-develop step lands and its review loop is started (the review keeps running
-afterwards), so dependents are released after the develop step; pass
-`--with-remote` when a dependent should wait for the full review, PR, and Copilot
-pilot pipeline to complete first.
+self-contained instruction. A node counts as "succeeded" once its develop step
+lands **and** its local review loop converges, so a dependent starts only after
+every node it depends on has been both developed and reviewed.
 
 ## Docker
 

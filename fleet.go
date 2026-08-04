@@ -275,8 +275,8 @@ graph in dependency layers: independent nodes run in parallel, and a node only
 starts once every node it depends on has succeeded. A node whose dependency did
 not succeed is skipped. Every node develops in its own git worktree under your
 user config directory, so parallel nodes never share a working tree. When all
-nodes settle, a single summary notification aggregates each node's status, PR
-link, and develop-step token usage.
+nodes settle, a single summary notification aggregates each node's status and
+develop-step token usage.
 
 USAGE
   temporal-agents fleet execute [--plan <file>] [--summary]

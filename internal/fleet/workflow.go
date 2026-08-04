@@ -65,10 +65,8 @@ type FleetInput struct {
 	WorktreesDir string
 	// Summary is propagated to each child develop workflow's --summary behavior.
 	Summary bool
-	// WithRemote selects the remote phase: after every node has been developed and
-	// reviewed locally, open a PR per node and track it (open/pilot/re-sync) until
-	// it merges. It is reserved for that phase; the local Phase 1 (develop + review
-	// each node in dependency order) runs regardless.
+	// WithRemote is reserved for the future remote phase (Phase 2) and is not yet
+	// wired into FleetWorkflow; nothing reads it today.
 	WithRemote bool
 }
 
@@ -94,9 +92,9 @@ type FleetInput struct {
 // "Succeeded" means the child DevelopWorkflow returned successfully. Each node
 // runs in the AwaitReview (Phase 1) mode: it develops its seeded branch and then
 // waits for its local review loop to converge, so a dependent starts only after
-// its prerequisites have been both developed and reviewed. The remote phase
-// (open a PR per node and track it until merged, selected by WithRemote) is a
-// separate stage that runs once every node has cleared Phase 1.
+// its prerequisites have been both developed and reviewed. A remote phase (open
+// a PR per node and track it until merged) is planned for a later stage but is
+// not yet implemented.
 func FleetWorkflow(ctx workflow.Context, in FleetInput) (result string, err error) {
 	defer func() { wfnotify.NotifyFailureBestEffort(ctx, "Fleet run failed", err) }()
 
