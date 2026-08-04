@@ -277,8 +277,9 @@ type DevelopInput struct {
 	// StartPoint, when non-empty, is the commit-ish the new branch is created at
 	// instead of WorkDir's current HEAD. The fleet orchestrator sets it so every
 	// node branches from the same repository base captured once at run start,
-	// keeping the graph's contract ordering-only even if the checkout moves while
-	// earlier layers run. Empty (the standalone default) branches from HEAD.
+	// keeping each node's branch start point stable even if the checkout moves
+	// while earlier layers run (dependency branches are then merged on top via
+	// MergeBranches). Empty (the standalone default) branches from HEAD.
 	StartPoint string
 	// MergeBranches, when non-empty, are branches merged (in order) into the
 	// freshly-created branch before the develop agent runs, seeding it with their

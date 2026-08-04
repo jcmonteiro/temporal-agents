@@ -41,9 +41,11 @@ type ResolveBaseRequest struct {
 // ResolveBase reads the repository's current HEAD so the fleet can pin every
 // node's worktree to that single commit. Capturing the base once when a run
 // starts (rather than letting each child branch off whatever HEAD points at
-// when it happens to start) keeps the dependency graph ordering-only: a later
+// when it happens to start) gives every node a stable start point: a later
 // layer branches from the same base as the first even if the user moves the
-// checkout, and never inherits a prerequisite node's commits.
+// checkout while earlier layers run. Each node's branch is then seeded by
+// merging its dependency branches on top of this base, so a dependent inherits
+// its prerequisites' committed work while its start point stays fixed.
 func (a *Activities) ResolveBase(ctx context.Context, req ResolveBaseRequest) (string, error) {
 	head, err := a.Git.Head(ctx, req.WorkDir)
 	if err != nil {
@@ -85,6 +87,13 @@ type GeneratePlanResult struct {
 // denies the file-mutating tools outright. Finally a tripwire re-reads the source
 // repository and fails non-retryably if it changed, so a plan is never returned
 // from a run that escaped the sandbox.
+//
+// The tripwire's guarantee covers the source repository's working-tree, index,
+// and HEAD content, not ref creation: the disposable worktree shares the source
+// .git object store and ref namespace, so a bash-driven branch/commit inside the
+// sandbox would leave dangling objects/refs the fingerprint does not observe.
+// The detached HEAD (dangling, gc-able commits) and the read-only tool policy
+// keep this from being an active hole.
 func (a *Activities) GeneratePlan(ctx context.Context, req GeneratePlanRequest) (GeneratePlanResult, error) {
 	// Snapshot the source repository's complete content up front so the tripwire
 	// below can confirm planning left it exactly where it started. A content

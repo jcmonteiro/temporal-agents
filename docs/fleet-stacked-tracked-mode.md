@@ -14,14 +14,17 @@ suggestions.
 
 ### Problem
 
-Today a fleet run treats the dependency graph as *ordering only*: every node
-develops on its own branch cut from a single pinned base and never inherits the
-work of the nodes it depends on. A dependency edge only sequences work and skips
-a dependent when a prerequisite fails. This forces every node's prompt to be a
-fully standalone instruction and leaves a dependent unaware of the code its
-prerequisite actually produced, so genuinely layered changes (a foundation plus
-slices that build on it) cannot be expressed — the fleet coordinates *when* work
-runs but not *what it builds on*.
+Originally a fleet run treated the dependency graph as *ordering only*: every
+node developed on its own branch cut from a single pinned base and never
+inherited the work of the nodes it depends on. A dependency edge only sequenced
+work and skipped a dependent when a prerequisite failed. This forced every
+node's prompt to be a fully standalone instruction and left a dependent unaware
+of the code its prerequisite actually produced, so genuinely layered changes (a
+foundation plus slices that build on it) could not be expressed — the fleet
+coordinated *when* work ran but not *what it built on*. Slices 1 and 2 below
+(seed-via-merge + seed-conflict handling) have since shipped, so seeding is now
+as-is; the remaining problem this doc addresses is the run's short lifetime
+(below) and the Phase 2 integration slices (3–8), which remain target behavior.
 
 The run is also short-lived: it returns as soon as each node's develop step has
 landed (or, with `--with-remote`, once each node's own pipeline converges). It
@@ -163,7 +166,7 @@ graph-gated unit; PR-open / pilot / tracking must be separable into Phase 2.
 Each slice closes an end-to-end, demonstrable path and references the
 constraints it discharges. Ordered by dependency.
 
-### Slice 1 — Branch-from-dependency + awaited local review (Phase 1)
+### Slice 1 — Branch-from-dependency + awaited local review (Phase 1) ✅ shipped
 
 Replace the fleet's wholesale reuse of `DevelopWorkflow` with a graph-gated
 "develop → await local review" unit. Seed each node's branch as base + merge of
@@ -176,7 +179,7 @@ each dependency branch; start a node only after all prerequisites have developed
 - **Discharges:** two-phase Phase 1; branch model (seed via merge, no rebase);
   skip-on-failed-prerequisite; the "cannot reuse DevelopWorkflow wholesale" seam.
 
-### Slice 2 — Seed-time conflict handling
+### Slice 2 — Seed-time conflict handling ✅ shipped
 
 When merging dependency branches while seeding a node conflicts, resolve with
 the agent (bounded); on failure abort, park the node blocked, notify, retry.

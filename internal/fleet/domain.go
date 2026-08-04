@@ -3,12 +3,14 @@
 // a child develop workflow per feature, respecting the graph so a dependent
 // feature only starts once every feature it depends on has succeeded.
 //
-// Dependencies gate execution *ordering*, not code layering: every node
-// develops on its own branch/worktree cut from the same repository base, so a
-// node does not automatically inherit the commits of the nodes it depends on.
-// An edge therefore sequences work (and skips a dependent when a prerequisite
-// fails) rather than stacking one node's code on top of another's. Author each
-// node's prompt as a self-contained instruction.
+// Dependencies control both execution *ordering* and code layering: every node
+// develops in its own branch/worktree cut from a single pinned repository base,
+// and that branch is then seeded by merging in the branches of the nodes it
+// depends on, so a dependent is developed on top of the committed, reviewed work
+// of its prerequisites. An edge therefore both sequences work (and skips a
+// dependent when a prerequisite fails) and stacks the dependent's code on top of
+// what it depends on. Author each node's prompt so it builds on its
+// dependencies' work rather than re-establishing it.
 //
 // It follows the same hexagonal split as the codereview package: this file
 // holds the application core (pure domain types and logic — plan validation,
@@ -40,9 +42,9 @@ type FleetNode struct {
 	Prompt string `json:"prompt"`
 	// DependsOn lists the IDs of nodes that must complete successfully before
 	// this node starts. An edge A in B.DependsOn means "B runs after A": it
-	// sequences B after A (and skips B if A does not succeed), but B still
-	// develops from the repository base without A's commits, so the ordering does
-	// not stack B's code on top of A's.
+	// sequences B after A (and skips B if A does not succeed) and seeds B's branch
+	// with A's committed work (B's branch is base + a merge of A's branch), so B is
+	// developed on top of A's reviewed code rather than the bare base.
 	DependsOn []string `json:"dependsOn,omitempty"`
 }
 
@@ -383,7 +385,7 @@ func groupThousands(n int) string {
 func BuildPlanPrompt(goal string) string {
 	return `Decompose the software change described below into a dependency graph of small, independently reviewable slices of work (a "fleet plan"). Prefer a horizontal slice that establishes shared/domain foundations first, followed by vertical slices, and use dependencies to order the foundational slice ahead of the slices that logically build on it.
 
-IMPORTANT: dependencies control execution ORDER only. Each slice is developed on its own branch cut from the current repository base and does NOT automatically include the code produced by the slices it depends on. So every "prompt" must be a complete, standalone instruction that a coding agent can implement on its own branch from the base, without relying on another slice's uncommitted work being present. Use "dependsOn" only to sequence slices (e.g. so a foundation is reviewed and lands first) and to skip a slice when a prerequisite fails.
+IMPORTANT: dependencies control both execution ORDER and code layering. Each slice is developed on its own branch, which is seeded with the committed work of the slices it depends on (the branch is the repository base plus a merge of each dependency's branch). So a slice IS developed on top of the reviewed code produced by the slices it "dependsOn", and does not need to re-establish that work. Use "dependsOn" both to sequence slices (a foundation is reviewed and lands first) and to build a slice on top of its prerequisites — put shared/foundational work in a slice that later slices depend on rather than duplicating it into every prompt. A slice with no "dependsOn" is developed from the bare base, so its prompt must be self-contained.
 
 Do NOT make any code changes. Read the referenced code and relevant in-repo documentation to inform the decomposition, then output ONLY a single JSON object (no prose, no code fences) matching exactly this shape:
 
@@ -392,7 +394,7 @@ Do NOT make any code changes. Read the referenced code and relevant in-repo docu
   "nodes": [
     {
       "id": "<short-slug-unique-id>",
-      "prompt": "<self-contained instruction for this slice>",
+      "prompt": "<instruction for this slice (may build on its dependencies' work)>",
       "dependsOn": ["<id-of-a-slice-this-must-run-after>"]
     }
   ]
@@ -402,7 +404,7 @@ Rules:
 - Each "id" must be a unique short slug using only letters, digits, '-' or '_'.
 - "dependsOn" lists the ids of slices that must succeed before this one starts; omit or use [] when the slice has no prerequisites.
 - The graph must be acyclic.
-- Each "prompt" must be a complete, standalone instruction that a coding agent can implement on its own branch from the repository base.
+- Each "prompt" must be a complete instruction for a coding agent. A slice may assume the committed work of the slices it "dependsOn" is already present on its branch; a slice with no dependencies must be self-contained from the repository base.
 
 --- Goal ---
 ` + strings.TrimSpace(goal)

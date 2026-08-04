@@ -82,10 +82,11 @@ succeed is skipped). Each node develops in its own git worktree so parallel
 nodes never share a working tree. When every node settles, a single summary
 notification aggregates each node's status and develop-step token usage.
 
-Dependencies control execution **order only**, not code layering: each node
-develops on its own branch cut from the repository base and does not inherit the
-commits of the nodes it depends on, so author each node's prompt as a
-self-contained instruction. A node counts as "succeeded" once its develop step
+Dependencies control both execution **order and code layering**: each node
+develops on its own branch, seeded with the committed work of the nodes it
+depends on (its branch is the pinned base plus a merge of each dependency's
+branch), so a dependent is developed on top of its prerequisites' reviewed code.
+A node counts as "succeeded" once its develop step
 lands **and** its local review loop converges, so a dependent starts only after
 every node it depends on has been both developed and reviewed.
 

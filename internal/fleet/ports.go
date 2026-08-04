@@ -29,8 +29,9 @@ type Git interface {
 	Fingerprint(ctx context.Context, dir string) (string, error)
 	// Head returns the commit SHA that HEAD points at in dir. The orchestrator
 	// reads it once when a run starts to pin every node's worktree to the same
-	// base commit, so the graph controls ordering only and later layers never
-	// inherit a moved checkout or a prerequisite's commits.
+	// base commit, giving every node a stable start point that a moved checkout
+	// cannot shift; a dependent's branch is then seeded by merging its dependency
+	// branches on top of this fixed base.
 	Head(ctx context.Context, dir string) (string, error)
 	// AddDisposableWorktree creates a throwaway detached worktree of the repo in
 	// dir and returns its path, so a read-only step can run against an isolated
