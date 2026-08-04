@@ -699,6 +699,19 @@ func workflowResult(ctx context.Context, run client.WorkflowRun, id string) (str
 			return res.Summary + "\n" + res.URL, nil
 		}
 		return res.Summary, nil
+	case "review":
+		var outcome codereview.ReviewOutcome
+		if err := run.Get(ctx, &outcome); err != nil {
+			// A pre-change review workflow completed with a plain string result, which
+			// cannot decode into ReviewOutcome. Fall back to string decode so watching a
+			// legacy completed run still renders instead of erroring.
+			var out string
+			if serr := run.Get(ctx, &out); serr != nil {
+				return "", err
+			}
+			return out, nil
+		}
+		return outcome.Summary, nil
 	default:
 		var out string
 		if err := run.Get(ctx, &out); err != nil {
