@@ -612,7 +612,12 @@ func developAndAwaitReview(ctx workflow.Context, in DevelopInput, commits []stri
 		ReviewInput{WorkDir: in.WorkDir, TokensSoFar: tokens, Summary: in.Summary}).Get(ctx, nil); err != nil {
 		return "", fmt.Errorf("review workflow: %w", err)
 	}
-	summary := withTokenTotal(fmt.Sprintf("Developed branch %s with %d commit(s); local review converged.",
+	// Report only the develop step's own token usage: the awaited ReviewWorkflow
+	// child is a separate, billable session whose tokens are discarded via
+	// .Get(ctx, nil) and which reports its own total, so an "across all sessions"
+	// figure computed from develop tokens alone would exclude the review session
+	// yet claim to cover it. Mirror developWithRemote's develop-step-scoped label.
+	summary := withDevelopStepTokens(fmt.Sprintf("Developed branch %s with %d commit(s); local review converged.",
 		in.Branch, len(commits)), tokens)
 	wfnotify.NotifyBestEffort(ctx, notification.Notification{
 		Title: "Development and review complete",
