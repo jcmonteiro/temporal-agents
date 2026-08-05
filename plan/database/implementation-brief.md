@@ -19,10 +19,11 @@ These are real requirements, not incidental choices:
   driven adapter under `internal/`. No SQL or driver types leak into workflow or
   domain code. This mirrors the existing split (see `codereview`, `fleet`).
   Placement (decided): a shared `internal/execstore` package owns the port
-  interface, the Postgres adapter, and the record types. The five
+  interface, the Postgres adapter, and the record types. The six
   `Persist<Type>WorkflowState` activities are **methods on the existing per-domain
   activity bundles** — `codereview.Activities` (Develop/Review/Pilot),
-  `fleet.Activities` (Fleet), and a root bundle for `PromptWorkflow`'s `Run` —
+  `fleet.Activities` (Fleet + FleetPlan), and a root bundle for
+  `PromptWorkflow`'s `Run` —
   each depending on the `execstore` port, injected from `main` exactly like the
   existing `Git`/`PRs`/`Agent` adapters. The port + adapter + record types live
   once in `execstore`; the activities sit next to the workflows that call them.
@@ -48,15 +49,16 @@ columns — `workflow_id` for grouping/tree correlation and `run_id` (Temporal
 per-continue-as-new run ID) as the unique per-row key — `kind` discriminator,
 prompt/goal, start, end, status, token usage, nullable schedule-ID, nullable
 `parent_workflow_id`) plus a `jsonb` `detail` column for type-specific fields (PR URL,
-review convergence, per-node breakdown). The five `Persist<Type>WorkflowState`
+review convergence, per-node breakdown). The six `Persist<Type>WorkflowState`
 activities each take a typed input at the port but write into this one table;
 the type boundary lives in code, not schema.
 
 ## What must persist
 
 - **Execution records** for the commands that matter: `run`, `schedule`-fired
-  runs, `code` (develop / review / pilot / open-pr), and `fleet` (the parent
-  orchestration and its per-node develop executions). A record must carry enough
+  runs, `code` (develop / review / pilot / open-pr), and `fleet` (plan
+  generation, the parent orchestration, and its per-node develop executions). A
+  record must carry enough
   to satisfy the brief's success signals: the originating command/kind, the
   prompt or goal, start and end times, terminal status (succeeded / failed /
   skipped / still-running), token usage, and a correlation handle to the
@@ -76,13 +78,18 @@ the type boundary lives in code, not schema.
   `codereview`/`fleet` activity bundles are wired today.
 - **The recording point (decided).** All recording is worker-owned and happens
   *inside the workflows* via per-type persistence activities named
-  `Persist<Type>WorkflowState`, where `<Type>` is one of `Run`, `Fleet`,
-  `Develop`, `Review`, `Pilot`. Schedule-fired work is **not** a distinct type: a
+  `Persist<Type>WorkflowState`, where `<Type>` is one of `Run`, `FleetPlan`,
+  `Fleet`, `Develop`, `Review`, `Pilot`. `FleetPlan` records `FleetPlanWorkflow`
+  (the `fleet plan` agent run, workflow-ID prefix `fleet-plan-`), so its
+  status/timing/token cost is captured distinctly from `Fleet` (`fleet execute`).
+  Schedule-fired work is **not** a distinct type: a
   schedule fires `PromptWorkflow` (the same workflow `run` uses), so it persists
   as `Run` with a nullable schedule-ID field carrying the parent schedule.
   Open-pr is likewise **not** a distinct type: `OpenPRWorkflow` runs only inside
   the `--with-remote` develop pipeline, so its PR URL is folded into the
   `Develop` record as a field and its standalone execution is not recorded.
+  Skipped fleet nodes have no child workflow, so they are recorded in the parent
+  `Fleet` row's `jsonb` `detail`, not as their own rows.
   The CLI never writes execution state; it
   only reads. Each workflow calls its `Persist…` activity to record start and to
   record the terminal update, analogous to how `notification.Activity` is invoked

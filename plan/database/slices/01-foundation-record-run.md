@@ -14,6 +14,10 @@ foundation so it is demoable rather than a bare infrastructure layer.
 - Document the required `DATABASE_URL` export in the README's Run section (right
   after `docker compose up -d`), e.g.
   `export DATABASE_URL=postgres://postgres:postgres@localhost:15432/temporal_agents?sslmode=disable`.
+- Update the README's reset guidance: `docker compose down -v` removes **every**
+  named volume (Postgres included), so replace the blanket `-v` advice with a
+  Temporal-scoped reset (`docker compose rm -sv temporal`, or `down` then
+  `docker volume rm` the Temporal volume) that leaves the Postgres volume intact.
 - Establish the schema-migration mechanism: embedded SQL files
   (`internal/execstore/migrations/*.sql` via `embed.FS`) applied idempotently
   with a `schema_migrations` tracking table when the `execstore` adapter
@@ -28,7 +32,7 @@ foundation so it is demoable rather than a bare infrastructure layer.
   develop→review trees are reconstructable — plus a `jsonb` `detail` column for
   type-specific fields (e.g. PR URL, converged, per-node breakdown) so new fields
   need no migration.
-- The five `Persist<Type>WorkflowState` activities each take a typed input but
+- The `Persist<Type>WorkflowState` activities each take a typed input but
   write rows into this one table; the type boundary lives in code, not schema.
 - Define the executions **port** (repository interface), the Postgres **adapter**
   (using `pgx` v5 / `pgxpool`), and the record types in a shared
@@ -64,8 +68,9 @@ foundation so it is demoable rather than a bare infrastructure layer.
 Start the stack, run `temporal-agents run "…"`, then `temporal-agents history`
 shows the execution with its status and token cost. Stop Postgres and run again:
 the workflow's `Persist…` activity retries and, if Postgres stays down, the
-workflow fails (recording is a hard dependency, not best-effort). Recorded rows
-survive `docker compose down -v` on the Temporal service.
+workflow fails (recording is a hard dependency, not best-effort). A
+Temporal-scoped reset (`docker compose rm -sv temporal`) wipes Temporal state
+while the recorded rows in the Postgres volume survive.
 
 ## Testing
 

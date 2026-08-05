@@ -12,6 +12,6 @@ and move plans into the store.
 | 2 | Record `code` executions | execution coverage for develop/review/pilot/open-pr |
 | 3 | Record `fleet` executions (parent + nodes) | execution coverage for fleet, parent/child correlation |
 | 4 | Record `schedule`-fired executions | execution coverage for schedule |
-| 5 | Fleet plans in the store | plan store replaces `fleet-plan.json`, authoritative-plan failure semantics |
+| 5 | Fleet plans in the store | plan store replaces `fleet-plan.json`, authoritative-plan failure semantics, `FleetPlan` recording for `fleet plan` |
 
 See each `NN-*.md` for detail.
