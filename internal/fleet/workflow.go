@@ -20,13 +20,45 @@ type FleetPlanInput struct {
 	Goal string
 	// WorkDir is the repository directory the planning agent inspects.
 	WorkDir string
+	// PlanID is the handle to store the produced plan under. The caller generates
+	// it (and prints it), so the store write is deterministic under activity retry
+	// and the operator knows the handle even if planning later fails.
+	PlanID string
+	// Name is an optional operator-chosen label for the stored plan. It is
+	// display-only metadata, never a way to select a plan.
+	Name string
 }
 
 // FleetPlanWorkflow drives the "fleet plan" step: it has the Pi agent decompose
-// the goal into a dependency graph and returns the parsed, validated plan for
-// the user to review and approve before executing it. It makes no code changes.
+// the goal into a dependency graph, stores the parsed, validated plan under its
+// handle, and returns it for the user to review before executing it. It makes no
+// code changes.
+//
+// The store is the plan's sole home (there is no plan file), so storing it is
+// authoritative rather than best-effort: a plan that cannot be written fails the
+// workflow instead of reporting a handle that resolves to nothing. Planning is
+// also recorded as its own execution kind, so its status, timing and token cost
+// appear in history separately from the `fleet execute` run it feeds.
 func FleetPlanWorkflow(ctx workflow.Context, in FleetPlanInput) (plan FleetPlan, err error) {
 	defer func() { wfnotify.NotifyFailureBestEffort(ctx, "Fleet planning failed", err) }()
+
+	rec, perr := startFleetPlanState(ctx, in)
+	if perr != nil {
+		return FleetPlan{}, perr
+	}
+	// Settle the record on every path out, including a cancellation. Recording is a
+	// hard dependency: when planning would otherwise have succeeded a failed write
+	// becomes its error; when it was already failing the original (more informative)
+	// error is kept and planning fails either way.
+	defer func() {
+		if perr := finishFleetPlanState(ctx, rec, err); perr != nil {
+			if err == nil {
+				err = perr
+				return
+			}
+			workflow.GetLogger(ctx).Error("could not record the planning run's terminal state", "error", perr)
+		}
+	}()
 
 	// The planning agent is a long-running Pi step that streams heartbeats. It
 	// runs once: a re-run would produce a different graph, so it is not retried.
@@ -43,11 +75,26 @@ func FleetPlanWorkflow(ctx workflow.Context, in FleetPlanInput) (plan FleetPlan,
 		return FleetPlan{}, err
 	}
 	plan = res.Plan
+	rec.Tokens = res.Tokens
+	rec.PlanNodes = len(plan.Nodes)
+
+	// Store the plan before reporting success: the store is where `fleet execute`
+	// will look for it, so a plan that was not written must not be announced as
+	// ready. The write is a quick, idempotent upsert on the handle, so it is safe to
+	// retry.
+	storeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+		StartToCloseTimeout: 30 * time.Second,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 5},
+	})
+	if err := workflow.ExecuteActivity(storeCtx, a.StorePlan,
+		StorePlanRequest{PlanID: in.PlanID, Name: in.Name, Plan: plan}).Get(storeCtx, nil); err != nil {
+		return FleetPlan{}, fmt.Errorf("store the fleet plan: %w", err)
+	}
 
 	wfnotify.NotifyBestEffort(ctx, notification.Notification{
 		Title: "Fleet plan ready",
-		Body: fmt.Sprintf("Planned %d node(s) for: %s\nPlanning token usage: %s tokens.",
-			len(plan.Nodes), plan.Goal, groupThousands(res.Tokens)),
+		Body: fmt.Sprintf("Planned %d node(s) for: %s\nStored as %s.\nPlanning token usage: %s tokens.",
+			len(plan.Nodes), plan.Goal, in.PlanID, groupThousands(res.Tokens)),
 	})
 	return plan, nil
 }

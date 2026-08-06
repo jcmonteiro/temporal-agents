@@ -27,7 +27,8 @@ import (
 func newEnv(t *testing.T, store ...*fakeStore) *testsuite.TestWorkflowEnvironment {
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestWorkflowEnvironment()
-	env.RegisterActivity(&Activities{Store: storeFor(store)})
+	st := storeFor(store)
+	env.RegisterActivity(&Activities{Store: st, Plans: st})
 	env.RegisterActivity(&notification.Activity{})
 	env.RegisterWorkflow(FleetWorkflow)
 	env.RegisterWorkflow(FleetPlanWorkflow)

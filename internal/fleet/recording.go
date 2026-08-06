@@ -131,3 +131,92 @@ func finishFleetState(ctx workflow.Context, st FleetState, err error) error {
 	}
 	return nil
 }
+
+// FleetPlanState is the typed input to PersistFleetPlanWorkflowState: what the
+// `fleet plan` agent run knows about itself.
+//
+// Planning is recorded as its own kind, separate from the `fleet execute` run
+// that later orchestrates the plan, so its status, timing and token cost are
+// visible on their own rather than folded into an execution it may never have.
+type FleetPlanState struct {
+	// WorkflowID and RunID are the Temporal correlation handles; RunID is the key
+	// the write upserts on.
+	WorkflowID string
+	RunID      string
+	// ParentWorkflowID is set only when planning was started as a child workflow.
+	ParentWorkflowID string
+	// Goal is the high-level change the run was asked to decompose.
+	Goal string
+	// PlanID is the handle the produced plan is stored under, so the planning run
+	// and the plan it created correlate.
+	PlanID string
+	// PlanNodes is how many nodes the produced plan has, known only once it exists.
+	PlanNodes int
+	// StartedAt and EndedAt come from the workflow's deterministic clock.
+	StartedAt time.Time
+	EndedAt   time.Time
+	Status    execstore.Status
+	// Tokens is the planning agent session's own usage.
+	Tokens int
+	Error  string
+}
+
+// PersistFleetPlanWorkflowState records a FleetPlanWorkflow execution's state.
+func (a *Activities) PersistFleetPlanWorkflowState(ctx context.Context, in FleetPlanState) error {
+	if a.Store == nil {
+		return execstore.ErrNotConfigured
+	}
+	return a.Store.SaveExecution(ctx, execstore.Execution{
+		WorkflowID:       in.WorkflowID,
+		RunID:            in.RunID,
+		Kind:             execstore.KindFleetPlan,
+		Prompt:           in.Goal,
+		StartedAt:        in.StartedAt,
+		EndedAt:          in.EndedAt,
+		Status:           in.Status,
+		Tokens:           in.Tokens,
+		ParentWorkflowID: in.ParentWorkflowID,
+		Detail: execstore.Detail{
+			PlanID:    in.PlanID,
+			PlanNodes: in.PlanNodes,
+			Error:     in.Error,
+		},
+	})
+}
+
+// startFleetPlanState builds and writes the "started" record for the running
+// planning workflow.
+func startFleetPlanState(ctx workflow.Context, in FleetPlanInput) (FleetPlanState, error) {
+	id := wfrecord.Of(ctx)
+	st := FleetPlanState{
+		WorkflowID:       id.WorkflowID,
+		RunID:            id.RunID,
+		ParentWorkflowID: id.ParentWorkflowID,
+		Goal:             in.Goal,
+		PlanID:           in.PlanID,
+		StartedAt:        workflow.Now(ctx),
+		Status:           execstore.StatusRunning,
+	}
+	opts := wfrecord.WithOptions(ctx)
+	var a *Activities
+	if err := workflow.ExecuteActivity(opts, a.PersistFleetPlanWorkflowState, st).Get(opts, nil); err != nil {
+		return FleetPlanState{}, fmt.Errorf("record the fleet planning run as started: %w", err)
+	}
+	return st, nil
+}
+
+// finishFleetPlanState records the planning run's terminal state on a
+// disconnected context, so a cancelled run still settles its record.
+func finishFleetPlanState(ctx workflow.Context, st FleetPlanState, err error) error {
+	st.EndedAt = workflow.Now(ctx)
+	st.Status = wfrecord.StatusOf(err)
+	st.Error = wfrecord.FailureText(err)
+
+	dctx, cancel := wfrecord.TerminalOptions(ctx)
+	defer cancel()
+	var a *Activities
+	if perr := workflow.ExecuteActivity(dctx, a.PersistFleetPlanWorkflowState, st).Get(dctx, nil); perr != nil {
+		return fmt.Errorf("record the fleet planning run's terminal state: %w", perr)
+	}
+	return nil
+}

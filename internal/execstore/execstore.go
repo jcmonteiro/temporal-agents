@@ -33,6 +33,11 @@ var ErrNotConfigured = errors.New("execution store is not configured (is DATABAS
 // first gets this instead of a raw "relation does not exist" from Postgres.
 var ErrNotMigrated = errors.New("the execution store schema does not exist yet; start the worker once to create it")
 
+// ErrNoSuchPlan is returned when a plan handle resolves to nothing, so a caller
+// can tell "no such plan" apart from a store outage and abort with a precise
+// message either way.
+var ErrNoSuchPlan = errors.New("no such plan")
+
 // Kind discriminates which command produced a record. It doubles as the label
 // `history` prints, and matches the classification the live `list` view derives
 // from workflow-ID prefixes.
@@ -222,6 +227,31 @@ type Filter struct {
 // caller sets no limit.
 const DefaultHistoryLimit = 20
 
+// Plan is a stored fleet plan: the approved graph an operator reviews and later
+// executes by handle. It replaces the loose fleet-plan.json the plan used to live
+// in, so a plan cannot be lost, overwritten, or left uncorrelated with the runs it
+// drove.
+type Plan struct {
+	// ID is the generated handle the plan is referred to by. It is the canonical —
+	// and only — way to resolve a plan for execution.
+	ID string
+	// Name is an optional operator-chosen label. It is display-only metadata, never
+	// a selector: nothing makes it unique, so it could not resolve a plan
+	// deterministically.
+	Name string
+	// Goal is the plan's high-level goal, stored alongside the document so a
+	// listing needs no decode.
+	Goal string
+	// Nodes is the plan's node count, likewise stored for listing.
+	Nodes int
+	// Document is the plan itself, as the JSON encoding of the caller's plan type.
+	// The store keeps it opaque so the plan's schema stays owned by the fleet core
+	// rather than by the database.
+	Document []byte
+	// CreatedAt is when the plan was stored.
+	CreatedAt time.Time
+}
+
 // Store is the port the application core persists and reads execution history
 // through. The Postgres adapter in this package implements it.
 //
@@ -233,4 +263,22 @@ type Store interface {
 	SaveExecution(ctx context.Context, e Execution) error
 	// ListExecutions returns the records matching f, newest first.
 	ListExecutions(ctx context.Context, f Filter) ([]Execution, error)
+}
+
+// PlanStore is the port for the fleet plan store. Like execution recording it is
+// authoritative rather than best-effort: a failed read or write is reported and
+// aborts the operation, never silently swallowed, because the store is the only
+// source of truth for a plan.
+//
+// SavePlan must be idempotent on Plan.ID for the same reason SaveExecution is: it
+// is driven from an activity Temporal may retry.
+type PlanStore interface {
+	// SavePlan inserts or updates the plan under p.ID.
+	SavePlan(ctx context.Context, p Plan) error
+	// Plan resolves a plan by its handle, returning ErrNoSuchPlan when there is
+	// none.
+	Plan(ctx context.Context, id string) (Plan, error)
+	// ListPlans returns the stored plans, newest first, capped at limit (a
+	// non-positive limit falls back to DefaultHistoryLimit).
+	ListPlans(ctx context.Context, limit int) ([]Plan, error)
 }

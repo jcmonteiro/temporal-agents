@@ -109,6 +109,7 @@ EXAMPLES
   temporal-agents template list
   temporal-agents template run triage
   temporal-agents fleet plan "expose the pricing domain via REST and gRPC"
+  temporal-agents fleet plan list
   temporal-agents fleet execute --plan-id <handle>
   temporal-agents history
   temporal-agents cleanup
@@ -479,7 +480,12 @@ func runWorker(opts notifyOptions) {
 	// as children, which is already registered above.
 	w.RegisterWorkflow(fleet.FleetPlanWorkflow)
 	w.RegisterWorkflow(fleet.FleetWorkflow)
-	w.RegisterActivity(&fleet.Activities{Agent: piagent.Agent{}, Git: gitcli.New(), Store: store})
+	w.RegisterActivity(&fleet.Activities{
+		Agent: piagent.Agent{},
+		Git:   gitcli.New(),
+		Store: store,
+		Plans: store,
+	})
 
 	// A single notification activity, shared by every workflow that notifies.
 	w.RegisterActivity(&notification.Activity{Notifier: buildNotifier(opts)})

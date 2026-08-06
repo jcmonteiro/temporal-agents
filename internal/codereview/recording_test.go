@@ -61,7 +61,7 @@ func (f *fakeStore) last(t *testing.T) execstore.Execution {
 // test does not care about the records. The env constructors take it as a
 // variadic parameter so the many tests that are not about recording stay
 // untouched.
-func storeFor(opts []*fakeStore) execstore.Store {
+func storeFor(opts []*fakeStore) *fakeStore {
 	if len(opts) > 0 {
 		return opts[0]
 	}

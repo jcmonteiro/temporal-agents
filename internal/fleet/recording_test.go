@@ -17,11 +17,12 @@ import (
 // in-memory stand-in for the execstore port, so they assert on the record that was
 // written rather than on which activity was called.
 
-// fakeStore is an in-memory execstore.Store. Setting err makes every write fail,
-// standing in for a store outage.
+// fakeStore is an in-memory execstore.Store and PlanStore. Setting err makes every
+// write fail, standing in for a store outage.
 type fakeStore struct {
 	mu    sync.Mutex
 	saved []execstore.Execution
+	plans map[string]execstore.Plan
 	err   error
 }
 
@@ -55,9 +56,45 @@ func (f *fakeStore) last(t *testing.T) execstore.Execution {
 	return recs[len(recs)-1]
 }
 
+func (f *fakeStore) SavePlan(_ context.Context, plan execstore.Plan) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	if f.plans == nil {
+		f.plans = map[string]execstore.Plan{}
+	}
+	f.plans[plan.ID] = plan
+	return nil
+}
+
+func (f *fakeStore) Plan(_ context.Context, id string) (execstore.Plan, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return execstore.Plan{}, f.err
+	}
+	plan, ok := f.plans[id]
+	if !ok {
+		return execstore.Plan{}, execstore.ErrNoSuchPlan
+	}
+	return plan, nil
+}
+
+func (f *fakeStore) ListPlans(_ context.Context, _ int) ([]execstore.Plan, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]execstore.Plan, 0, len(f.plans))
+	for _, p := range f.plans {
+		out = append(out, p)
+	}
+	return out, nil
+}
+
 // storeFor picks the store an env constructor was given, or a fresh one when a
 // test does not care about the records.
-func storeFor(opts []*fakeStore) execstore.Store {
+func storeFor(opts []*fakeStore) *fakeStore {
 	if len(opts) > 0 {
 		return opts[0]
 	}
@@ -205,4 +242,72 @@ func TestFleetWorkflow_NodeChildRecordsTheFleetAsItsParent(t *testing.T) {
 	// row, and the parent adds nothing.
 	require.Equal(t, 400, nodeRec.Tokens)
 	require.Zero(t, fleetRec.Tokens)
+}
+
+func TestFleetPlanWorkflow_StoresThePlanAndRecordsThePlanningRun(t *testing.T) {
+	store := &fakeStore{}
+	env := newEnv(t, store)
+	plan := linearPlan()
+
+	env.OnActivity(fa.GeneratePlan, mock.Anything, mock.Anything).
+		Return(GeneratePlanResult{Plan: plan, Tokens: 1234}, nil)
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(FleetPlanWorkflow, FleetPlanInput{
+		Goal: "expose the core", WorkDir: "/repo", PlanID: "plan-abcd1234", Name: "core"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	// The plan is stored under the handle the caller generated, so the handle it
+	// printed up front resolves once planning succeeds.
+	stored, err := store.Plan(context.Background(), "plan-abcd1234")
+	require.NoError(t, err)
+	require.Equal(t, "core", stored.Name)
+	require.Equal(t, "expose the core", stored.Goal)
+	require.Equal(t, 2, stored.Nodes)
+	require.JSONEq(t, `{"goal":"expose the core","nodes":[
+		{"id":"core","prompt":"implement the core"},
+		{"id":"rest","prompt":"expose via REST","dependsOn":["core"]}]}`, string(stored.Document))
+
+	// Planning is recorded as its own kind, so its cost is visible separately from
+	// the fleet run that later executes the plan.
+	end := store.last(t)
+	require.Equal(t, execstore.KindFleetPlan, end.Kind)
+	require.Equal(t, execstore.StatusSucceeded, end.Status)
+	require.Equal(t, "expose the core", end.Prompt)
+	require.Equal(t, 1234, end.Tokens)
+	require.Equal(t, "plan-abcd1234", end.Detail.PlanID)
+	require.Equal(t, 2, end.Detail.PlanNodes)
+}
+
+func TestFleetPlanWorkflow_PlanThatCannotBeStoredFailsPlanning(t *testing.T) {
+	// The store is the plan's only home, so a plan that was not written must not be
+	// announced as ready: planning fails loudly instead of printing a handle that
+	// resolves to nothing.
+	store := &fakeStore{}
+	env := newEnv(t, store)
+
+	env.OnActivity(fa.GeneratePlan, mock.Anything, mock.Anything).
+		Return(GeneratePlanResult{Plan: linearPlan(), Tokens: 10}, nil)
+	env.OnActivity(fa.StorePlan, mock.Anything, mock.Anything).
+		Return(errors.New("postgres is down"))
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(FleetPlanWorkflow, FleetPlanInput{
+		Goal: "expose the core", WorkDir: "/repo", PlanID: "plan-abcd1234"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.ErrorContains(t, env.GetWorkflowError(), "postgres is down")
+	end := store.last(t)
+	require.Equal(t, execstore.StatusFailed, end.Status)
+}
+
+func TestStorePlan_RequiresAStore(t *testing.T) {
+	// A worker without the plan port wired in must fail loudly rather than panic.
+	var a Activities
+
+	err := a.StorePlan(context.Background(), StorePlanRequest{PlanID: "plan-1", Plan: linearPlan()})
+
+	require.ErrorIs(t, err, execstore.ErrNotConfigured)
 }
