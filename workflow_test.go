@@ -235,3 +235,41 @@ func TestPromptWorkflow_Chain_ContinuesAsNewWithoutNotifying(t *testing.T) {
 	require.ErrorAs(t, env.GetWorkflowError(), &canErr)
 	env.AssertNotCalled(t, "Notify", mock.Anything, mock.Anything)
 }
+
+func TestPromptWorkflow_ScheduleFiredRun_RecordsItsSchedule(t *testing.T) {
+	env := newPromptEnv(t)
+
+	env.OnActivity(RunPiAgent, mock.Anything, mock.Anything).
+		Return(piagent.Result{Output: "output"}, nil)
+	var states []RunState
+	recordRunStates(env, &states)
+	var na *notification.Activity
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	// A schedule fires the same workflow `run` uses, so the fired execution is a
+	// run carrying the schedule that produced it — not a kind of its own.
+	env.ExecuteWorkflow(PromptWorkflow, scheduleAction("schedule-9", "digest", "/repo", false).Args[0])
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.Len(t, states, 2)
+	require.Equal(t, "schedule-9", states[0].ScheduleID)
+	require.Equal(t, "schedule-9", states[1].ScheduleID)
+}
+
+func TestPromptWorkflow_DirectRun_RecordsNoSchedule(t *testing.T) {
+	env := newPromptEnv(t)
+
+	env.OnActivity(RunPiAgent, mock.Anything, mock.Anything).
+		Return(piagent.Result{Output: "output"}, nil)
+	var states []RunState
+	recordRunStates(env, &states)
+	var na *notification.Activity
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(PromptWorkflow, runRequest("summarize", "/repo", false))
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Len(t, states, 2)
+	require.Empty(t, states[1].ScheduleID, "nothing fired this run, so it belongs to no schedule")
+}

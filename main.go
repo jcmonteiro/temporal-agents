@@ -336,7 +336,8 @@ The first argument decides how often the workflow runs. It is read in two ways:
 
 OVERLAP
   If a run is still going when the next one is due, the next run is SKIPPED
-  (never queued or run concurrently).
+  (never queued or run concurrently). A skipped firing starts no workflow, so it
+  leaves no entry in the durable history either.
 
 EXAMPLES
   temporal-agents schedule "1h" "check for new GitHub issues and summarize them"
@@ -345,6 +346,13 @@ EXAMPLES
 
 MANAGE
   temporal-agents list        show active schedules and running workflows
+
+HISTORY
+  Each fired run is durably recorded as a "run" carrying this schedule's ID (the
+  schedule itself has no workflow, so it is not recorded). List what a schedule
+  has produced with:
+
+    temporal-agents history --schedule-id <schedule-id>
 `)
 }
 
@@ -500,7 +508,7 @@ func startRun(prompt, saveName string, chain bool) {
 	we, err := c.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{
 		ID:        id,
 		TaskQueue: TaskQueue,
-	}, PromptWorkflow, PromptRequest{Prompt: prompt, WorkDir: cwd(), Chain: chain})
+	}, PromptWorkflow, runRequest(prompt, cwd(), chain))
 	if err != nil {
 		fatalf("Could not start workflow: %v", err)
 	}
@@ -525,12 +533,7 @@ func startSchedule(spec, prompt, saveName string, chain bool) {
 		ID:      id,
 		Spec:    parseSpec(spec),
 		Overlap: enums.SCHEDULE_OVERLAP_POLICY_SKIP,
-		Action: &client.ScheduleWorkflowAction{
-			ID:        id + "-wf",
-			Workflow:  PromptWorkflow,
-			Args:      []any{PromptRequest{Prompt: prompt, WorkDir: cwd(), Chain: chain}},
-			TaskQueue: TaskQueue,
-		},
+		Action:  scheduleAction(id, prompt, cwd(), chain),
 	})
 	if err != nil {
 		fatalf("Could not create schedule: %v", err)
@@ -557,6 +560,32 @@ func maybeSave(saveName string, t Template) {
 		fatalf("Could not save template: %v", err)
 	}
 	fmt.Printf("  saved:   template %q → %s\n", saveName, path)
+}
+
+// runRequest builds the input for a directly started run. It carries no schedule
+// ID: nothing fired it, so its record is attributed to no schedule.
+func runRequest(prompt, workDir string, chain bool) PromptRequest {
+	return PromptRequest{Prompt: prompt, WorkDir: workDir, Chain: chain}
+}
+
+// scheduleAction builds the schedule's action: it starts the very same
+// PromptWorkflow that `run` does, with the schedule's own ID threaded into the
+// input. That is what lets each fired run record itself as a run attributable to
+// this schedule, so no separate schedule kind (or a record of the schedule
+// itself, which has no workflow) is needed.
+//
+// Nothing is recorded for a firing that is skipped by the overlap policy: no
+// workflow starts, and every write happens inside a workflow, so history shows no
+// misleading entry for a run that never happened.
+func scheduleAction(scheduleID, prompt, workDir string, chain bool) *client.ScheduleWorkflowAction {
+	req := runRequest(prompt, workDir, chain)
+	req.ScheduleID = scheduleID
+	return &client.ScheduleWorkflowAction{
+		ID:        scheduleID + "-wf",
+		Workflow:  PromptWorkflow,
+		Args:      []any{req},
+		TaskQueue: TaskQueue,
+	}
 }
 
 // parseSpec treats the arg as a Go duration interval when possible, otherwise a cron expression.
