@@ -101,7 +101,10 @@ func (p *Postgres) SaveExecution(ctx context.Context, e execstore.Execution) err
 		nullTime(e.EndedAt), string(e.Status), e.Tokens,
 		nullString(e.ScheduleID), nullString(e.ParentWorkflowID), detail)
 	if err != nil {
-		return fmt.Errorf("record execution %s: %w", e.WorkflowID, err)
+		// Named by run ID first: that is the primary key of the row this write
+		// failed on, and a workflow ID alone is ambiguous across continue-as-new
+		// iterations. The workflow ID follows to keep the message readable.
+		return fmt.Errorf("record execution run %s (workflow %s): %w", e.RunID, e.WorkflowID, err)
 	}
 	return nil
 }
