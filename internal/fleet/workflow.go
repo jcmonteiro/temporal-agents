@@ -68,6 +68,9 @@ type FleetInput struct {
 	// WithRemote is reserved for the future remote phase (Phase 2) and is not yet
 	// wired into FleetWorkflow; nothing reads it today.
 	WithRemote bool
+	// PlanID is the handle of the stored plan being executed, recorded on the run so
+	// a fleet execution can be traced back to the plan it came from.
+	PlanID string
 }
 
 // FleetWorkflow orchestrates the approved plan's dependency graph. It processes
@@ -97,6 +100,27 @@ type FleetInput struct {
 // not yet implemented.
 func FleetWorkflow(ctx workflow.Context, in FleetInput) (result string, err error) {
 	defer func() { wfnotify.NotifyFailureBestEffort(ctx, "Fleet run failed", err) }()
+
+	// Record the orchestration run as started before anything else, so even a run
+	// rejected up front (an invalid plan, a missing worktrees directory) leaves a
+	// durable trace of having been attempted.
+	rec, perr := startFleetState(ctx, in)
+	if perr != nil {
+		return "", perr
+	}
+	// Settle the record on every path out, including a cancellation. Recording is a
+	// hard dependency: when the run would otherwise have succeeded a failed write
+	// becomes its error; when it was already failing the original (more informative)
+	// error is kept and the run fails either way.
+	defer func() {
+		if perr := finishFleetState(ctx, rec, err); perr != nil {
+			if err == nil {
+				err = perr
+				return
+			}
+			workflow.GetLogger(ctx).Error("could not record the fleet run's terminal state", "error", perr)
+		}
+	}()
 
 	// WorktreesDir is required (see FleetInput): every child develops in its own
 	// worktree so concurrent nodes never share a working tree. An empty value
@@ -207,6 +231,15 @@ func FleetWorkflow(ctx workflow.Context, in FleetInput) (result string, err erro
 		}
 	}
 
+	ordered := make([]NodeResult, 0, len(order))
+	for _, id := range order {
+		ordered = append(ordered, results[id])
+	}
+	// Hand the per-node breakdown to the record before the cancellation check below,
+	// so a cancelled run still records what its nodes did. A skipped node lives here
+	// and nowhere else: it starts no child workflow, so it has no row of its own.
+	rec.Nodes = ordered
+
 	// Preserve cancellation. When the parent workflow is canceled, each pending
 	// ChildWorkflowFuture.Get returns a cancellation error that the loop above
 	// records as a node failure; without this check the run would still build a
@@ -214,11 +247,6 @@ func FleetWorkflow(ctx workflow.Context, in FleetInput) (result string, err erro
 	// rather than canceled. Surfacing ctx.Err() lets the run terminate as canceled.
 	if err := ctx.Err(); err != nil {
 		return "", err
-	}
-
-	ordered := make([]NodeResult, 0, len(order))
-	for _, id := range order {
-		ordered = append(ordered, results[id])
 	}
 
 	summary := SummarizeFleet(in.Plan.Goal, ordered)

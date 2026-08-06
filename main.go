@@ -471,7 +471,7 @@ func runWorker(opts notifyOptions) {
 	// as children, which is already registered above.
 	w.RegisterWorkflow(fleet.FleetPlanWorkflow)
 	w.RegisterWorkflow(fleet.FleetWorkflow)
-	w.RegisterActivity(&fleet.Activities{Agent: piagent.Agent{}, Git: gitcli.New()})
+	w.RegisterActivity(&fleet.Activities{Agent: piagent.Agent{}, Git: gitcli.New(), Store: store})
 
 	// A single notification activity, shared by every workflow that notifies.
 	w.RegisterActivity(&notification.Activity{Notifier: buildNotifier(opts)})
