@@ -463,6 +463,7 @@ func runWorker(opts notifyOptions) {
 		Git:   gitcli.New(),
 		PRs:   ghcli.New(),
 		Agent: piagent.Agent{},
+		Store: store,
 	})
 
 	// The fleet workflows fan out over a dependency graph, reusing the codereview

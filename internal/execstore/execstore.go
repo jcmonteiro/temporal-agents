@@ -28,6 +28,11 @@ import (
 // panic.
 var ErrNotConfigured = errors.New("execution store is not configured (is DATABASE_URL set?)")
 
+// ErrNotMigrated is returned by a read against a database whose schema has not
+// been created yet. Only the worker applies migrations, so a reader that runs
+// first gets this instead of a raw "relation does not exist" from Postgres.
+var ErrNotMigrated = errors.New("the execution store schema does not exist yet; start the worker once to create it")
+
 // Kind discriminates which command produced a record. It doubles as the label
 // `history` prints, and matches the classification the live `list` view derives
 // from workflow-ID prefixes.
@@ -166,6 +171,9 @@ type Detail struct {
 	// Addressed reports whether a pilot pass actually addressed comments. It is
 	// nil for kinds that do not pilot.
 	Addressed *bool `json:"addressed,omitempty"`
+	// Pass is which pass of a looping workflow this row is, since every pass
+	// continues as new and is therefore a row of its own.
+	Pass int `json:"pass,omitempty"`
 	// Nodes is a fleet parent's per-node breakdown. It is the only home for a
 	// skipped node's outcome: a skipped node starts no child workflow, so it has
 	// no run ID and therefore no row of its own.

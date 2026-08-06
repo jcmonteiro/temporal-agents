@@ -21,12 +21,16 @@ import (
 // what the workflow returns — with every activity mocked. They intentionally
 // say nothing about the git/GitHub adapters (covered elsewhere).
 
-func newEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
+// The optional store lets a test that cares about the durable execution record
+// inject an in-memory execstore stand-in (see recording_test.go); tests that do
+// not pass one get a throwaway store, so their workflows still record without
+// them having to say so.
+func newEnv(t *testing.T, store ...*fakeStore) *testsuite.TestWorkflowEnvironment {
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestWorkflowEnvironment()
 	// Register a zero-value Activities so activity names resolve; the real
 	// methods are never invoked because every call is mocked below.
-	env.RegisterActivity(&Activities{})
+	env.RegisterActivity(&Activities{Store: storeFor(store)})
 	env.RegisterActivity(&notification.Activity{})
 	env.RegisterWorkflow(PilotWorkflow)
 	return env

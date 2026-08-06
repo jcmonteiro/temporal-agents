@@ -161,10 +161,36 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 	var agentRan bool
 	defer func() { notifyFailure(ctx, "Copilot review chain failed", in.WorkDir, in.Summary, agentRan, err) }()
 
+	// Record this pass as started before any work happens. Every pass continues as
+	// new, so each is a row of its own keyed on its Temporal run ID.
+	rec, perr := startPilotState(ctx)
+	if perr != nil {
+		return "", perr
+	}
+	// Settle the record on every path out of this pass, including a cancellation.
+	// Recording is a hard dependency: when the pass would otherwise have succeeded,
+	// a failed write becomes its error. When it was already failing the original
+	// error is kept (the pass fails either way), since it is the more informative of
+	// the two.
+	defer func() {
+		if perr := finishPilotState(ctx, rec, err); perr != nil {
+			if err == nil {
+				err = perr
+				return
+			}
+			workflow.GetLogger(ctx).Error("could not record the pilot pass's terminal state", "error", perr)
+		}
+	}()
+
 	var addressed bool
 	var tokens int
 	var prURL string
 	summary, addressed, tokens, prURL, err = runPilotOnce(ctx, in, &agentRan)
+	// Record only this pass's own token usage, never the inclusive total carried
+	// across chained passes, so summing the rows of a loop gives a true total.
+	rec.Tokens = tokens
+	rec.Addressed = boolPtr(addressed)
+	rec.PRURL = prURL
 	if err != nil {
 		return "", err
 	}
@@ -421,6 +447,28 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 		notifyFailure(ctx, "Development failed", in.WorkDir, in.Summary, agentRan, err)
 	}()
 
+	// Record the develop run as started before any work happens, so a run that
+	// later fails, is cancelled, or is lost to a worker crash is still in the
+	// durable history. A fleet node self-records here too, linked to its fleet
+	// parent by the parent handle.
+	rec, perr := startDevelopState(ctx, in)
+	if perr != nil {
+		return "", perr
+	}
+	// Settle the record on every path out of this workflow, including a
+	// cancellation. Recording is a hard dependency: when development would otherwise
+	// have succeeded a failed write becomes its error; when it was already failing
+	// the original (more informative) error is kept and the run fails either way.
+	defer func() {
+		if perr := finishDevelopState(ctx, rec, err); perr != nil {
+			if err == nil {
+				err = perr
+				return
+			}
+			workflow.GetLogger(ctx).Error("could not record the develop run's terminal state", "error", perr)
+		}
+	}()
+
 	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
 	// should not run forever.
 	quick := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
@@ -457,6 +505,9 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	// the right place.
 	in.Branch = created.Branch
 	in.WorkDir = created.WorkDir
+	// The branch may be a generated alias, so the start record could not carry it;
+	// the terminal write upserts the row with the branch actually developed on.
+	rec.Branch = created.Branch
 	base := created.BaseSHA
 
 	// Seed the fresh branch with the committed work of the branches it depends on
@@ -495,6 +546,10 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	// Fold any conflict-resolution token usage from seeding into the develop
 	// total, so the tree's reported usage covers the whole develop step.
 	agentResult.Tokens += seedTokens
+	// The record carries the develop step's own usage only: the review (and, with
+	// --with-remote, the pilot) children are separate sessions recording their own
+	// rows, so summing rows gives a true total for the tree.
+	rec.Tokens = agentResult.Tokens
 	// The develop agent has run: a Pi session now exists for this run that a
 	// later SummarizeLastRun step could resume.
 	agentRan = true
@@ -518,7 +573,13 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 
 	if in.WithRemote {
 		failureNotified = true
-		return developWithRemote(ctx, in, commits, agentResult.Tokens, webhookBody)
+		summary, prURL, rerr := developWithRemote(ctx, in, commits, agentResult.Tokens, webhookBody)
+		// Open-pr is not recorded as an execution of its own: it runs only inside this
+		// pipeline, so its outcome is folded into this record as the PR URL. It is
+		// carried over even on failure, since a pipeline that failed after opening the
+		// PR should still point at it.
+		rec.PRURL = prURL
+		return summary, rerr
 	}
 
 	if in.AwaitReview {
@@ -668,7 +729,7 @@ func developAndAwaitReview(ctx workflow.Context, in DevelopInput, commits []stri
 // the pipeline converges) and a final "Remote pipeline complete" once the whole
 // pipeline has converged (with no summary body, so the terminal notification is
 // not misattributed the oldest, develop-only summary).
-func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, tokens int, webhookBody string) (result string, err error) {
+func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, tokens int, webhookBody string) (result string, prURL string, err error) {
 	// Development has already landed, so a failure here belongs to the remote
 	// pipeline, not the develop step. Emit a pipeline-specific failure heads-up (the
 	// parent DevelopWorkflow defer stands down for the remote path). summaryEnabled
@@ -704,7 +765,7 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 	reviewCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "review-" + id})
 	if err := workflow.ExecuteChildWorkflow(reviewCtx, ReviewWorkflow,
 		ReviewInput{WorkDir: in.WorkDir, TokensSoFar: tokens, Summary: in.Summary}).Get(ctx, nil); err != nil {
-		return "", fmt.Errorf("review workflow: %w", err)
+		return "", prURL, fmt.Errorf("review workflow: %w", err)
 	}
 
 	// Open the PR and request a Copilot review. Capture its structured result so
@@ -723,11 +784,11 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 	var openPR OpenPRResult
 	if workflow.GetVersion(ctx, "open-pr-structured-result", workflow.DefaultVersion, 1) == workflow.DefaultVersion {
 		if err := openFut.Get(ctx, nil); err != nil {
-			return "", fmt.Errorf("open PR workflow: %w", err)
+			return "", prURL, fmt.Errorf("open PR workflow: %w", err)
 		}
 	} else {
 		if err := openFut.Get(ctx, &openPR); err != nil {
-			return "", fmt.Errorf("open PR workflow: %w", err)
+			return "", prURL, fmt.Errorf("open PR workflow: %w", err)
 		}
 	}
 
@@ -737,7 +798,7 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 	pilotCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "pilot-" + id})
 	if err := workflow.ExecuteChildWorkflow(pilotCtx, PilotWorkflow,
 		PilotInput{WorkDir: in.WorkDir, Chain: true, Summary: in.Summary}).Get(ctx, nil); err != nil {
-		return "", fmt.Errorf("pilot workflow: %w", err)
+		return "", prURL, fmt.Errorf("pilot workflow: %w", err)
 	}
 
 	// Report only the develop step's own token usage: the review and pilot children
@@ -751,6 +812,10 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 	if openPR.URL != "" {
 		prClause = fmt.Sprintf("opened the PR (%s)", openPR.URL)
 	}
+	// Hand the PR link back so DevelopWorkflow can record it: open-pr runs only as a
+	// stage of this pipeline, so its outcome belongs on the develop record rather
+	// than on a row of its own.
+	prURL = openPR.URL
 	summary := withDevelopStepTokens(fmt.Sprintf(
 		"Developed branch %s with %d commit(s); ran the review loop, %s, and completed the Copilot pilot loop.",
 		in.Branch, len(commits), prClause), tokens)
@@ -762,7 +827,7 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 		Body: fmt.Sprintf("Developed branch %s with %d commit(s); the review, pull request, and Copilot pilot stages have all completed.",
 			in.Branch, len(commits)),
 	})
-	return summary, nil
+	return summary, prURL, nil
 }
 
 // ReviewWorkflow drives the "code review" loop entirely on the host machine.
@@ -790,6 +855,27 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome,
 	// (e.g. MarkHeadAndStash) has no Pi session to resume.
 	var agentRan bool
 	defer func() { notifyFailure(ctx, "Local review chain failed", in.WorkDir, in.Summary, agentRan, err) }()
+
+	// Record this pass as started before any work happens. Every pass continues as
+	// new, so each is a row of its own; the parent handle is what tells a review
+	// spawned by a develop run apart from a standalone `code review`.
+	rec, perr := startReviewState(ctx, in)
+	if perr != nil {
+		return ReviewOutcome{}, perr
+	}
+	// Settle the record on every path out of this pass, including a cancellation.
+	// Recording is a hard dependency: when the pass would otherwise have succeeded a
+	// failed write becomes its error; when it was already failing the original (more
+	// informative) error is kept and the pass fails either way.
+	defer func() {
+		if perr := finishReviewState(ctx, rec, err); perr != nil {
+			if err == nil {
+				err = perr
+				return
+			}
+			workflow.GetLogger(ctx).Error("could not record the review pass's terminal state", "error", perr)
+		}
+	}()
 
 	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
 	// should not run forever.
@@ -835,6 +921,9 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome,
 		// later SummarizeLastRun step could resume.
 		agentRan = true
 		total += implResult.Tokens
+		// The record carries only this pass's own usage, never the inclusive total
+		// carried across passes, so summing the loop's rows cannot double-count.
+		rec.Tokens += implResult.Tokens
 
 		var commits []string
 		advReq := EnsureHeadAdvancedRequest{WorkDir: in.WorkDir, Checkpoint: cp}
@@ -844,6 +933,8 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome,
 			// so return without further cleanup.
 			var appErr *temporal.ApplicationError
 			if errors.As(err, &appErr) && appErr.Type() == errNoAdvance {
+				// The loop has converged: the implement pass found nothing left to change.
+				rec.Converged = boolPtr(true)
 				summary := withTokenTotal("Review complete; the implement pass found nothing to commit.", total)
 				// No carried summary here: this terminal pass ran the implement agent, so
 				// agentRan is true and summarizeForWebhook summarizes this run directly.
@@ -865,6 +956,7 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome,
 	// SummarizeLastRun step could resume.
 	agentRan = true
 	total += reviewResult.Tokens
+	rec.Tokens += reviewResult.Tokens
 	reviewOutput := reviewResult.Output
 
 	// Put the developer's pre-existing local changes back before ending the
@@ -881,6 +973,9 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome,
 	// pass cap so the loop cannot run forever.
 	nextPass := in.Pass + 1
 	if nextPass >= MaxReviewPasses {
+		// The loop stopped at the pass cap with feedback still outstanding, which is
+		// explicitly not convergence.
+		rec.Converged = boolPtr(false)
 		summary := withTokenTotal(fmt.Sprintf("Review stopped after %d pass(es).", MaxReviewPasses), total)
 		// No carried summary here: this terminal pass ran the review agent, so
 		// agentRan is true and summarizeForWebhook summarizes this run directly.

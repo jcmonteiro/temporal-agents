@@ -16,10 +16,14 @@ import (
 // The review workflow tests exercise observable behavior — which activities run
 // and whether the workflow continues as new — with every activity mocked.
 
-func newReviewEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
+// The optional store lets a test that cares about the durable execution record
+// inject an in-memory execstore stand-in (see recording_test.go); tests that do
+// not pass one get a throwaway store, so their workflows still record without
+// them having to say so.
+func newReviewEnv(t *testing.T, store ...*fakeStore) *testsuite.TestWorkflowEnvironment {
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestWorkflowEnvironment()
-	env.RegisterActivity(&Activities{})
+	env.RegisterActivity(&Activities{Store: storeFor(store)})
 	env.RegisterActivity(&notification.Activity{})
 	env.RegisterWorkflow(ReviewWorkflow)
 	return env

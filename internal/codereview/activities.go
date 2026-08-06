@@ -9,6 +9,8 @@ import (
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
+
+	"temporal-agents/internal/execstore"
 )
 
 // errNoAdvance is the error type returned (non-retryable) when the agent
@@ -24,6 +26,10 @@ type Activities struct {
 	Git   Git
 	PRs   PullRequests
 	Agent Agent
+	// Store is the durable execution history port driven by the
+	// Persist<Type>WorkflowState activities in recording.go. A nil Store makes them
+	// fail loudly rather than panic, since recording is a hard dependency.
+	Store execstore.Store
 }
 
 // LoadCommentsResult is the output of LoadUnresolvedComments.

@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"temporal-agents/internal/execstore"
 )
 
 // TestClassifyWorkflow pins the ID-prefix labeling, in particular the
@@ -38,5 +40,31 @@ func TestClassifyWorkflow(t *testing.T) {
 				t.Fatalf("classifyWorkflow(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestClassifyWorkflow_AgreesWithRecordedKinds pins the live view and the durable
+// record to the same vocabulary: the label `list`/`watch` derive from a workflow
+// ID must read the same as the kind that workflow records itself under, so a row
+// in `history` and a row in `list` describe the same thing by the same name.
+func TestClassifyWorkflow_AgreesWithRecordedKinds(t *testing.T) {
+	id := uuid.NewString()
+	cases := map[execstore.Kind]string{
+		execstore.KindRun:       "run-" + id,
+		execstore.KindDevelop:   "develop-" + id,
+		execstore.KindReview:    "review-" + id,
+		execstore.KindPilot:     "pilot-" + id,
+		execstore.KindFleet:     "fleet-" + id,
+		execstore.KindFleetPlan: "fleet-plan-" + id,
+	}
+	// Every recorded kind must be covered, so a kind added later fails here until
+	// its workflow-ID prefix is classified too.
+	if len(cases) != len(execstore.Kinds()) {
+		t.Fatalf("covered %d kinds, but %d are recorded", len(cases), len(execstore.Kinds()))
+	}
+	for kind, workflowID := range cases {
+		if got := classifyWorkflow(workflowID); got != string(kind) {
+			t.Errorf("classifyWorkflow(%q) = %q, want the recorded kind %q", workflowID, got, kind)
+		}
 	}
 }

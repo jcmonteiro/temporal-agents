@@ -16,10 +16,14 @@ import (
 // run and whether the review loop is triggered — with every activity and the
 // child review workflow mocked.
 
-func newDevelopEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
+// The optional store lets a test that cares about the durable execution record
+// inject an in-memory execstore stand-in (see recording_test.go); tests that do
+// not pass one get a throwaway store, so their workflows still record without
+// them having to say so.
+func newDevelopEnv(t *testing.T, store ...*fakeStore) *testsuite.TestWorkflowEnvironment {
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestWorkflowEnvironment()
-	env.RegisterActivity(&Activities{})
+	env.RegisterActivity(&Activities{Store: storeFor(store)})
 	env.RegisterActivity(&notification.Activity{})
 	env.RegisterWorkflow(DevelopWorkflow)
 	env.RegisterWorkflow(ReviewWorkflow)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -112,7 +113,7 @@ func (p *Postgres) ListExecutions(ctx context.Context, f Filter) ([]Execution, e
 
 	rows, err := p.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("read execution history: %w", err)
+		return nil, readError("read execution history", err)
 	}
 	defer rows.Close()
 
@@ -125,9 +126,23 @@ func (p *Postgres) ListExecutions(ctx context.Context, f Filter) ([]Execution, e
 		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read execution history: %w", err)
+		return nil, readError("read execution history", err)
 	}
 	return out, nil
+}
+
+// undefinedTable is the Postgres error code for "relation does not exist".
+const undefinedTable = "42P01"
+
+// readError wraps a read failure, translating a missing table into
+// ErrNotMigrated so a reader that runs before any worker has applied the schema
+// gets an actionable message instead of raw SQL wording.
+func readError(what string, err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == undefinedTable {
+		return ErrNotMigrated
+	}
+	return fmt.Errorf("%s: %w", what, err)
 }
 
 // buildFilter renders f as a WHERE clause plus its positional arguments. An
