@@ -10,16 +10,28 @@ import (
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 
+	"temporal-agents/internal/execstore/execstoretest"
 	"temporal-agents/internal/notification"
 )
 
 // The review workflow tests exercise observable behavior — which activities run
 // and whether the workflow continues as new — with every activity mocked.
 
+// newReviewEnv builds the review test environment with a throwaway store, for the
+// tests that are not about the durable execution record.
 func newReviewEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
+	t.Helper()
+	return newReviewEnvWithStore(t, execstoretest.New())
+}
+
+// newReviewEnvWithStore builds it around the given store, so a recording test can
+// assert on what was written (see recording_test.go). Every workflow records
+// itself, so the store is a required dependency rather than an option.
+func newReviewEnvWithStore(t *testing.T, store *execstoretest.Store) *testsuite.TestWorkflowEnvironment {
+	t.Helper()
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestWorkflowEnvironment()
-	env.RegisterActivity(&Activities{})
+	env.RegisterActivity(&Activities{Store: store})
 	env.RegisterActivity(&notification.Activity{})
 	env.RegisterWorkflow(ReviewWorkflow)
 	return env

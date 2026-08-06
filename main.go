@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	commonpb "go.temporal.io/api/common/v1"
@@ -72,6 +73,10 @@ func main() {
 		watchRun(os.Args[2])
 	case "list":
 		listRunning()
+	case "history":
+		if err := historyCmd(os.Args[2:], os.Stdout, openExecutionReader); err != nil {
+			fatalf("%v", err)
+		}
 	default:
 		usage()
 	}
@@ -96,6 +101,7 @@ COMMANDS
   template <subcommand>                  Manage and run saved templates
   watch <workflow-id>                    Stream a workflow's live Pi progress
   list                                   List running workflows and schedules
+  history [--kind <kind>] [--limit <n>]  List durably recorded executions
 
 EXAMPLES
   temporal-agents worker
@@ -106,7 +112,9 @@ EXAMPLES
   temporal-agents template list
   temporal-agents template run triage
   temporal-agents fleet plan "expose the pricing domain via REST and gRPC"
-  temporal-agents fleet execute --plan fleet-plan.json
+  temporal-agents fleet plan list
+  temporal-agents fleet execute --plan-id <handle>
+  temporal-agents history
   temporal-agents cleanup
 
 FLAGS
@@ -332,7 +340,8 @@ The first argument decides how often the workflow runs. It is read in two ways:
 
 OVERLAP
   If a run is still going when the next one is due, the next run is SKIPPED
-  (never queued or run concurrently).
+  (never queued or run concurrently). A skipped firing starts no workflow, so it
+  leaves no entry in the durable history either.
 
 EXAMPLES
   temporal-agents schedule "1h" "check for new GitHub issues and summarize them"
@@ -341,6 +350,13 @@ EXAMPLES
 
 MANAGE
   temporal-agents list        show active schedules and running workflows
+
+HISTORY
+  Each fired run is durably recorded as a "run" carrying this schedule's ID (the
+  schedule itself has no workflow, so it is not recorded). List what a schedule
+  has produced with:
+
+    temporal-agents history --schedule-id <schedule-id>
 `)
 }
 
@@ -424,6 +440,13 @@ func runWorker(opts notifyOptions) {
 	c := dial()
 	defer c.Close()
 
+	// The durable execution store is a hard dependency of every recorded workflow,
+	// so the worker resolves it (and brings its schema up to date) before accepting
+	// work: an unreachable store fails here rather than failing each workflow at its
+	// first record write.
+	store := openMigratedStore(context.Background())
+	defer store.Close()
+
 	// Flush heartbeats promptly so `watch` sees near-real-time Pi progress
 	// instead of the SDK's default ~30s throttle.
 	//
@@ -438,6 +461,9 @@ func runWorker(opts notifyOptions) {
 	})
 	w.RegisterWorkflow(PromptWorkflow)
 	w.RegisterActivity(RunPiAgent)
+	// The root bundle carries PersistRunWorkflowState, PromptWorkflow's durable
+	// recording activity, with the execution store injected as its driven adapter.
+	w.RegisterActivity(&Activities{Store: store})
 
 	// The "code pilot" and "code review" workflows and their port-backed
 	// activities (both share the same Activities bundle).
@@ -449,6 +475,7 @@ func runWorker(opts notifyOptions) {
 		Git:   gitcli.New(),
 		PRs:   ghcli.New(),
 		Agent: piagent.Agent{},
+		Store: store,
 	})
 
 	// The fleet workflows fan out over a dependency graph, reusing the codereview
@@ -456,7 +483,12 @@ func runWorker(opts notifyOptions) {
 	// as children, which is already registered above.
 	w.RegisterWorkflow(fleet.FleetPlanWorkflow)
 	w.RegisterWorkflow(fleet.FleetWorkflow)
-	w.RegisterActivity(&fleet.Activities{Agent: piagent.Agent{}, Git: gitcli.New()})
+	w.RegisterActivity(&fleet.Activities{
+		Agent: piagent.Agent{},
+		Git:   gitcli.New(),
+		Store: store,
+		Plans: store,
+	})
 
 	// A single notification activity, shared by every workflow that notifies.
 	w.RegisterActivity(&notification.Activity{Notifier: buildNotifier(opts)})
@@ -467,6 +499,10 @@ func runWorker(opts notifyOptions) {
 	// bearer-like secrets in their path or query, so printing the URL would leak
 	// credentials into terminal captures and service logs.
 	fmt.Printf(" · webhook %s", onOff(opts.webhookURL != ""))
+	// Execution history is deliberately not reported: DATABASE_URL is required and
+	// the worker has already failed fast without a reachable store, so recording is
+	// always on by the time this line prints. (The DSN is never printed either — it
+	// commonly embeds credentials, exactly like the webhook URL above.)
 	fmt.Printf(" · press Ctrl+C to stop\n")
 	if err := w.Run(worker.InterruptCh()); err != nil {
 		fatalf("Worker stopped with error: %v", err)
@@ -482,7 +518,7 @@ func startRun(prompt, saveName string, chain bool) {
 	we, err := c.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{
 		ID:        id,
 		TaskQueue: TaskQueue,
-	}, PromptWorkflow, PromptRequest{Prompt: prompt, WorkDir: cwd(), Chain: chain})
+	}, PromptWorkflow, runRequest(prompt, cwd(), chain))
 	if err != nil {
 		fatalf("Could not start workflow: %v", err)
 	}
@@ -507,12 +543,7 @@ func startSchedule(spec, prompt, saveName string, chain bool) {
 		ID:      id,
 		Spec:    parseSpec(spec),
 		Overlap: enums.SCHEDULE_OVERLAP_POLICY_SKIP,
-		Action: &client.ScheduleWorkflowAction{
-			ID:        id + "-wf",
-			Workflow:  PromptWorkflow,
-			Args:      []any{PromptRequest{Prompt: prompt, WorkDir: cwd(), Chain: chain}},
-			TaskQueue: TaskQueue,
-		},
+		Action:  scheduleAction(id, prompt, cwd(), chain),
 	})
 	if err != nil {
 		fatalf("Could not create schedule: %v", err)
@@ -539,6 +570,32 @@ func maybeSave(saveName string, t Template) {
 		fatalf("Could not save template: %v", err)
 	}
 	fmt.Printf("  saved:   template %q → %s\n", saveName, path)
+}
+
+// runRequest builds the input for a directly started run. It carries no schedule
+// ID: nothing fired it, so its record is attributed to no schedule.
+func runRequest(prompt, workDir string, chain bool) PromptRequest {
+	return PromptRequest{Prompt: prompt, WorkDir: workDir, Chain: chain}
+}
+
+// scheduleAction builds the schedule's action: it starts the very same
+// PromptWorkflow that `run` does, with the schedule's own ID threaded into the
+// input. That is what lets each fired run record itself as a run attributable to
+// this schedule, so no separate schedule kind (or a record of the schedule
+// itself, which has no workflow) is needed.
+//
+// Nothing is recorded for a firing that is skipped by the overlap policy: no
+// workflow starts, and every write happens inside a workflow, so history shows no
+// misleading entry for a run that never happened.
+func scheduleAction(scheduleID, prompt, workDir string, chain bool) *client.ScheduleWorkflowAction {
+	req := runRequest(prompt, workDir, chain)
+	req.ScheduleID = scheduleID
+	return &client.ScheduleWorkflowAction{
+		ID:        scheduleID + "-wf",
+		Workflow:  PromptWorkflow,
+		Args:      []any{req},
+		TaskQueue: TaskQueue,
+	}
 }
 
 // parseSpec treats the arg as a Go duration interval when possible, otherwise a cron expression.
@@ -763,12 +820,23 @@ func decodeHeartbeat(p *commonpb.Payloads) string {
 	return s
 }
 
+// truncate shortens s to at most max bytes, marking the cut with an ellipsis.
+//
+// The cut is moved back to a rune boundary, so a shortened value stays valid UTF-8.
+// The text it is applied to is agent-written or agent-recorded (a failure reason, a
+// plan goal, a prompt), which carries arrows, ellipses and accented characters
+// routinely — cutting one of those in half would print replacement characters and
+// undo the rune-safe capping wfrecord already does one layer down.
 func truncate(s string, max int) string {
 	s = strings.TrimSpace(s)
 	if len(s) <= max {
 		return s
 	}
-	return s[:max-1] + "…"
+	cut := max - 1
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
 
 // onOff renders a boolean as a human-readable on/off state for worker startup

@@ -119,13 +119,49 @@ the type boundary lives in code, not schema.
 
 ## Non-functional constraints and tensions
 
-- **Recording is a hard dependency, not best-effort.** Unlike notifications, the
-  `Persist<Type>WorkflowState` activities **must succeed**. If a `Persist…`
-  activity is invoked and cannot write, the workflow **fails at that point**.
-  Temporal's activity retry policy absorbs transient Postgres outages (the
-  activity retries until it succeeds or exhausts its policy); a persistent outage
-  fails the workflow rather than silently dropping the record. This makes
-  Postgres a hard runtime dependency for every recorded workflow.
+- **The start write is a hard dependency; the terminal write is not
+  (decided).** Unlike notifications, a `Persist<Type>WorkflowState` write is
+  never best-effort-and-forgotten, and Temporal's retry policy absorbs a
+  transient Postgres outage either way. The two writes then differ in what an
+  exhausted policy costs:
+  - **Start write:** the workflow **fails at that point**. Nothing has happened
+    yet, so refusing to run unrecorded costs nothing and keeps the history
+    complete. Postgres is therefore a hard runtime dependency for *starting* any
+    recorded workflow.
+  - **Terminal write:** the workflow **keeps its outcome**. By then an agent has
+    done up to an hour of work and the write has already retried for about two
+    minutes; failing there would convert a bookkeeping outage into lost agent
+    work, and on a continue-as-new path it would additionally strand the loop,
+    because the workflow's error *is* the control signal. The failure is reported
+    instead — logged with the result, and delivered as a best-effort
+    notification carrying it — and the row is left at `running`, which is the
+    same abandoned-looking state `history --help` already documents. The policy
+    lives in one place (`wfrecord.TerminalWriteFailed`) so every workflow behaves
+    identically.
+- **Recorded free text is redacted and capped (decided).** A failure text can
+  echo a token-authenticated git remote, a prompt or goal is operator-written (or
+  agent-generated, for a fleet node), and a fleet node's detail is a whole agent
+  output, so **every** recorded free-text field passes through one funnel
+  (`wfrecord.Sanitize`) that removes URL credentials and GitHub token shapes and
+  caps the length. The funnel is applied at the port boundary of each persistence
+  activity, so no field can reach a column around it: the failure text (via
+  `wfrecord.FailureText`), the prompt/goal of every kind, the fleet's per-node
+  detail (`nodeOutcomes`), and the stored plan's goal. The record is long-lived and
+  local, so an unredacted token would sit in it indefinitely and an uncapped field
+  would grow a row without bound.
+  The one exception is the stored plan's **document**, which must stay decodable
+  and therefore can be neither redacted nor trimmed: it is size-guarded instead
+  (`execstore.MaxPlanDocument`), and an oversized plan is refused non-retryably
+  rather than stored.
+  The funnel's scope is the **durable row**, not Temporal: a prompt is a workflow
+  input, so it also sits unredacted in Temporal's own event history. That is
+  deliberate and consistent with the threat model above — Temporal's history is
+  retention-limited and ages out, while this record is kept indefinitely — so the
+  field that is worth redacting is the one that never expires.
+  Structured values the tool produces itself (a branch name, a PR URL, a plan
+  handle, a node ID, a schedule ID) are deliberately **exempt**: they carry no
+  free text, and capping one would corrupt an identifier instead of shortening a
+  message.
 - **Idempotent writes under retry.** Because Temporal may re-run an activity that
   already committed (result lost after a partial success), every `Persist…` write
   must be idempotent — an upsert keyed on `run_id` (`INSERT … ON CONFLICT
@@ -151,7 +187,23 @@ the type boundary lives in code, not schema.
   default, fail-fast at startup in worker and CLI; never logged.
 - Plan handle: **decided** — generated ID (canonical) with optional `--name`.
 - Retention/cleanup of records over time (brief lists this out of scope to
-  decide now, but the schema should not preclude it).
+  decide now, but the schema should not preclude it). Related follow-up, not
+  covered by this work: every write is made by the workflow itself, so a
+  terminated workflow or a worker that never returns leaves its row at `running`
+  for good. Nothing reconciles the store against Temporal and nothing prunes old
+  rows, so a `history prune` command, or a reconciliation pass in `cleanup`, is
+  still needed. `history --help` documents the effect in the meantime, and the
+  terminal-write policy above adds a second way a row can be left at `running`
+  (a store that was down only for the terminal write), which the same
+  reconciliation pass would settle.
+- Replay coverage of the recording version gate (`wfrecord.Enabled`):
+  **closed** — every recorded workflow (`PromptWorkflow`, `DevelopWorkflow`,
+  `ReviewWorkflow`, `PilotWorkflow`, `FleetWorkflow`, `FleetPlanWorkflow`) is
+  replayed against a real history captured from the pre-recording code
+  (`testdata/*_before_recording.json`), so the upgrade path of an in-flight
+  execution is asserted per workflow, not assumed from the two that were covered
+  first. The `FleetPlanWorkflow` fixture carries no plan handle, which pins the
+  second gate on that path too (the `in.PlanID != ""` guard around `StorePlan`).
 - Whether `templates.json` remains the store for `run`/`schedule` templates or
   also moves to Postgres (out of scope here). `fleet-plan.json` is removed
   (decided, slice 5).
@@ -171,15 +223,25 @@ Three layers, each tested for behavior:
   the `codereview` tests.
 - **Workflows/activities**: use Temporal's Go testing suite
   (`testsuite.WorkflowTestSuite` / `TestWorkflowEnvironment`,
-  https://docs.temporal.io/develop/go/best-practices/testing-suite). Mock the
-  `Persist<Type>WorkflowState` activities via `env.OnActivity` to assert they are
-  invoked at start and terminal with the right record (kind, own-incremental
-  tokens, `parent_workflow_id`, status), and inject a `Persist…` failure to verify
-  the workflow fails (must-succeed semantics).
-- **`execstore` Postgres adapter**: a separate **real-Postgres integration
-  suite** (Testcontainers or the compose Postgres), since the DB and schema are
-  owned out-of-process dependencies a mock would not exercise. Covers upsert
-  idempotency on `run_id`, `jsonb` round-trip, and `history` query filters.
+  https://docs.temporal.io/develop/go/best-practices/testing-suite). The store is a
+  managed dependency, so the real `Persist<Type>WorkflowState` activities run
+  against one in-memory fake of the port (`execstoretest.Store`) rather than being
+  mocked: the assertion is then the *record* that was written (kind,
+  own-incremental tokens, `parent_workflow_id`, status, detail) instead of the fact
+  that a call happened. `execstoretest.Failing` and `FailingAfter` inject the two
+  outages that matter — a start write that cannot land (the workflow must fail) and
+  a store that goes down between the start and terminal writes (the workflow must
+  keep its outcome).
+- **Replay**: each recorded workflow is replayed against a genuine history
+  captured from the pre-recording code, because the recording version gate is code
+  whose mistakes surface only at replay time, in production.
+- **`execstore` Postgres adapter**: a **real-Postgres integration suite** on
+  `testcontainers-go` (per `AGENTS.md`), since the DB and schema are owned
+  out-of-process dependencies a mock would not exercise. It starts its own
+  throwaway Postgres and gives each test a database of its own, so it cannot skip
+  itself, needs no environment variable, and shares no state between tests.
+  Covers upsert idempotency on `run_id`, concurrent `Migrate` from several
+  workers, `jsonb` round-trip, and `history` query filters.
 
 ## Gate check
 

@@ -4,21 +4,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/client"
 
+	"temporal-agents/internal/execstore"
 	"temporal-agents/internal/fleet"
 )
-
-// defaultPlanFile is where `fleet plan` writes the generated plan and where
-// `fleet execute` reads it from when --plan is not given. It lives in the
-// current directory so the user can review and edit it between the two steps.
-const defaultPlanFile = "fleet-plan.json"
 
 // fleetCmd dispatches the "fleet" subcommands.
 func fleetCmd(args []string) {
@@ -31,28 +30,59 @@ func fleetCmd(args []string) {
 	case "-h", "--help", "help":
 		fleetHelp(os.Stdout)
 	case "plan":
-		if wantsHelp(args[1:]) {
-			fleetPlanHelp(os.Stdout)
-			return
-		}
-		prompt, out := parseFleetPlanFlags(args[1:])
-		runFleetPlan(prompt, out)
+		fleetPlanCmd(args[1:])
 	case "execute", "exec":
 		if wantsHelp(args[1:]) {
 			fleetExecuteHelp(os.Stdout)
 			return
 		}
-		planFile, summary := parseFleetExecuteFlags(args[1:])
-		runFleetExecute(planFile, summary)
+		planID, summary := parseFleetExecuteFlags(args[1:])
+		runFleetExecute(planID, summary)
 	default:
 		fatalf("unknown fleet subcommand %q (try: plan, execute)", args[0])
 	}
 }
 
+// fleetPlanCmd dispatches "fleet plan": generating a plan from a prompt, or
+// reviewing the plans already stored.
+func fleetPlanCmd(args []string) {
+	if wantsHelp(args) {
+		fleetPlanHelp(os.Stdout)
+		return
+	}
+	// The first word decides, exactly: "list", "ls" and "show" are subcommands and
+	// nothing else is. Inferring the intent from the shape of the remaining arguments
+	// instead would turn a mistyped read-only command ("fleet plan show --name foo")
+	// into a prompt, and so into a paid, hour-budget planning run that writes a stored
+	// plan — a precise refusal is worth more than a guess. The cost is that a goal
+	// worded as exactly one of those words is unreachable; fleetPlanHelp says so.
+	if len(args) > 0 {
+		switch args[0] {
+		case "list", "ls":
+			fleetPlanList(parseFleetPlanListFlags(args[1:]))
+			return
+		case "show":
+			if len(args) < 2 {
+				fatalf("usage: temporal-agents fleet plan show <handle>")
+			}
+			// Reject trailing arguments rather than ignore them, like every other
+			// parser in the CLI: a stray token usually means a mistyped flag.
+			if len(args) > 2 {
+				fatalf("unexpected argument %q", args[2])
+			}
+			fleetPlanShow(args[1])
+			return
+		}
+	}
+	prompt, name := parseFleetPlanFlags(args)
+	runFleetPlan(prompt, name)
+}
+
 // parseFleetPlanFlags reads the required prompt (positional) and the optional
-// --out <file> (or --out=<file>) destination for the generated plan.
-func parseFleetPlanFlags(args []string) (prompt, out string) {
-	out = defaultPlanFile
+// --name <name> (or --name=<name>) label for the stored plan. The plan's handle
+// is always generated; --name is display-only metadata, so there is deliberately
+// no way to choose a handle (a name nothing keeps unique could not resolve a plan).
+func parseFleetPlanFlags(args []string) (prompt, name string) {
 	setPrompt := func(v string) {
 		if prompt != "" {
 			fatalf("unexpected argument %q", v)
@@ -62,16 +92,16 @@ func parseFleetPlanFlags(args []string) (prompt, out string) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "--out":
+		case a == "--name":
 			if i+1 >= len(args) {
-				fatalf("--out requires a file path")
+				fatalf("--name requires a value")
 			}
-			out = args[i+1]
+			name = args[i+1]
 			i++
-		case strings.HasPrefix(a, "--out="):
-			out = strings.TrimPrefix(a, "--out=")
-			if out == "" {
-				fatalf("--out requires a file path")
+		case strings.HasPrefix(a, "--name="):
+			name = strings.TrimPrefix(a, "--name=")
+			if name == "" {
+				fatalf("--name requires a value")
 			}
 		case strings.HasPrefix(a, "--"):
 			// Reject unknown flags rather than silently treating them as the prompt,
@@ -84,14 +114,47 @@ func parseFleetPlanFlags(args []string) (prompt, out string) {
 	if strings.TrimSpace(prompt) == "" {
 		fatalf(`fleet plan requires a prompt`)
 	}
-	return prompt, out
+	return prompt, name
 }
 
-// parseFleetExecuteFlags reads the optional --plan <file> (or --plan=<file>)
-// plan source (defaulting to fleet-plan.json) plus the --summary toggle
-// propagated to every node's develop workflow.
-func parseFleetExecuteFlags(args []string) (planFile string, summary bool) {
-	planFile = defaultPlanFile
+// parseFleetPlanListFlags reads the optional --limit <n> (or --limit=<n>) cap on
+// how many stored plans are listed, returning 0 when it is unset so the store
+// applies its default. Anything else is rejected rather than ignored.
+func parseFleetPlanListFlags(args []string) (limit int) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		var v string
+		switch {
+		case a == "--limit":
+			if i+1 >= len(args) {
+				fatalf("--limit requires a value")
+			}
+			v = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--limit="):
+			v = strings.TrimPrefix(a, "--limit=")
+		default:
+			fatalf("unexpected argument %q", a)
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			fatalf("--limit requires a positive number, got %q", v)
+		}
+		// Capped exactly like `history --limit`, and for the same reason: the listing is
+		// read into memory and printed as one table.
+		if n > execstore.MaxListLimit {
+			fatalf("--limit is capped at %d, got %d", execstore.MaxListLimit, n)
+		}
+		limit = n
+	}
+	return limit
+}
+
+// parseFleetExecuteFlags reads the required --plan-id <handle> (or
+// --plan-id=<handle>) plan handle plus the --summary toggle propagated to every
+// node's develop workflow. A plan is resolved from the store by handle only:
+// there is no plan file to point at.
+func parseFleetExecuteFlags(args []string) (planID string, summary bool) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -102,33 +165,57 @@ func parseFleetExecuteFlags(args []string) (planFile string, summary bool) {
 			// wired into FleetWorkflow (Phase 2). Reject the flag explicitly rather
 			// than accept it and silently run local-review-only behavior.
 			fatalf("--with-remote is not yet implemented (the remote pipeline lands in a later phase)")
-		case a == "--plan":
+		case a == "--plan-id":
 			if i+1 >= len(args) {
-				fatalf("--plan requires a file path")
+				fatalf("--plan-id requires a plan handle")
 			}
-			planFile = args[i+1]
+			planID = args[i+1]
 			i++
-		case strings.HasPrefix(a, "--plan="):
-			planFile = strings.TrimPrefix(a, "--plan=")
-			if planFile == "" {
-				fatalf("--plan requires a file path")
+		case strings.HasPrefix(a, "--plan-id="):
+			planID = strings.TrimPrefix(a, "--plan-id=")
+			if planID == "" {
+				fatalf("--plan-id requires a plan handle")
 			}
 		default:
 			fatalf("unexpected argument %q", a)
 		}
 	}
-	return planFile, summary
+	if strings.TrimSpace(planID) == "" {
+		fatalf("fleet execute requires --plan-id <handle> (list stored plans with 'fleet plan list')")
+	}
+	return planID, summary
+}
+
+// planHandleHexDigits is how much of a UUID a plan handle keeps. The store upserts
+// on the handle, so a collision would silently overwrite somebody's plan instead of
+// failing — the one outcome with no error to report. 16 hex digits are 64 bits,
+// which keeps that outcome out of reach (a 50% chance needs on the order of 2^32
+// plans) while still being short enough to type on the command line.
+const planHandleHexDigits = 16
+
+// newPlanHandle mints the handle a plan is stored and referred to by. It is
+// generated up front so the CLI can print it before the (long) planning run
+// finishes.
+func newPlanHandle() string {
+	return "plan-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:planHandleHexDigits]
 }
 
 // runFleetPlan starts the planning workflow, waits for the generated dependency
-// graph, writes it to the plan file for review, and prints a short overview.
-func runFleetPlan(prompt, out string) {
+// graph, and prints the handle it was stored under. The workflow itself writes
+// the plan to the store, so a store failure fails the run: the printed handle
+// always resolves.
+func runFleetPlan(prompt, name string) {
 	c := dial()
 	defer c.Close()
 
 	id := "fleet-plan-" + uuid.NewString()
+	handle := newPlanHandle()
 	fmt.Println("Planning fleet…")
 	fmt.Printf("  id:      %s\n", id)
+	fmt.Printf("  plan:    %s\n", handle)
+	if name != "" {
+		fmt.Printf("  name:    %s\n", name)
+	}
 	fmt.Printf("  prompt:  %s\n", truncate(prompt, 60))
 	fmt.Printf("  workdir: %s\n", cwd())
 	fmt.Printf("  watch:   temporal-agents watch %s\n", id)
@@ -136,7 +223,12 @@ func runFleetPlan(prompt, out string) {
 	we, err := c.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{
 		ID:        id,
 		TaskQueue: TaskQueue,
-	}, fleet.FleetPlanWorkflow, fleet.FleetPlanInput{Goal: prompt, WorkDir: cwd()})
+	}, fleet.FleetPlanWorkflow, fleet.FleetPlanInput{
+		Goal:    prompt,
+		WorkDir: cwd(),
+		PlanID:  handle,
+		Name:    name,
+	})
 	if err != nil {
 		fatalf("Could not start fleet planning: %v", err)
 	}
@@ -146,16 +238,90 @@ func runFleetPlan(prompt, out string) {
 		fatalf("Fleet planning failed: %v", err)
 	}
 
-	data, err := json.MarshalIndent(plan, "", "  ")
+	fmt.Printf("\nPlan %s stored (%d node(s)):\n", handle, len(plan.Nodes))
+	printPlanNodes(plan)
+	fmt.Printf("\nReview it with:\n  temporal-agents fleet plan show %s\n", handle)
+	fmt.Printf("Then run it with:\n  temporal-agents fleet execute --plan-id %s\n", handle)
+}
+
+// fleetPlanList prints the stored plans, newest first, capped at limit (0 leaves
+// the cap to the store's default).
+func fleetPlanList(limit int) {
+	ctx := context.Background()
+	store, err := openStore(ctx)
 	if err != nil {
-		fatalf("Could not encode plan: %v", err)
+		fatalf("%v", err)
 	}
-	data = append(data, '\n')
-	if err := os.WriteFile(out, data, 0o644); err != nil {
-		fatalf("Could not write plan to %s: %v", out, err)
+	defer store.Close()
+
+	plans, err := store.ListPlans(ctx, limit)
+	if err != nil {
+		fatalf("Could not read the stored fleet plans: %v", err)
+	}
+	if len(plans) == 0 {
+		fmt.Println("No fleet plans stored yet.")
+		fmt.Println(`Create one with:  temporal-agents fleet plan "<prompt>"`)
+		return
 	}
 
-	fmt.Printf("\nPlan written to %s (%d node(s)):\n", out, len(plan.Nodes))
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(tw, "HANDLE\tNAME\tNODES\tCREATED\tGOAL")
+	fmt.Fprintln(tw, "──────\t────\t─────\t───────\t────")
+	for _, p := range plans {
+		name := p.Name
+		if name == "" {
+			name = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\t%s\n",
+			p.ID, name, p.Nodes, formatStamp(p.CreatedAt), truncate(p.Goal, 50))
+	}
+	tw.Flush()
+	fmt.Printf("\n%d plan(s)\n", len(plans))
+	// A full page is indistinguishable from "that is all there is", so say so:
+	// otherwise an operator with more plans than the cap cannot tell that older ones
+	// exist.
+	if len(plans) == effectivePlanLimit(limit) {
+		fmt.Printf("Showing the newest %d; raise the cap with --limit <n>.\n", len(plans))
+	}
+}
+
+// effectivePlanLimit resolves the cap a listing was actually served under, so the
+// "there may be more" hint matches the store's own default when none was given.
+func effectivePlanLimit(limit int) int {
+	if limit <= 0 {
+		return execstore.DefaultPlanLimit
+	}
+	return limit
+}
+
+// fleetPlanShow prints one stored plan in full.
+func fleetPlanShow(handle string) {
+	ctx := context.Background()
+	store, err := openStore(ctx)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	defer store.Close()
+
+	stored, err := store.Plan(ctx, handle)
+	if err != nil {
+		fatalf("%s", planReadError(handle, err))
+	}
+	plan := decodePlan(handle, stored.Document)
+
+	fmt.Printf("handle:  %s\n", stored.ID)
+	if stored.Name != "" {
+		fmt.Printf("name:    %s\n", stored.Name)
+	}
+	fmt.Printf("created: %s\n", formatStamp(stored.CreatedAt))
+	fmt.Printf("goal:    %s\n", plan.Goal)
+	fmt.Printf("nodes:   %d\n", len(plan.Nodes))
+	printPlanNodes(plan)
+	fmt.Printf("\nRun it with:\n  temporal-agents fleet execute --plan-id %s\n", stored.ID)
+}
+
+// printPlanNodes lists a plan's nodes with their ordering dependencies.
+func printPlanNodes(plan fleet.FleetPlan) {
 	for _, n := range plan.Nodes {
 		if len(n.DependsOn) == 0 {
 			fmt.Printf("  - %s\n", n.ID)
@@ -163,30 +329,59 @@ func runFleetPlan(prompt, out string) {
 			fmt.Printf("  - %s (depends on %s)\n", n.ID, strings.Join(n.DependsOn, ", "))
 		}
 	}
-	fmt.Printf("\nReview/edit %s, then run:\n  temporal-agents fleet execute --plan %s\n", out, out)
 }
 
-// runFleetExecute reads the approved plan file and starts the fleet workflow,
-// returning immediately (like `run`) with a watch hint.
-func runFleetExecute(planFile string, summary bool) {
-	data, err := os.ReadFile(planFile)
-	if err != nil {
-		fatalf("Could not read plan %s: %v", planFile, err)
+// planReadError renders a failed plan lookup as the message to abort with,
+// distinguishing an unknown handle (the operator mistyped it, or the plan was
+// never stored) from a store problem. Either way the operation aborts: the store is
+// the only source of truth for a plan, so there is nothing to fall back on.
+//
+// It returns a plain string rather than an error because the text is a finished,
+// capitalized, punctuated sentence for the operator, which is exactly what a Go
+// error string must not be.
+func planReadError(handle string, err error) string {
+	if errors.Is(err, execstore.ErrNoSuchPlan) {
+		return fmt.Sprintf("No fleet plan with handle %q (list them with 'fleet plan list').", handle)
 	}
-	// Decode strictly: reject unknown fields (a misspelled "dependsOn" must fail
-	// rather than silently drop the ordering constraint) while still rejecting any
-	// trailing data after the plan object, as json.Unmarshal did.
+	return fmt.Sprintf("Could not read fleet plan %s: %v", handle, err)
+}
+
+// decodePlan decodes a stored plan document into the fleet's own plan type,
+// strictly: an unknown field means the stored document does not match the plan
+// schema this binary understands, which must fail loudly rather than silently drop
+// (for example) a dependency edge.
+func decodePlan(handle string, document []byte) fleet.FleetPlan {
 	var plan fleet.FleetPlan
-	dec := json.NewDecoder(bytes.NewReader(data))
+	dec := json.NewDecoder(bytes.NewReader(document))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&plan); err != nil {
-		fatalf("Could not parse plan %s: %v", planFile, err)
+		fatalf("Could not parse stored plan %s: %v", handle, err)
 	}
 	if dec.More() {
-		fatalf("Could not parse plan %s: unexpected trailing data after the plan object", planFile)
+		fatalf("Could not parse stored plan %s: unexpected trailing data after the plan object", handle)
 	}
+	return plan
+}
+
+// runFleetExecute resolves the approved plan by handle and starts the fleet
+// workflow, returning immediately (like `run`) with a watch hint.
+func runFleetExecute(planID string, summary bool) {
+	ctx := context.Background()
+	store, err := openStore(ctx)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	defer store.Close()
+
+	stored, err := store.Plan(ctx, planID)
+	if err != nil {
+		fatalf("%s", planReadError(planID, err))
+	}
+	plan := decodePlan(planID, stored.Document)
+	// The validation gate still runs before any child workflow starts, exactly as
+	// it did when the plan came from a file.
 	if err := fleet.ValidatePlan(plan); err != nil {
-		fatalf("Plan %s is invalid: %v", planFile, err)
+		fatalf("Plan %s is invalid: %v", planID, err)
 	}
 
 	wtDir, err := worktreesDir()
@@ -198,7 +393,7 @@ func runFleetExecute(planFile string, summary bool) {
 	defer c.Close()
 
 	id := "fleet-" + uuid.NewString()
-	we, err := c.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{
+	we, err := c.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:        id,
 		TaskQueue: TaskQueue,
 	}, fleet.FleetWorkflow, fleet.FleetInput{
@@ -206,6 +401,9 @@ func runFleetExecute(planFile string, summary bool) {
 		WorkDir:      cwd(),
 		WorktreesDir: wtDir,
 		Summary:      summary,
+		// Recorded on the run, so an execution is traceable back to the plan it came
+		// from.
+		PlanID: stored.ID,
 	})
 	if err != nil {
 		fatalf("Could not start fleet: %v", err)
@@ -213,6 +411,7 @@ func runFleetExecute(planFile string, summary bool) {
 
 	fmt.Println("Fleet started.")
 	fmt.Printf("  id:      %s\n", we.GetID())
+	fmt.Printf("  plan:    %s\n", stored.ID)
 	fmt.Printf("  goal:    %s\n", truncate(plan.Goal, 60))
 	fmt.Printf("  nodes:   %d\n", len(plan.Nodes))
 	fmt.Printf("  workdir: %s (each node develops in its own worktree under %s)\n", cwd(), wtDir)
@@ -232,15 +431,22 @@ Dependencies control both execution order and code layering: each slice develops
 on its own branch, seeded with the committed work of the slices it depends on, so
 a dependent is developed on top of its prerequisites' reviewed code.
 
+Plans live in the store (Postgres), not in a file: planning prints a handle, and
+that handle is how a plan is reviewed and executed later.
+
 USAGE
-  temporal-agents fleet plan "<prompt>" [--out <file>]
-  temporal-agents fleet execute [--plan <file>] [--summary]
+  temporal-agents fleet plan "<prompt>" [--name <name>]
+  temporal-agents fleet plan list [--limit <n>]
+  temporal-agents fleet plan show <handle>
+  temporal-agents fleet execute --plan-id <handle> [--summary]
 
 SUBCOMMANDS
-  plan     Have the agent decompose a prompt into a dependency graph and write
-           it to a file for you to review and approve.
-  execute  Orchestrate an approved plan file: run a develop workflow per node in
-           dependency order and aggregate the results.
+  plan            Have the agent decompose a prompt into a dependency graph,
+                  stored under a printed handle for you to review and approve.
+  plan list       List the stored plans.
+  plan show       Print one stored plan.
+  execute         Orchestrate a stored plan: run a develop workflow per node in
+                  dependency order and aggregate the results.
 
 See "temporal-agents fleet plan --help" and
 "temporal-agents fleet execute --help".
@@ -251,43 +457,59 @@ func fleetPlanHelp(w io.Writer) {
 	fmt.Fprint(w, `temporal-agents fleet plan — decompose a change into a dependency graph
 
 Runs a Pi agent that reads the repository (making no code changes) and produces
-a "fleet plan": a dependency graph of small, independently reviewable slices.
-The plan is written to a JSON file (default fleet-plan.json) for you to review
-and edit before approving it with "fleet execute".
+a "fleet plan": a dependency graph of small, independently reviewable slices. The
+plan is stored in Postgres under a generated handle and printed, so you can
+review it and then execute it by that handle. There is no plan file.
+
+The handle is the only way to select a plan. --name is display-only metadata for
+the listing: nothing keeps a name unique, so it could not resolve a plan.
+
+"list", "ls" and "show" are read as subcommands, so a goal cannot be worded as
+exactly one of them; say "plan a listing of …" instead.
 
 USAGE
-  temporal-agents fleet plan "<prompt>" [--out <file>]
+  temporal-agents fleet plan "<prompt>" [--name <name>]
+  temporal-agents fleet plan list [--limit <n>]
+  temporal-agents fleet plan show <handle>
 
 FLAGS
-  --out <file>   Where to write the generated plan (default: fleet-plan.json)
+  --name <name>   Label shown next to the plan in "fleet plan list"
+  --limit <n>     How many plans "fleet plan list" shows (default 20, at most 1000)
 
 EXAMPLES
   temporal-agents fleet plan "expose the pricing domain via REST and gRPC"
-  temporal-agents fleet plan "add multi-tenant support" --out tenant-plan.json
+  temporal-agents fleet plan "add multi-tenant support" --name tenancy
+  temporal-agents fleet plan list
+  temporal-agents fleet plan list --limit 50
+  temporal-agents fleet plan show plan-1a2b3c4d5e6f
 `)
 }
 
 func fleetExecuteHelp(w io.Writer) {
-	fmt.Fprint(w, `temporal-agents fleet execute — orchestrate an approved plan
+	fmt.Fprint(w, `temporal-agents fleet execute — orchestrate a stored plan
 
-Reads an approved plan file and runs a develop workflow per node, processing the
-graph in dependency layers: independent nodes run in parallel, and a node only
-starts once every node it depends on has succeeded. A node whose dependency did
-not succeed is skipped. Every node develops in its own git worktree under your
-user config directory, so parallel nodes never share a working tree. When all
-nodes settle, a single summary notification aggregates each node's status and
-develop-step token usage.
+Resolves an approved plan by its handle and runs a develop workflow per node,
+processing the graph in dependency layers: independent nodes run in parallel, and
+a node only starts once every node it depends on has succeeded. A node whose
+dependency did not succeed is skipped. Every node develops in its own git
+worktree under your user config directory, so parallel nodes never share a
+working tree. When all nodes settle, a single summary notification aggregates
+each node's status and develop-step token usage.
+
+The plan is read from the store, which is authoritative: a plan that cannot be
+read aborts the run rather than falling back to anything.
 
 USAGE
-  temporal-agents fleet execute [--plan <file>] [--summary]
+  temporal-agents fleet execute --plan-id <handle> [--summary]
 
 FLAGS
-  --plan <file>   Plan file to execute (default: fleet-plan.json)
-  --summary       Propagate --summary to each node's develop workflow
+  --plan-id <handle>   Stored plan to execute (see "fleet plan list")
+  --summary            Propagate --summary to each node's develop workflow
 
 EXAMPLES
-  temporal-agents fleet execute
-  temporal-agents fleet execute --plan tenant-plan.json
+  temporal-agents fleet plan list
+  temporal-agents fleet execute --plan-id plan-1a2b3c4d5e6f
+  temporal-agents fleet execute --plan-id plan-1a2b3c4d5e6f --summary
   temporal-agents watch <workflow-id>
 `)
 }

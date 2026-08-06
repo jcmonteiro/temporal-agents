@@ -1,0 +1,327 @@
+package fleet
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/temporal"
+
+	"temporal-agents/internal/codereview"
+	"temporal-agents/internal/execstore"
+	"temporal-agents/internal/execstore/execstoretest"
+	"temporal-agents/internal/wfrecord"
+	"temporal-agents/internal/wftest"
+)
+
+// The recording tests drive the real PersistFleetWorkflowState activity against
+// execstoretest.Store, an in-memory stand-in for the execstore port, so they
+// assert on the record that was written rather than on which activity was called.
+
+func TestFleetWorkflow_RecordsStartAndTerminalStateWithPerNodeBreakdown(t *testing.T) {
+	store := execstoretest.New()
+	env := newEnvWithStore(t, store)
+
+	env.OnActivity(fa.ResolveBase, mock.Anything, mock.Anything).Return("base-sha", nil)
+	env.OnWorkflow(codereview.DevelopWorkflow, mock.Anything, mock.Anything).
+		Return("developed successfully\n\nTotal token usage across all sessions: 1,000 tokens.", nil)
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(FleetWorkflow, FleetInput{
+		Plan: linearPlan(), WorkDir: "/repo", WorktreesDir: "/wt", PlanID: "plan-abcd1234"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	recs := store.Records()
+	require.Len(t, recs, 2)
+
+	start := recs[0]
+	require.Equal(t, execstore.KindFleet, start.Kind)
+	require.Equal(t, execstore.StatusRunning, start.Status)
+	require.Equal(t, "expose the core", start.Prompt)
+	require.Equal(t, "plan-abcd1234", start.Detail.PlanID, "a run is traceable back to the plan it came from")
+	require.Equal(t, 2, start.Detail.PlanNodes)
+
+	end := recs[1]
+	require.Equal(t, start.RunID, end.RunID, "both writes key on the run ID, so the second upserts the first")
+	require.Equal(t, execstore.StatusSucceeded, end.Status)
+	require.Len(t, end.Detail.Nodes, 2)
+	require.Equal(t, "core", end.Detail.Nodes[0].ID)
+	require.Equal(t, string(StatusSucceeded), end.Detail.Nodes[0].Status)
+	// The orchestrator runs no agent of its own, and each node's develop run records
+	// its own usage, so the parent row must add nothing to the total.
+	require.Zero(t, end.Tokens)
+}
+
+func TestFleetWorkflow_SkippedNodeLivesInTheParentsDetail(t *testing.T) {
+	store := execstoretest.New()
+	env := newEnvWithStore(t, store)
+
+	env.OnActivity(fa.ResolveBase, mock.Anything, mock.Anything).Return("base-sha", nil)
+	// The first node fails, so its dependent is skipped and never starts a child
+	// workflow of its own.
+	env.OnWorkflow(codereview.DevelopWorkflow, mock.Anything, mock.Anything).
+		Return("", errors.New("develop failed"))
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(FleetWorkflow, FleetInput{
+		Plan: linearPlan(), WorkDir: "/repo", WorktreesDir: "/wt"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	end := store.Last(t)
+	nodes := map[string]execstore.NodeOutcome{}
+	for _, n := range end.Detail.Nodes {
+		nodes[n.ID] = n
+	}
+	require.Equal(t, string(StatusFailed), nodes["core"].Status)
+	// A skipped node has no child run ID, so the parent's breakdown is the only
+	// place its outcome can live — and it names the dependency that blocked it.
+	require.Equal(t, string(StatusSkipped), nodes["rest"].Status)
+	require.Contains(t, nodes["rest"].Detail, "core")
+}
+
+func TestFleetWorkflow_RejectedUpFront_StillRecordsTheAttempt(t *testing.T) {
+	store := execstoretest.New()
+	env := newEnvWithStore(t, store)
+
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	// A missing worktrees directory is rejected before any node starts.
+	env.ExecuteWorkflow(FleetWorkflow, FleetInput{Plan: linearPlan(), WorkDir: "/repo"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	end := store.Last(t)
+	require.Equal(t, execstore.StatusFailed, end.Status)
+	require.Contains(t, end.Detail.Error, "WorktreesDir")
+}
+
+func TestFleetWorkflow_RecordingFailure_FailsTheWorkflow(t *testing.T) {
+	store := execstoretest.Failing(errors.New("postgres is down"))
+	env := newEnvWithStore(t, store)
+
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(FleetWorkflow, FleetInput{
+		Plan: linearPlan(), WorkDir: "/repo", WorktreesDir: "/wt"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.ErrorContains(t, env.GetWorkflowError(), "postgres is down")
+	// The record comes first, so an unrecordable run starts no node.
+	env.AssertNotCalled(t, wftest.ActivityName(fa.ResolveBase), mock.Anything, mock.Anything)
+}
+
+// cra references the codereview activity bundle's method names for OnActivity, so
+// a fleet test can let a real child develop workflow run.
+var cra *codereview.Activities
+
+func TestFleetWorkflow_NodeChildRecordsTheFleetAsItsParent(t *testing.T) {
+	store := execstoretest.New()
+	env := newEnvWithStore(t, store)
+	// Let the real child develop workflow run, with the same store, so it records
+	// itself as this fleet's child. Its own review child is mocked away.
+	env.RegisterActivity(&codereview.Activities{Store: store})
+	env.RegisterWorkflow(codereview.ReviewWorkflow)
+
+	env.OnActivity(fa.ResolveBase, mock.Anything, mock.Anything).Return("base-sha", nil)
+	env.OnActivity(cra.CreateBranch, mock.Anything, mock.Anything).
+		Return(codereview.CreateBranchResult{Branch: "feat/node", WorkDir: "/wt/node", BaseSHA: "base-sha"}, nil)
+	env.OnActivity(cra.RunDevelopAgent, mock.Anything, mock.Anything).
+		Return(codereview.AgentResult{Output: "done", Tokens: 400}, nil)
+	env.OnActivity(cra.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnWorkflow(codereview.ReviewWorkflow, mock.Anything, mock.Anything).
+		Return(codereview.ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(FleetWorkflow, FleetInput{
+		Plan:    FleetPlan{Goal: "one node", Nodes: []FleetNode{{ID: "core", Prompt: "implement the core"}}},
+		WorkDir: "/repo", WorktreesDir: "/wt"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var fleetRec, nodeRec execstore.Execution
+	for _, r := range store.Records() {
+		switch r.Kind {
+		case execstore.KindFleet:
+			fleetRec = r
+		case execstore.KindDevelop:
+			nodeRec = r
+		}
+	}
+	require.NotEmpty(t, fleetRec.WorkflowID)
+	require.NotEmpty(t, nodeRec.WorkflowID)
+	// The tree is reconstructed from the parent handle, not by parsing workflow IDs:
+	// the node points at the fleet run that started it.
+	require.Equal(t, fleetRec.WorkflowID, nodeRec.ParentWorkflowID)
+	// Each row carries its own usage: the node's develop tokens live on the node
+	// row, and the parent adds nothing.
+	require.Equal(t, 400, nodeRec.Tokens)
+	require.Zero(t, fleetRec.Tokens)
+}
+
+func TestFleetPlanWorkflow_StoresThePlanAndRecordsThePlanningRun(t *testing.T) {
+	store := execstoretest.New()
+	env := newEnvWithStore(t, store)
+	plan := linearPlan()
+
+	env.OnActivity(fa.GeneratePlan, mock.Anything, mock.Anything).
+		Return(GeneratePlanResult{Plan: plan, Tokens: 1234}, nil)
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(FleetPlanWorkflow, FleetPlanInput{
+		Goal: "expose the core", WorkDir: "/repo", PlanID: "plan-abcd1234", Name: "core"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	// The plan is stored under the handle the caller generated, so the handle it
+	// printed up front resolves once planning succeeds.
+	stored, err := store.Plan(context.Background(), "plan-abcd1234")
+	require.NoError(t, err)
+	require.Equal(t, "core", stored.Name)
+	require.Equal(t, "expose the core", stored.Goal)
+	require.Equal(t, 2, stored.Nodes)
+	require.JSONEq(t, `{"goal":"expose the core","nodes":[
+		{"id":"core","prompt":"implement the core"},
+		{"id":"rest","prompt":"expose via REST","dependsOn":["core"]}]}`, string(stored.Document))
+
+	// Planning is recorded as its own kind, so its cost is visible separately from
+	// the fleet run that later executes the plan.
+	end := store.Last(t)
+	require.Equal(t, execstore.KindFleetPlan, end.Kind)
+	require.Equal(t, execstore.StatusSucceeded, end.Status)
+	require.Equal(t, "expose the core", end.Prompt)
+	require.Equal(t, 1234, end.Tokens)
+	require.Equal(t, "plan-abcd1234", end.Detail.PlanID)
+	require.Equal(t, 2, end.Detail.PlanNodes)
+}
+
+func TestFleetPlanWorkflow_PlanThatCannotBeStoredFailsPlanning(t *testing.T) {
+	// The store is the plan's only home, so a plan that was not written must not be
+	// announced as ready: planning fails loudly instead of printing a handle that
+	// resolves to nothing.
+	store := execstoretest.New()
+	env := newEnvWithStore(t, store)
+
+	env.OnActivity(fa.GeneratePlan, mock.Anything, mock.Anything).
+		Return(GeneratePlanResult{Plan: linearPlan(), Tokens: 10}, nil)
+	env.OnActivity(fa.StorePlan, mock.Anything, mock.Anything).
+		Return(errors.New("postgres is down"))
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(FleetPlanWorkflow, FleetPlanInput{
+		Goal: "expose the core", WorkDir: "/repo", PlanID: "plan-abcd1234"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.ErrorContains(t, env.GetWorkflowError(), "postgres is down")
+	end := store.Last(t)
+	require.Equal(t, execstore.StatusFailed, end.Status)
+}
+
+func TestPersistFleetWorkflowState_RedactsAndCapsTheGoal(t *testing.T) {
+	// The goal is free text like every other recorded field, so it goes through the
+	// same funnel: a credential is removed and the length is bounded.
+	store := execstoretest.New()
+	a := &Activities{Store: store}
+
+	require.NoError(t, a.PersistFleetWorkflowState(context.Background(), FleetState{
+		WorkflowID: "fleet-1", RunID: "fleet-1-a",
+		Goal: "mirror https://user:s3cret@example.test/repo.git " + strings.Repeat("x", 4*wfrecord.MaxDetailText),
+	}))
+
+	got := store.Last(t)
+	require.NotContains(t, got.Prompt, "s3cret")
+	require.Less(t, len(got.Prompt), 2*wfrecord.MaxDetailText)
+}
+
+func TestPersistFleetPlanWorkflowState_RedactsTheGoal(t *testing.T) {
+	store := execstoretest.New()
+	a := &Activities{Store: store}
+
+	require.NoError(t, a.PersistFleetPlanWorkflowState(context.Background(), FleetPlanState{
+		WorkflowID: "fleet-plan-1", RunID: "fleet-plan-1-a",
+		Goal: "use ghp_0123456789abcdefghij to read the issues",
+	}))
+
+	require.NotContains(t, store.Last(t).Prompt, "ghp_0123456789abcdefghij")
+}
+
+func TestNodeOutcomes_RedactsACredentialAChildErrorCarries(t *testing.T) {
+	// A node's detail is the child workflow's error verbatim, and git echoes the
+	// remote it failed on — which embeds the token when the remote is
+	// token-authenticated. The durable record must not keep it.
+	results := []NodeResult{{
+		ID:     "core",
+		Status: StatusFailed,
+		Detail: "push failed: unable to access 'https://x-access-token:ghs_0123456789abcdefghij@github.com/o/r.git/'",
+	}}
+
+	out := nodeOutcomes(results)
+
+	require.Len(t, out, 1)
+	require.NotContains(t, out[0].Detail, "ghs_0123456789abcdefghij")
+	require.Contains(t, out[0].Detail, "github.com/o/r.git", "the reason the node failed still reads")
+}
+
+func TestNodeOutcomes_CapsANodesDetail(t *testing.T) {
+	// On the success path the detail is the child's whole summary output, and the
+	// parent row holds one per node, so an uncapped detail would let one node bloat
+	// the row.
+	results := []NodeResult{{ID: "core", Status: StatusSucceeded,
+		Detail: strings.Repeat("agent output\n", 4*wfrecord.MaxDetailText)}}
+
+	out := nodeOutcomes(results)
+
+	require.Len(t, out, 1)
+	require.Less(t, len(out[0].Detail), 2*wfrecord.MaxDetailText)
+}
+
+func TestStorePlan_RequiresAStore(t *testing.T) {
+	// A worker without the plan port wired in must fail loudly rather than panic.
+	var a Activities
+
+	err := a.StorePlan(context.Background(), StorePlanRequest{PlanID: "plan-1", Plan: linearPlan()})
+
+	require.ErrorIs(t, err, execstore.ErrNotConfigured)
+}
+
+func TestStorePlan_RedactsACredentialInTheStoredGoal(t *testing.T) {
+	// The goal is agent-restated free text stored for the listing, so it passes
+	// through the same funnel as every other stored text.
+	store := execstoretest.New()
+	a := &Activities{Plans: store}
+	plan := linearPlan()
+	plan.Goal = "mirror https://user:s3cret@example.test/repo.git"
+
+	require.NoError(t, a.StorePlan(context.Background(),
+		StorePlanRequest{PlanID: "plan-1", Plan: plan}))
+
+	stored, err := store.Plan(context.Background(), "plan-1")
+	require.NoError(t, err)
+	require.NotContains(t, stored.Goal, "s3cret")
+	require.Contains(t, stored.Goal, "REDACTED")
+}
+
+func TestStorePlan_RefusesADocumentOverTheStoresBudget(t *testing.T) {
+	// The document must stay decodable, so it can be neither redacted nor trimmed: an
+	// oversized plan is refused instead, and refused non-retryably, since storing the
+	// same bytes again cannot succeed.
+	store := execstoretest.New()
+	a := &Activities{Plans: store}
+	plan := linearPlan()
+	plan.Nodes[0].Prompt = strings.Repeat("x", execstore.MaxPlanDocument+1)
+
+	err := a.StorePlan(context.Background(), StorePlanRequest{PlanID: "plan-1", Plan: plan})
+
+	var appErr *temporal.ApplicationError
+	require.ErrorAs(t, err, &appErr)
+	require.Equal(t, errPlanTooLarge, appErr.Type())
+	require.True(t, appErr.NonRetryable(), "retrying the same oversized plan cannot succeed")
+	_, perr := store.Plan(context.Background(), "plan-1")
+	require.ErrorIs(t, perr, execstore.ErrNoSuchPlan, "nothing was written")
+}

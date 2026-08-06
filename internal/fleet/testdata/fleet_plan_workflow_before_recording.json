@@ -1,0 +1,341 @@
+{
+  "events":  [
+    {
+      "eventId":  "1",
+      "eventTime":  "2026-08-06T15:17:18.369740Z",
+      "eventType":  "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+      "taskId":  "1048801",
+      "workflowExecutionStartedEventAttributes":  {
+        "workflowType":  {
+          "name":  "FleetPlanWorkflow"
+        },
+        "taskQueue":  {
+          "name":  "capture-fleet-plan",
+          "kind":  "TASK_QUEUE_KIND_NORMAL"
+        },
+        "input":  {
+          "payloads":  [
+            {
+              "metadata":  {
+                "encoding":  "anNvbi9wbGFpbg=="
+              },
+              "data":  "eyJHb2FsIjoic3BsaXQgdGhlIHdvcmsiLCJXb3JrRGlyIjoiL3JlcG8ifQ=="
+            }
+          ]
+        },
+        "workflowExecutionTimeout":  "0s",
+        "workflowRunTimeout":  "0s",
+        "workflowTaskTimeout":  "10s",
+        "originalExecutionRunId":  "019fd7a6-75a1-7b4a-beaf-ae6b511bcb0b",
+        "identity":  "81856@M-01053@",
+        "firstExecutionRunId":  "019fd7a6-75a1-7b4a-beaf-ae6b511bcb0b",
+        "attempt":  1,
+        "firstWorkflowTaskBackoff":  "0s",
+        "header":  {},
+        "workflowId":  "fleet-plan-fixture"
+      }
+    },
+    {
+      "eventId":  "2",
+      "eventTime":  "2026-08-06T15:17:18.369799Z",
+      "eventType":  "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId":  "1048802",
+      "workflowTaskScheduledEventAttributes":  {
+        "taskQueue":  {
+          "name":  "capture-fleet-plan",
+          "kind":  "TASK_QUEUE_KIND_NORMAL"
+        },
+        "startToCloseTimeout":  "10s",
+        "attempt":  1
+      }
+    },
+    {
+      "eventId":  "3",
+      "eventTime":  "2026-08-06T15:17:18.410306Z",
+      "eventType":  "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId":  "1048807",
+      "workflowTaskStartedEventAttributes":  {
+        "scheduledEventId":  "2",
+        "identity":  "81856@M-01053@",
+        "requestId":  "4c85d22c-88b6-4093-8ce3-9b429b9098ce",
+        "historySizeBytes":  "333",
+        "workerVersion":  {
+          "buildId":  "d7dc3f274cf5eda8d07bfd9b8cdb026c"
+        }
+      }
+    },
+    {
+      "eventId":  "4",
+      "eventTime":  "2026-08-06T15:17:18.413457Z",
+      "eventType":  "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId":  "1048811",
+      "workflowTaskCompletedEventAttributes":  {
+        "scheduledEventId":  "2",
+        "startedEventId":  "3",
+        "identity":  "81856@M-01053@",
+        "workerVersion":  {
+          "buildId":  "d7dc3f274cf5eda8d07bfd9b8cdb026c"
+        },
+        "sdkMetadata":  {
+          "langUsedFlags":  [
+            3
+          ],
+          "sdkName":  "temporal-go",
+          "sdkVersion":  "1.46.0"
+        },
+        "meteringMetadata":  {}
+      }
+    },
+    {
+      "eventId":  "5",
+      "eventTime":  "2026-08-06T15:17:18.413502Z",
+      "eventType":  "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId":  "1048812",
+      "activityTaskScheduledEventAttributes":  {
+        "activityId":  "5",
+        "activityType":  {
+          "name":  "GeneratePlan"
+        },
+        "taskQueue":  {
+          "name":  "capture-fleet-plan",
+          "kind":  "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header":  {},
+        "input":  {
+          "payloads":  [
+            {
+              "metadata":  {
+                "encoding":  "anNvbi9wbGFpbg=="
+              },
+              "data":  "eyJHb2FsIjoic3BsaXQgdGhlIHdvcmsiLCJXb3JrRGlyIjoiL3JlcG8ifQ=="
+            }
+          ]
+        },
+        "scheduleToCloseTimeout":  "0s",
+        "scheduleToStartTimeout":  "0s",
+        "startToCloseTimeout":  "3600s",
+        "heartbeatTimeout":  "60s",
+        "workflowTaskCompletedEventId":  "4",
+        "retryPolicy":  {
+          "initialInterval":  "1s",
+          "backoffCoefficient":  2,
+          "maximumInterval":  "100s",
+          "maximumAttempts":  1
+        },
+        "useWorkflowBuildId":  true
+      }
+    },
+    {
+      "eventId":  "6",
+      "eventTime":  "2026-08-06T15:17:18.460142Z",
+      "eventType":  "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId":  "1048818",
+      "activityTaskStartedEventAttributes":  {
+        "scheduledEventId":  "5",
+        "identity":  "81856@M-01053@",
+        "requestId":  "a9c2c10e-c6cb-4d10-b5dc-bcba387fcf93",
+        "attempt":  1,
+        "workerVersion":  {
+          "buildId":  "d7dc3f274cf5eda8d07bfd9b8cdb026c"
+        }
+      }
+    },
+    {
+      "eventId":  "7",
+      "eventTime":  "2026-08-06T15:17:18.462847Z",
+      "eventType":  "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "taskId":  "1048819",
+      "activityTaskCompletedEventAttributes":  {
+        "result":  {
+          "payloads":  [
+            {
+              "metadata":  {
+                "encoding":  "anNvbi9wbGFpbg=="
+              },
+              "data":  "eyJQbGFuIjp7ImdvYWwiOiJzcGxpdCB0aGUgd29yayIsIm5vZGVzIjpbeyJpZCI6ImEiLCJwcm9tcHQiOiJkbyBhIn1dfSwiVG9rZW5zIjo1MDB9"
+            }
+          ]
+        },
+        "scheduledEventId":  "5",
+        "startedEventId":  "6",
+        "identity":  "81856@M-01053@"
+      }
+    },
+    {
+      "eventId":  "8",
+      "eventTime":  "2026-08-06T15:17:18.462861Z",
+      "eventType":  "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId":  "1048820",
+      "workflowTaskScheduledEventAttributes":  {
+        "taskQueue":  {
+          "name":  "M-01053:7f720b2d-42f7-4bae-903b-64140dccde08",
+          "kind":  "TASK_QUEUE_KIND_STICKY",
+          "normalName":  "capture-fleet-plan"
+        },
+        "startToCloseTimeout":  "10s",
+        "attempt":  1
+      }
+    },
+    {
+      "eventId":  "9",
+      "eventTime":  "2026-08-06T15:17:18.511645Z",
+      "eventType":  "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId":  "1048824",
+      "workflowTaskStartedEventAttributes":  {
+        "scheduledEventId":  "8",
+        "identity":  "81856@M-01053@",
+        "requestId":  "9a319bb8-eae8-4b53-bc84-f1280e84490a",
+        "historySizeBytes":  "1134",
+        "workerVersion":  {
+          "buildId":  "d7dc3f274cf5eda8d07bfd9b8cdb026c"
+        }
+      }
+    },
+    {
+      "eventId":  "10",
+      "eventTime":  "2026-08-06T15:17:18.518347Z",
+      "eventType":  "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId":  "1048828",
+      "workflowTaskCompletedEventAttributes":  {
+        "scheduledEventId":  "8",
+        "startedEventId":  "9",
+        "identity":  "81856@M-01053@",
+        "workerVersion":  {
+          "buildId":  "d7dc3f274cf5eda8d07bfd9b8cdb026c"
+        },
+        "sdkMetadata":  {},
+        "meteringMetadata":  {}
+      }
+    },
+    {
+      "eventId":  "11",
+      "eventTime":  "2026-08-06T15:17:18.518442Z",
+      "eventType":  "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId":  "1048829",
+      "activityTaskScheduledEventAttributes":  {
+        "activityId":  "11",
+        "activityType":  {
+          "name":  "Notify"
+        },
+        "taskQueue":  {
+          "name":  "capture-fleet-plan",
+          "kind":  "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header":  {},
+        "input":  {
+          "payloads":  [
+            {
+              "metadata":  {
+                "encoding":  "anNvbi9wbGFpbg=="
+              },
+              "data":  "eyJUaXRsZSI6IkZsZWV0IHBsYW4gcmVhZHkiLCJCb2R5IjoiUGxhbm5lZCAxIG5vZGUocykgZm9yOiBzcGxpdCB0aGUgd29ya1xuUGxhbm5pbmcgdG9rZW4gdXNhZ2U6IDUwMCB0b2tlbnMuIiwiVVJMIjoiIiwiV2ViaG9va0JvZHkiOiIifQ=="
+            }
+          ]
+        },
+        "scheduleToCloseTimeout":  "0s",
+        "scheduleToStartTimeout":  "0s",
+        "startToCloseTimeout":  "30s",
+        "heartbeatTimeout":  "0s",
+        "workflowTaskCompletedEventId":  "10",
+        "retryPolicy":  {
+          "initialInterval":  "1s",
+          "backoffCoefficient":  2,
+          "maximumInterval":  "100s",
+          "maximumAttempts":  2
+        },
+        "useWorkflowBuildId":  true
+      }
+    },
+    {
+      "eventId":  "12",
+      "eventTime":  "2026-08-06T15:17:18.563061Z",
+      "eventType":  "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId":  "1048834",
+      "activityTaskStartedEventAttributes":  {
+        "scheduledEventId":  "11",
+        "identity":  "81856@M-01053@",
+        "requestId":  "68c32328-8eab-4ce8-be6b-c25eb0f39c2a",
+        "attempt":  1,
+        "workerVersion":  {
+          "buildId":  "d7dc3f274cf5eda8d07bfd9b8cdb026c"
+        }
+      }
+    },
+    {
+      "eventId":  "13",
+      "eventTime":  "2026-08-06T15:17:18.570627Z",
+      "eventType":  "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "taskId":  "1048835",
+      "activityTaskCompletedEventAttributes":  {
+        "scheduledEventId":  "11",
+        "startedEventId":  "12",
+        "identity":  "81856@M-01053@"
+      }
+    },
+    {
+      "eventId":  "14",
+      "eventTime":  "2026-08-06T15:17:18.570643Z",
+      "eventType":  "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId":  "1048836",
+      "workflowTaskScheduledEventAttributes":  {
+        "taskQueue":  {
+          "name":  "M-01053:7f720b2d-42f7-4bae-903b-64140dccde08",
+          "kind":  "TASK_QUEUE_KIND_STICKY",
+          "normalName":  "capture-fleet-plan"
+        },
+        "startToCloseTimeout":  "10s",
+        "attempt":  1
+      }
+    },
+    {
+      "eventId":  "15",
+      "eventTime":  "2026-08-06T15:17:18.612920Z",
+      "eventType":  "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId":  "1048840",
+      "workflowTaskStartedEventAttributes":  {
+        "scheduledEventId":  "14",
+        "identity":  "81856@M-01053@",
+        "requestId":  "4cf4358a-65d4-4722-a502-e52d7652b289",
+        "historySizeBytes":  "1883",
+        "workerVersion":  {
+          "buildId":  "d7dc3f274cf5eda8d07bfd9b8cdb026c"
+        }
+      }
+    },
+    {
+      "eventId":  "16",
+      "eventTime":  "2026-08-06T15:17:18.622564Z",
+      "eventType":  "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId":  "1048844",
+      "workflowTaskCompletedEventAttributes":  {
+        "scheduledEventId":  "14",
+        "startedEventId":  "15",
+        "identity":  "81856@M-01053@",
+        "workerVersion":  {
+          "buildId":  "d7dc3f274cf5eda8d07bfd9b8cdb026c"
+        },
+        "sdkMetadata":  {},
+        "meteringMetadata":  {}
+      }
+    },
+    {
+      "eventId":  "17",
+      "eventTime":  "2026-08-06T15:17:18.622684Z",
+      "eventType":  "EVENT_TYPE_WORKFLOW_EXECUTION_COMPLETED",
+      "taskId":  "1048845",
+      "workflowExecutionCompletedEventAttributes":  {
+        "result":  {
+          "payloads":  [
+            {
+              "metadata":  {
+                "encoding":  "anNvbi9wbGFpbg=="
+              },
+              "data":  "eyJnb2FsIjoic3BsaXQgdGhlIHdvcmsiLCJub2RlcyI6W3siaWQiOiJhIiwicHJvbXB0IjoiZG8gYSJ9XX0="
+            }
+          ]
+        },
+        "workflowTaskCompletedEventId":  "16"
+      }
+    }
+  ]
+}

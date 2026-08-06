@@ -1,6 +1,6 @@
 BINARY := temporal-agents
 
-.PHONY: build install uninstall setup fmt
+.PHONY: build install uninstall setup fmt test
 
 # Build the binary into the current directory.
 build:
@@ -31,3 +31,14 @@ setup:
 
 fmt:
 	gofmt -w .
+
+# Run every test, integration suites included. The execstore adapter suite starts
+# its own throwaway Postgres with testcontainers-go, so it needs a running Docker
+# daemon but no setup, no environment variable and no compose service — and it
+# cannot skip itself, so a green run really did exercise the SQL.
+#
+# The flags are the ones CI uses, so a green run locally means what a green run in
+# CI means: -race catches the data races a workflow's concurrent activities can
+# introduce, and -shuffle=on catches tests that depend on their order.
+test:
+	go test -race -shuffle=on ./...

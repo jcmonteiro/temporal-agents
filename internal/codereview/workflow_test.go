@@ -2,9 +2,6 @@ package codereview
 
 import (
 	"errors"
-	"reflect"
-	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -14,19 +11,32 @@ import (
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 
+	"temporal-agents/internal/execstore/execstoretest"
 	"temporal-agents/internal/notification"
+	"temporal-agents/internal/wftest"
 )
 
 // The workflow tests exercise observable behavior — which activities run and
 // what the workflow returns — with every activity mocked. They intentionally
 // say nothing about the git/GitHub adapters (covered elsewhere).
 
+// newEnv builds the pilot test environment with a throwaway store, for the tests
+// that are not about the durable execution record.
 func newEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
+	t.Helper()
+	return newEnvWithStore(t, execstoretest.New())
+}
+
+// newEnvWithStore builds it around the given store, so a recording test can
+// assert on what was written (see recording_test.go). Every workflow records
+// itself, so the store is a required dependency rather than an option.
+func newEnvWithStore(t *testing.T, store *execstoretest.Store) *testsuite.TestWorkflowEnvironment {
+	t.Helper()
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestWorkflowEnvironment()
 	// Register a zero-value Activities so activity names resolve; the real
 	// methods are never invoked because every call is mocked below.
-	env.RegisterActivity(&Activities{})
+	env.RegisterActivity(&Activities{Store: store})
 	env.RegisterActivity(&notification.Activity{})
 	env.RegisterWorkflow(PilotWorkflow)
 	return env
@@ -36,19 +46,9 @@ var a *Activities // used only to reference method names for OnActivity
 
 var na *notification.Activity // used only to reference Notify for OnActivity
 
-// activityName returns the Temporal-registered activity name for a *Activities
-// method value. Negative assertions (AssertNotCalled) take a method-name
-// string, and testify passes for any name it does not find — so a typo would
-// silently defeat the assertion. Deriving the name from the method symbol makes
-// a typo a compile error instead.
-func activityName(method any) string {
-	full := runtime.FuncForPC(reflect.ValueOf(method).Pointer()).Name()
-	full = strings.TrimSuffix(full, "-fm")
-	if i := strings.LastIndex(full, "."); i >= 0 {
-		full = full[i+1:]
-	}
-	return full
-}
+// activityName is wftest.ActivityName under a short local name, for the many
+// negative assertions in this package.
+var activityName = wftest.ActivityName
 
 func TestPilotWorkflow_NoUnresolvedComments_ExitsEarly(t *testing.T) {
 	env := newEnv(t)

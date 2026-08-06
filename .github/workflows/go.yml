@@ -20,6 +20,12 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    # The execstore adapter suite starts its own Postgres with testcontainers-go
+    # against the runner's Docker daemon, so there is no service container to
+    # declare and nothing to configure: `go test ./...` runs the SQL, the upsert
+    # conflict rule and the migrations for real.
+
     steps:
       - uses: actions/checkout@v4
 

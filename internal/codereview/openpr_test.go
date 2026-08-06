@@ -8,16 +8,21 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 
+	"temporal-agents/internal/execstore/execstoretest"
 	"temporal-agents/internal/notification"
 )
 
 // The open-PR workflow tests exercise observable behavior — which activities
 // run and what the workflow notifies — with every activity mocked.
 
+// OpenPRWorkflow records nothing of its own (its outcome is folded into the
+// develop record), but the activity bundle still needs the port satisfied, so the
+// environment gets a throwaway store.
 func newOpenPREnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
+	t.Helper()
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestWorkflowEnvironment()
-	env.RegisterActivity(&Activities{})
+	env.RegisterActivity(&Activities{Store: execstoretest.New()})
 	env.RegisterActivity(&notification.Activity{})
 	env.RegisterWorkflow(OpenPRWorkflow)
 	return env
