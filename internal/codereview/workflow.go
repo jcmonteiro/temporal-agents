@@ -791,6 +791,11 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 			return "", prURL, fmt.Errorf("open PR workflow: %w", err)
 		}
 	}
+	// Hand the PR link back as soon as it is known, so DevelopWorkflow records it
+	// even when a later stage of the pipeline fails: open-pr runs only as a stage of
+	// this pipeline, so its outcome belongs on the develop record rather than on a
+	// row of its own.
+	prURL = openPR.URL
 
 	// The pilot loop. It always chains (Chain: true), so waiting on it here blocks
 	// until a pass finds no unresolved comments left to address and the loop
@@ -812,10 +817,6 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 	if openPR.URL != "" {
 		prClause = fmt.Sprintf("opened the PR (%s)", openPR.URL)
 	}
-	// Hand the PR link back so DevelopWorkflow can record it: open-pr runs only as a
-	// stage of this pipeline, so its outcome belongs on the develop record rather
-	// than on a row of its own.
-	prURL = openPR.URL
 	summary := withDevelopStepTokens(fmt.Sprintf(
 		"Developed branch %s with %d commit(s); ran the review loop, %s, and completed the Copilot pilot loop.",
 		in.Branch, len(commits), prClause), tokens)

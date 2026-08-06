@@ -283,3 +283,30 @@ func TestPilotWorkflow_RecordingFailure_FailsTheWorkflow(t *testing.T) {
 	require.ErrorContains(t, env.GetWorkflowError(), "postgres is down")
 	env.AssertNotCalled(t, "DeterminePR", mock.Anything, mock.Anything)
 }
+
+func TestDevelopWorkflow_WithRemote_FailedPipelineStillRecordsTheOpenedPR(t *testing.T) {
+	store := &fakeStore{}
+	env := newDevelopEnv(t, store)
+
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
+		Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
+	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
+	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).
+		Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
+	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).
+		Return(OpenPRResult{Summary: "PR #7 is open", URL: "https://github.com/o/r/pull/7"}, nil)
+	// The pipeline fails after the PR was opened.
+	env.OnWorkflow(PilotWorkflow, mock.Anything, mock.Anything).Return("", errors.New("pilot exploded"))
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do it", WithRemote: true})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	end := store.last(t)
+	require.Equal(t, execstore.StatusFailed, end.Status)
+	// A pipeline that failed after opening the PR still points at it, so the record
+	// leads somewhere useful.
+	require.Equal(t, "https://github.com/o/r/pull/7", end.Detail.PRURL)
+	require.Contains(t, end.Detail.Error, "pilot exploded")
+}

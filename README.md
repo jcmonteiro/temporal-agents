@@ -58,10 +58,16 @@ Postgres — one row per Temporal run ID, written when it starts and updated whe
 it settles — and `history` reads that durable record back:
 
 ```sh
-temporal-agents history                        # newest 20 executions
-temporal-agents history --kind develop         # one command type
-temporal-agents history --workflow-id fleet-…  # one execution and its children
+temporal-agents history                          # newest 20 executions
+temporal-agents history --kind develop           # one command type
+temporal-agents history --workflow-id fleet-…    # one execution and its children
+temporal-agents history --schedule-id schedule-… # the runs one schedule fired
 ```
+
+Each row reports only its **own** token usage, so the printed total sums a fleet
+run's parent, its nodes and their reviews without counting the same tokens twice.
+A skipped fleet node never starts a workflow of its own, so it is listed from its
+parent's per-node breakdown.
 
 Recording is a hard dependency, not best-effort: a workflow that cannot write
 its record retries and, if Postgres stays down, fails. `list` remains the live
@@ -139,7 +145,7 @@ uses).
 
 ## Docker
 
-Only the Temporal server runs in Docker (see `docker-compose.yml`); the worker and CLI run on the host so the agent can operate on your local repo.
+Temporal and Postgres run in Docker (see `docker-compose.yml`); the worker and CLI run on the host so the agent can operate on your local repo.
 
 ```sh
 docker compose up -d      # start Temporal + Postgres (each persists in a named volume)
