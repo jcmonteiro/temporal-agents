@@ -15,6 +15,10 @@ import (
 // replay time — so both fleet workflows are pinned here against a real history
 // captured from the code before recording existed (origin/main at df3f7a3),
 // recorded against a Temporal dev server with the agent activities stubbed.
+//
+// A fixture has to be re-captured whenever a recorded workflow changes shape without
+// a version gate; the procedure is written down in
+// internal/wftest/replay-fixtures.md.
 
 // A fleet run orchestrates every node's develop child and their review loops, so
 // it lasts hours and is the least likely of all the workflows to be idle when the

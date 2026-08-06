@@ -57,7 +57,9 @@ func openStore(ctx context.Context) (*execpg.Postgres, error) {
 	}
 	// Bound the connect (see storeConnectTimeout). The deadline covers reaching the
 	// store, not the pool's later life: the pool keeps working after this context is
-	// released.
+	// released, because pgxpool uses it only to pre-warm idle connections (and
+	// pool_min_conns defaults to 0, so there are none to pre-warm; a DSN that sets it
+	// simply skips the pre-warming once the deadline is gone).
 	cctx, cancel := context.WithTimeout(ctx, storeConnectTimeout)
 	defer cancel()
 	store, err := execpg.Open(cctx, dsn)

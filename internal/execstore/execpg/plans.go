@@ -30,7 +30,15 @@ ON CONFLICT (id) DO UPDATE SET
 	document   = EXCLUDED.document`
 
 // SavePlan inserts or updates the plan under plan.ID.
+//
+// The document budget is checked here as well as by the calling activity (which
+// refuses an oversized plan non-retryably, with the wording an operator reads): the
+// budget belongs to the port, so any consumer of it is held to it.
 func (p *Postgres) SavePlan(ctx context.Context, plan execstore.Plan) error {
+	if len(plan.Document) > execstore.MaxPlanDocument {
+		return fmt.Errorf("store fleet plan %s: document is %d bytes, over the %d-byte limit",
+			plan.ID, len(plan.Document), execstore.MaxPlanDocument)
+	}
 	created := plan.CreatedAt
 	if created.IsZero() {
 		created = time.Now().UTC()
@@ -61,9 +69,9 @@ func (p *Postgres) Plan(ctx context.Context, id string) (execstore.Plan, error) 
 
 // ListPlans returns the stored plans, newest first.
 func (p *Postgres) ListPlans(ctx context.Context, limit int) ([]execstore.Plan, error) {
-	if limit <= 0 {
-		limit = execstore.DefaultPlanLimit
-	}
+	// The port's own limit rule (default and cap alike), so the protection does not
+	// depend on which caller asked.
+	limit = execstore.EffectiveLimit(limit, execstore.DefaultPlanLimit)
 	rows, err := p.pool.Query(ctx,
 		"SELECT "+planColumns+" FROM plans ORDER BY created_at DESC, id DESC LIMIT $1", limit)
 	if err != nil {
@@ -71,7 +79,8 @@ func (p *Postgres) ListPlans(ctx context.Context, limit int) ([]execstore.Plan, 
 	}
 	defer rows.Close()
 
-	var out []execstore.Plan
+	// At most limit rows come back, so the slice is allocated once.
+	out := make([]execstore.Plan, 0, limit)
 	for rows.Next() {
 		plan, err := scanPlan(rows)
 		if err != nil {

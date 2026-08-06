@@ -221,10 +221,24 @@ const redacted = "REDACTED"
 // a failure text can carry and caps the length.
 //
 // It is the single funnel every recorded free-text field passes through — the
-// failure text of any workflow (see FailureText) and a fleet node's own detail —
-// so redaction and truncation are decided in one place instead of at each call
-// site. The record is long-lived and local, so a leaked token would sit in it
-// indefinitely, and an uncapped detail would grow a row without bound.
+// failure text of any workflow (see FailureText), a prompt or goal, and a fleet
+// node's own detail — so redaction and truncation are decided in one place instead
+// of at each call site. The record is long-lived and local, so a leaked token would
+// sit in it indefinitely, and an uncapped detail would grow a row without bound.
+//
+// What is deliberately *exempt*, and why, so the next field is not added on the
+// wrong side by default:
+//   - Structured, self-bounded values the tool produces itself, not text an agent or
+//     a subprocess wrote: a branch name, a PR URL, a plan handle, a plan node ID, a
+//     schedule ID. They have a shape, they cannot carry a credential the tool did not
+//     put there, and capping one would corrupt an identifier rather than shorten a
+//     message.
+//   - The stored plan's document, which must stay decodable: trimming it would leave
+//     invalid JSON, so it is size-guarded (execstore.MaxPlanDocument) and an oversized
+//     plan is refused instead of mangled.
+//
+// Anything that is free text — anything an agent, a git command or an operator
+// typed — belongs on this side of the funnel.
 func Sanitize(text string) string {
 	if text == "" {
 		return ""

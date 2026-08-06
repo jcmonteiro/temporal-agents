@@ -185,6 +185,12 @@ type Detail struct {
 	// Nodes is a fleet parent's per-node breakdown. It is the only home for a
 	// skipped node's outcome: a skipped node starts no child workflow, so it has
 	// no run ID and therefore no row of its own.
+	//
+	// Each entry's Detail is capped individually (wfrecord.MaxDetailText, 8 KiB), so a
+	// fleet parent's row is bounded at nodes × that cap: a 100-node plan can reach
+	// roughly 800 KiB of jsonb. That is the deliberate trade — a node's outcome is only
+	// readable here — and it is why the node count of a plan an operator approves is the
+	// thing that keeps the row small, not the per-field cap alone.
 	Nodes []NodeOutcome `json:"nodes,omitempty"`
 	// PlanID is the stored fleet plan a fleet-plan or fleet execution produced or
 	// executed, correlating a plan handle with the runs it drove.
@@ -241,9 +247,32 @@ const DefaultPlanLimit = 20
 // table, so an absurd limit would be answered by pulling the table into the CLI
 // rather than by refusing; the same rule applies to both because the reason is the
 // same.
+//
+// It is a property of the port, not of one caller: an adapter resolves every limit
+// through EffectiveLimit, so a consumer that forgets to check still cannot ask for
+// more. The CLI checks it too, but for a different purpose — a typed --limit above
+// the cap is refused with a message, rather than silently served as something
+// smaller.
 const MaxListLimit = 1000
 
-// MaxPlanDocument is the largest plan document the store accepts, in bytes.
+// EffectiveLimit resolves how many rows a listing actually returns: def when n is
+// non-positive (no limit asked for), and never more than MaxListLimit.
+//
+// It takes the default as a parameter because each listing has its own
+// (DefaultHistoryLimit, DefaultPlanLimit), while the cap is shared.
+func EffectiveLimit(n, def int) int {
+	if n <= 0 {
+		n = def
+	}
+	if n > MaxListLimit {
+		return MaxListLimit
+	}
+	return n
+}
+
+// MaxPlanDocument is the largest plan document the store accepts, in bytes. Like
+// MaxListLimit it is enforced by the adapter as well as by the calling activity, so
+// it describes the port rather than one of its callers.
 //
 // The document is the only stored text that cannot go through the free-text funnel:
 // truncating it would leave undecodable JSON, and a plan that does not decode is

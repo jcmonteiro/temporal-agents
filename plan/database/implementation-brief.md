@@ -153,6 +153,15 @@ the type boundary lives in code, not schema.
   and therefore can be neither redacted nor trimmed: it is size-guarded instead
   (`execstore.MaxPlanDocument`), and an oversized plan is refused non-retryably
   rather than stored.
+  The funnel's scope is the **durable row**, not Temporal: a prompt is a workflow
+  input, so it also sits unredacted in Temporal's own event history. That is
+  deliberate and consistent with the threat model above — Temporal's history is
+  retention-limited and ages out, while this record is kept indefinitely — so the
+  field that is worth redacting is the one that never expires.
+  Structured values the tool produces itself (a branch name, a PR URL, a plan
+  handle, a node ID, a schedule ID) are deliberately **exempt**: they carry no
+  free text, and capping one would corrupt an identifier instead of shortening a
+  message.
 - **Idempotent writes under retry.** Because Temporal may re-run an activity that
   already committed (result lost after a partial success), every `Persist…` write
   must be idempotent — an upsert keyed on `run_id` (`INSERT … ON CONFLICT

@@ -114,10 +114,9 @@ const executionColumns = `run_id, workflow_id, kind, prompt, started_at, ended_a
 // started_at are broken by run ID so paging and output stay stable.
 func (p *Postgres) ListExecutions(ctx context.Context, f execstore.Filter) ([]execstore.Execution, error) {
 	where, args := buildFilter(f)
-	limit := f.Limit
-	if limit <= 0 {
-		limit = execstore.DefaultHistoryLimit
-	}
+	// The port's own limit rule, applied here rather than trusted from the caller: a
+	// second consumer of the port must be protected by the same cap the CLI is.
+	limit := execstore.EffectiveLimit(f.Limit, execstore.DefaultHistoryLimit)
 	args = append(args, limit)
 	query := "SELECT " + executionColumns + " FROM executions" + where +
 		" ORDER BY started_at DESC, run_id DESC LIMIT $" + strconv.Itoa(len(args))
@@ -128,7 +127,8 @@ func (p *Postgres) ListExecutions(ctx context.Context, f execstore.Filter) ([]ex
 	}
 	defer rows.Close()
 
-	var out []execstore.Execution
+	// At most limit rows come back, so the slice is allocated once.
+	out := make([]execstore.Execution, 0, limit)
 	for rows.Next() {
 		e, err := scanExecution(rows)
 		if err != nil {

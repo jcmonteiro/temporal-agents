@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	commonpb "go.temporal.io/api/common/v1"
@@ -73,7 +74,7 @@ func main() {
 	case "list":
 		listRunning()
 	case "history":
-		if err := historyCmd(os.Args[2:], openExecutionReader); err != nil {
+		if err := historyCmd(os.Args[2:], os.Stdout, openExecutionReader); err != nil {
 			fatalf("%v", err)
 		}
 	default:
@@ -819,12 +820,23 @@ func decodeHeartbeat(p *commonpb.Payloads) string {
 	return s
 }
 
+// truncate shortens s to at most max bytes, marking the cut with an ellipsis.
+//
+// The cut is moved back to a rune boundary, so a shortened value stays valid UTF-8.
+// The text it is applied to is agent-written or agent-recorded (a failure reason, a
+// plan goal, a prompt), which carries arrows, ellipses and accented characters
+// routinely — cutting one of those in half would print replacement characters and
+// undo the rune-safe capping wfrecord already does one layer down.
 func truncate(s string, max int) string {
 	s = strings.TrimSpace(s)
 	if len(s) <= max {
 		return s
 	}
-	return s[:max-1] + "…"
+	cut := max - 1
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
 
 // onOff renders a boolean as a human-readable on/off state for worker startup

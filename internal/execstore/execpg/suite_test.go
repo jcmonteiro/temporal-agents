@@ -138,3 +138,16 @@ func newTestDatabase(t *testing.T) string {
 	u.Path = "/" + name
 	return u.String()
 }
+
+// withDSNParam returns dsn with one pool setting added. It parses instead of
+// concatenating ("dsn + &key=value"), which would depend on newTestDatabase always
+// returning a DSN that already carries a query string.
+func withDSNParam(t *testing.T, dsn, key, value string) string {
+	t.Helper()
+	u, err := url.Parse(dsn)
+	require.NoError(t, err)
+	q := u.Query()
+	q.Set(key, value)
+	u.RawQuery = q.Encode()
+	return u.String()
+}

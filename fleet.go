@@ -50,71 +50,32 @@ func fleetPlanCmd(args []string) {
 		fleetPlanHelp(os.Stdout)
 		return
 	}
-	switch fleetPlanSubcommand(args) {
-	case "list":
-		fleetPlanList(parseFleetPlanListFlags(args[1:]))
-		return
-	case "show":
-		if len(args) < 2 {
-			fatalf("usage: temporal-agents fleet plan show <handle>")
+	// The first word decides, exactly: "list", "ls" and "show" are subcommands and
+	// nothing else is. Inferring the intent from the shape of the remaining arguments
+	// instead would turn a mistyped read-only command ("fleet plan show --name foo")
+	// into a prompt, and so into a paid, hour-budget planning run that writes a stored
+	// plan — a precise refusal is worth more than a guess. The cost is that a goal
+	// worded as exactly one of those words is unreachable; fleetPlanHelp says so.
+	if len(args) > 0 {
+		switch args[0] {
+		case "list", "ls":
+			fleetPlanList(parseFleetPlanListFlags(args[1:]))
+			return
+		case "show":
+			if len(args) < 2 {
+				fatalf("usage: temporal-agents fleet plan show <handle>")
+			}
+			// Reject trailing arguments rather than ignore them, like every other
+			// parser in the CLI: a stray token usually means a mistyped flag.
+			if len(args) > 2 {
+				fatalf("unexpected argument %q", args[2])
+			}
+			fleetPlanShow(args[1])
+			return
 		}
-		// Reject trailing arguments rather than ignore them, like every other
-		// parser in the CLI: a stray token usually means a mistyped flag.
-		if len(args) > 2 {
-			fatalf("unexpected argument %q", args[2])
-		}
-		fleetPlanShow(args[1])
-		return
 	}
 	prompt, name := parseFleetPlanFlags(args)
 	runFleetPlan(prompt, name)
-}
-
-// fleetPlanSubcommand classifies the arguments of `fleet plan` as the listing
-// subcommand ("list"), the show subcommand ("show"), or planning ("").
-//
-// A plan prompt is free text, so the first word of a goal can legitimately be
-// "list" or "show" ("show the plan for splitting the parser"). The subcommand is
-// therefore recognized only when the whole argument list reads as that
-// subcommand's own usage — "list"/"ls" followed by nothing but its own flags, or
-// "show" followed by exactly one handle — and anything else is a prompt. Without
-// this, such a goal was silently read as a subcommand: no error, no plan, and no
-// hint of why.
-//
-// A goal of exactly "list", or of exactly "show <one word>", remains unreachable as
-// a prompt: those are the subcommands' own usage, and no rule can tell them apart.
-func fleetPlanSubcommand(args []string) string {
-	if len(args) == 0 {
-		return ""
-	}
-	rest := args[1:]
-	switch args[0] {
-	case "list", "ls":
-		// The listing takes flags only, so a bare word that is not a flag's own value
-		// belongs to a prompt.
-		for i := 0; i < len(rest); i++ {
-			if !strings.HasPrefix(rest[i], "--") {
-				return ""
-			}
-			if !strings.Contains(rest[i], "=") {
-				// The separate "--flag value" form: the next token is this flag's value.
-				i++
-			}
-		}
-		return "list"
-	case "show":
-		// The handle is a single token and never a flag; "show me the plan" is a prompt.
-		if len(rest) == 1 && !strings.HasPrefix(rest[0], "--") {
-			return "show"
-		}
-		// A bare "show" is the subcommand missing its handle, which must say so rather
-		// than be planned as the one-word goal "show".
-		if len(rest) == 0 {
-			return "show"
-		}
-		return ""
-	}
-	return ""
 }
 
 // parseFleetPlanFlags reads the required prompt (positional) and the optional
@@ -502,6 +463,9 @@ review it and then execute it by that handle. There is no plan file.
 
 The handle is the only way to select a plan. --name is display-only metadata for
 the listing: nothing keeps a name unique, so it could not resolve a plan.
+
+"list", "ls" and "show" are read as subcommands, so a goal cannot be worded as
+exactly one of them; say "plan a listing of …" instead.
 
 USAGE
   temporal-agents fleet plan "<prompt>" [--name <name>]

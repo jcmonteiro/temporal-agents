@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -25,9 +24,13 @@ type openReader func(context.Context) (execstore.ExecutionReader, func(), error)
 // It returns its failures instead of exiting, so the whole command — including
 // the "DATABASE_URL is unset" contract — is reachable from a test; main turns the
 // error into the exit.
-func historyCmd(args []string, open openReader) error {
+//
+// It prints to out rather than to os.Stdout for the same reason: what an operator
+// sees is then assertable at the command level, instead of only through the
+// formatting helpers underneath it.
+func historyCmd(args []string, out io.Writer, open openReader) error {
 	if wantsHelp(args) {
-		historyHelp(os.Stdout)
+		historyHelp(out)
 		return nil
 	}
 	filter, err := parseHistoryFlags(args)
@@ -46,7 +49,7 @@ func historyCmd(args []string, open openReader) error {
 	if err != nil {
 		return fmt.Errorf("could not read the execution history: %w", err)
 	}
-	fmt.Print(formatHistory(execs))
+	fmt.Fprint(out, formatHistory(execs))
 	return nil
 }
 
@@ -169,7 +172,13 @@ type historyRow struct {
 // here is what makes a skipped node visible in history at all. Expanded nodes
 // follow their parent, so the newest-first order of real executions is preserved.
 func historyRows(execs []execstore.Execution) []historyRow {
-	rows := make([]historyRow, 0, len(execs))
+	// One row per record, plus one per skipped node. A parent's node count bounds its
+	// expansion, so the slice is sized once instead of growing per fleet parent.
+	capacity := len(execs)
+	for _, e := range execs {
+		capacity += len(e.Detail.Nodes)
+	}
+	rows := make([]historyRow, 0, capacity)
 	for _, e := range execs {
 		row := historyRow{
 			Kind:    string(e.Kind),
@@ -196,39 +205,92 @@ func historyRows(execs []execstore.Execution) []historyRow {
 				Status: n.Status,
 				Tokens: n.Tokens,
 				ID:     e.WorkflowID + "-" + n.ID,
-				Note:   n.Detail,
+				// Shortened like every other note: a node's detail is bounded only at
+				// wfrecord.MaxDetailText, so printing it whole would break the table the day a
+				// skip reason grows past one short line.
+				Note: truncate(firstLine(n.Detail), noteWidth),
 			})
 		}
 	}
 	return rows
 }
 
-// executionNote picks the most useful bits of context for a record's note column:
-// why it failed, which schedule fired it, and the pull request it operated on.
+// noteWidth is how much free text one note keeps. The note is a single column of a
+// tabulated row, so text a record carries (a failure reason, an agent-written
+// prompt) is shortened to keep the row on one line.
+const noteWidth = 60
+
+// noteSeparator joins the independent facts of one note.
+const noteSeparator = " · "
+
+// executionNote renders the context a record carries into its note column: which
+// pass it is, whether the review converged, whether a pilot addressed comments, the
+// plan it belongs to, why it failed, which schedule fired it, and the pull request
+// it operated on. Every recorded field that describes a row is read here: a field
+// no production path reads is not a record, it is weight.
 //
-// A failed scheduled run needs both: without the schedule the operator cannot see
-// that a schedule keeps failing, and without the reason the row says nothing, so
-// they are printed together (the reason is shortened to keep the row on one line).
-// A failure keeps the PR link for the same reason: a develop pipeline that failed
-// *after* opening the PR is exactly the row an operator follows to the PR.
+// A failed scheduled run needs both of its facts: without the schedule the operator
+// cannot see that a schedule keeps failing, and without the reason the row says
+// nothing. A failure keeps the PR link for the same reason: a develop pipeline that
+// failed *after* opening the PR is exactly the row an operator follows to the PR.
+//
+// The prompt is the fallback rather than a fact of its own, because it is long and a
+// row with something more specific to say (it failed, it did not converge, it came
+// from a plan) says that instead. But a plain run row is identified by nothing except
+// "run-<uuid>", so without the prompt an operator cannot tell five runs apart.
 func executionNote(e execstore.Execution) string {
-	if e.Detail.Error != "" {
-		reason := truncate(firstLine(e.Detail.Error), 60)
+	var parts []string
+	if e.Detail.Pass > 0 {
+		parts = append(parts, fmt.Sprintf("pass %d", e.Detail.Pass))
+	}
+	if e.Detail.Converged != nil {
+		parts = append(parts, convergedLabel(*e.Detail.Converged))
+	}
+	if e.Detail.Addressed != nil {
+		parts = append(parts, addressedLabel(*e.Detail.Addressed))
+	}
+	if e.Detail.PlanID != "" {
+		parts = append(parts, fmt.Sprintf("plan %s (%d node(s))", e.Detail.PlanID, e.Detail.PlanNodes))
+	}
+	switch {
+	case e.Detail.Error != "":
+		reason := truncate(firstLine(e.Detail.Error), noteWidth)
 		if e.ScheduleID != "" {
 			reason = "schedule " + e.ScheduleID + ": " + reason
 		}
-		if e.Detail.PRURL != "" {
-			reason += " · " + e.Detail.PRURL
-		}
-		return reason
-	}
-	if e.ScheduleID != "" {
-		return "schedule " + e.ScheduleID
+		parts = append(parts, reason)
+	case e.ScheduleID != "":
+		parts = append(parts, "schedule "+e.ScheduleID)
 	}
 	if e.Detail.PRURL != "" {
-		return e.Detail.PRURL
+		parts = append(parts, e.Detail.PRURL)
 	}
-	return ""
+	// Nothing more specific to say: the prompt is what identifies the row.
+	if len(parts) == 0 && e.Prompt != "" {
+		parts = append(parts, truncate(firstLine(e.Prompt), noteWidth))
+	}
+	return strings.Join(parts, noteSeparator)
+}
+
+// convergedLabel names how a review loop ended: because the agent found nothing
+// left to change, or because it ran out of passes. Both states are printed, because
+// "not converged" is the outcome an operator has to act on, and an absent label
+// would read like a workflow that does not review at all.
+func convergedLabel(converged bool) string {
+	if converged {
+		return "converged"
+	}
+	return "not converged"
+}
+
+// addressedLabel names whether a pilot pass actually changed anything in response
+// to the review comments, printing both states for the same reason convergedLabel
+// does.
+func addressedLabel(addressed bool) string {
+	if addressed {
+		return "addressed comments"
+	}
+	return "no comments addressed"
 }
 
 // firstLine returns s up to its first newline, so a multi-line error stays on one
@@ -335,6 +397,12 @@ of Temporal's own state). In-flight executions are listed too, with status
 Each row reports only its own token usage, never an inclusive total, so the
 printed total is a true sum across a fleet run's parent, its nodes and their
 reviews.
+
+The NOTE column carries what the row was: its pass number, whether a review
+converged or a pilot addressed comments, the plan a fleet run came from, the
+schedule that fired it, the pull request it operated on, and why it failed. A row
+with nothing more specific to say shows its prompt, which is what tells one run
+from another.
 
 USAGE
   temporal-agents history [--kind <kind>] [--limit <n>] [--workflow-id <id>]

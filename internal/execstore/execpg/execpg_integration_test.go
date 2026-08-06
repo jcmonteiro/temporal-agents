@@ -33,7 +33,7 @@ func TestPostgres_MigrateNeedsOnlyOneConnection(t *testing.T) {
 	// Migrating pins one connection for the advisory lock and runs every migration on
 	// that same connection. Taking a second one from the pool would deadlock a worker
 	// whose DSN caps the pool at one — silently, at startup, with no message.
-	dsn := newTestDatabase(t) + "&pool_max_conns=1"
+	dsn := withDSNParam(t, newTestDatabase(t), "pool_max_conns", "1")
 	store := openTestStore(t, dsn)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

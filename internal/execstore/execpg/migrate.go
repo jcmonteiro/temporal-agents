@@ -80,7 +80,7 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", name, err)
 		}
-		if err := p.applyMigration(ctx, conn, name, string(body)); err != nil {
+		if err := applyMigration(ctx, conn, name, string(body)); err != nil {
 			return err
 		}
 	}
@@ -91,10 +91,14 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 // the caller's already-acquired connection (see Migrate: the whole operation must
 // need only the one).
 //
+// It is a free function, not a method: everything it touches arrives in its
+// parameters, so it cannot reach the pool behind the caller's back — which is
+// exactly the property the one-connection rule depends on.
+//
 // The "already applied?" check runs inside the transaction that applies it, so
 // two workers starting at once cannot both apply the same migration: the second
 // blocks on the first's row lock and then sees it recorded.
-func (p *Postgres) applyMigration(ctx context.Context, conn *pgxpool.Conn, name, body string) error {
+func applyMigration(ctx context.Context, conn *pgxpool.Conn, name, body string) error {
 	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin migration %s: %w", name, err)

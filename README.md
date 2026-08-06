@@ -120,6 +120,9 @@ one. Like execution recording, the plan
 store is authoritative — a plan that cannot be written or read aborts loudly
 rather than proceeding.
 
+`list`, `ls` and `show` are read as subcommands, so a goal cannot be worded as
+exactly one of them; say `"plan a listing of …"` instead.
+
 `fleet execute` runs a `code develop` workflow per node, processing the graph in
 dependency layers: independent nodes run in parallel, and a node starts only
 once every node it depends on has succeeded (a node whose dependency did not

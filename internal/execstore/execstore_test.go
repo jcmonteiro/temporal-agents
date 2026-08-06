@@ -72,3 +72,15 @@ func TestDetail_RoundTripsAFleetsPerNodeBreakdown(t *testing.T) {
 
 	require.Equal(t, detail, back)
 }
+
+func TestEffectiveLimit_AppliesTheDefaultAndTheCap(t *testing.T) {
+	// The rule belongs to the port, so both the CLI and the adapter resolve a limit
+	// through it: a consumer that forgets the cap still cannot ask for more.
+	require.Equal(t, DefaultHistoryLimit, EffectiveLimit(0, DefaultHistoryLimit))
+	require.Equal(t, DefaultPlanLimit, EffectiveLimit(-5, DefaultPlanLimit))
+	require.Equal(t, 50, EffectiveLimit(50, DefaultHistoryLimit))
+	require.Equal(t, MaxListLimit, EffectiveLimit(MaxListLimit, DefaultHistoryLimit))
+	require.Equal(t, MaxListLimit, EffectiveLimit(MaxListLimit+1, DefaultHistoryLimit))
+	// A default above the cap would still be served capped: the cap is the last word.
+	require.Equal(t, MaxListLimit, EffectiveLimit(0, MaxListLimit*2))
+}

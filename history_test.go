@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -180,7 +182,7 @@ func TestHistoryCmd_ReadsThroughThePortAndReleasesIt(t *testing.T) {
 	reader := &filterCapturingReader{}
 	released := false
 
-	err := historyCmd([]string{"--kind", "develop", "--limit", "5"},
+	err := historyCmd([]string{"--kind", "develop", "--limit", "5"}, io.Discard,
 		func(context.Context) (execstore.ExecutionReader, func(), error) {
 			return reader, func() { released = true }, nil
 		})
@@ -192,7 +194,7 @@ func TestHistoryCmd_ReadsThroughThePortAndReleasesIt(t *testing.T) {
 }
 
 func TestHistoryCmd_ReportsAStoreThatCannotBeRead(t *testing.T) {
-	err := historyCmd(nil, func(context.Context) (execstore.ExecutionReader, func(), error) {
+	err := historyCmd(nil, io.Discard, func(context.Context) (execstore.ExecutionReader, func(), error) {
 		return execstoretest.Failing(errors.New("postgres is down")), func() {}, nil
 	})
 
@@ -202,7 +204,7 @@ func TestHistoryCmd_ReportsAStoreThatCannotBeRead(t *testing.T) {
 
 func TestHistoryCmd_ReportsAStoreThatCannotBeOpened(t *testing.T) {
 	// The "DATABASE_URL is unset" contract reaches the operator through this path.
-	err := historyCmd(nil, func(context.Context) (execstore.ExecutionReader, func(), error) {
+	err := historyCmd(nil, io.Discard, func(context.Context) (execstore.ExecutionReader, func(), error) {
 		return nil, nil, errors.New("DATABASE_URL is not set")
 	})
 
@@ -212,7 +214,7 @@ func TestHistoryCmd_ReportsAStoreThatCannotBeOpened(t *testing.T) {
 func TestHistoryCmd_RejectsABadFlagBeforeTouchingTheStore(t *testing.T) {
 	opened := false
 
-	err := historyCmd([]string{"--kind", "developp"},
+	err := historyCmd([]string{"--kind", "developp"}, io.Discard,
 		func(context.Context) (execstore.ExecutionReader, func(), error) {
 			opened = true
 			return execstoretest.New(), func() {}, nil
@@ -273,4 +275,101 @@ func TestGroupThousands(t *testing.T) {
 	require.Equal(t, "1,000", groupThousands(1000))
 	require.Equal(t, "1,234,567", groupThousands(1234567))
 	require.Equal(t, "-1,000", groupThousands(-1000))
+}
+
+func TestHistoryRows_NoteShowsWhatEachKindRecorded(t *testing.T) {
+	// A recorded field nothing prints is weight, not memory: the tri-states, the pass
+	// number and the plan correlation all have to reach the operator's row.
+	converged, addressed := true, false
+	rows := historyRows([]execstore.Execution{
+		{WorkflowID: "review-1", Kind: execstore.KindReview,
+			Detail: execstore.Detail{Pass: 3, Converged: &converged}},
+		{WorkflowID: "pilot-2", Kind: execstore.KindPilot,
+			Detail: execstore.Detail{Pass: 1, Addressed: &addressed}},
+		{WorkflowID: "fleet-3", Kind: execstore.KindFleet,
+			Detail: execstore.Detail{PlanID: "plan-1a2b3c4d5e6f7890", PlanNodes: 4}},
+	})
+
+	require.Equal(t, "pass 3 · converged", rows[0].Note)
+	require.Equal(t, "pass 1 · no comments addressed", rows[1].Note)
+	require.Equal(t, "plan plan-1a2b3c4d5e6f7890 (4 node(s))", rows[2].Note)
+}
+
+func TestHistoryRows_NoteDistinguishesBothTriStates(t *testing.T) {
+	// "not converged" is the outcome an operator has to act on, so it must be said
+	// rather than left absent — an absent label reads like a workflow that never
+	// reviews.
+	notConverged, addressed := false, true
+	rows := historyRows([]execstore.Execution{
+		{WorkflowID: "review-1", Kind: execstore.KindReview, Detail: execstore.Detail{Converged: &notConverged}},
+		{WorkflowID: "pilot-2", Kind: execstore.KindPilot, Detail: execstore.Detail{Addressed: &addressed}},
+		// A kind that neither reviews nor pilots records neither, and so says neither.
+		{WorkflowID: "run-3", Kind: execstore.KindRun},
+	})
+
+	require.Equal(t, "not converged", rows[0].Note)
+	require.Equal(t, "addressed comments", rows[1].Note)
+	require.Empty(t, rows[2].Note)
+}
+
+func TestHistoryRows_NoteIdentifiesAPlainRunByItsPrompt(t *testing.T) {
+	// A run row is otherwise identified by nothing but "run-<uuid>", so without the
+	// prompt an operator cannot tell five runs apart. Anything more specific wins over
+	// it: the prompt is long, and a failure is what the row is read for.
+	rows := historyRows([]execstore.Execution{
+		{WorkflowID: "run-1", Kind: execstore.KindRun, Prompt: "tidy the parser\nsecond line"},
+		{WorkflowID: "run-2", Kind: execstore.KindRun, Prompt: "tidy the parser",
+			Status: execstore.StatusFailed, Detail: execstore.Detail{Error: "pi crashed"}},
+	})
+
+	require.Equal(t, "tidy the parser", rows[0].Note)
+	require.Equal(t, "pi crashed", rows[1].Note)
+}
+
+func TestHistoryRows_SkippedNodeNoteIsShortenedLikeEveryOther(t *testing.T) {
+	// A node's detail is bounded only at 8 KiB, so it goes through the same first-line
+	// and width treatment as every other note instead of breaking the table.
+	rows := historyRows([]execstore.Execution{{
+		WorkflowID: "fleet-1", Kind: execstore.KindFleet, Status: execstore.StatusSucceeded,
+		Detail: execstore.Detail{Nodes: []execstore.NodeOutcome{{
+			ID:     "rest",
+			Status: string(execstore.StatusSkipped),
+			Detail: strings.Repeat("x", 200) + "\nand a second line",
+		}}},
+	}})
+
+	require.LessOrEqual(t, len(rows[1].Note), noteWidth+len("…"))
+	require.NotContains(t, rows[1].Note, "\n")
+}
+
+func TestHistoryCmd_PrintsTheTableToItsWriter(t *testing.T) {
+	// What the operator sees is asserted here rather than printed into the test log:
+	// the command writes to the writer it is given.
+	var out strings.Builder
+	reader := execstoretest.New()
+	require.NoError(t, reader.SaveExecution(context.Background(), execstore.Execution{
+		RunID: "r1", WorkflowID: "run-abc", Kind: execstore.KindRun, Prompt: "tidy the parser",
+		Status: execstore.StatusSucceeded, Tokens: 1200,
+	}))
+
+	err := historyCmd(nil, &out, func(context.Context) (execstore.ExecutionReader, func(), error) {
+		return reader, func() {}, nil
+	})
+
+	require.NoError(t, err)
+	require.Contains(t, out.String(), "run-abc")
+	require.Contains(t, out.String(), "tidy the parser")
+	require.Contains(t, out.String(), "1 execution(s) · 1,200 tokens")
+}
+
+func TestHistoryCmd_HelpGoesToItsWriterToo(t *testing.T) {
+	var out strings.Builder
+
+	err := historyCmd([]string{"--help"}, &out, func(context.Context) (execstore.ExecutionReader, func(), error) {
+		t.Fatal("help must not touch the store")
+		return nil, nil, nil
+	})
+
+	require.NoError(t, err)
+	require.Contains(t, out.String(), "temporal-agents history")
 }

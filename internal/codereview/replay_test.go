@@ -17,6 +17,10 @@ import (
 // recorded against a Temporal dev server with the agent activities stubbed.
 // Replaying such a history is exactly what a worker does after the upgrade, so a
 // gate that scheduled a record write the old history lacks fails here.
+//
+// A fixture has to be re-captured whenever a recorded workflow changes shape without
+// a version gate; the procedure is written down in
+// internal/wftest/replay-fixtures.md.
 
 // The review loop is the longest-lived workflow here — every pass continues as new
 // — so it is the most likely to be mid-flight when the worker is upgraded to
