@@ -2,9 +2,7 @@ package execpg
 
 import (
 	"context"
-	"net/url"
-	"os"
-	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,56 +11,8 @@ import (
 	"temporal-agents/internal/execstore"
 )
 
-// The adapter is tested against a real Postgres: the database and its schema are
-// an out-of-process dependency this project owns, so a mock would exercise none
-// of what can actually go wrong here (the upsert's conflict handling, the jsonb
-// round-trip, the filter SQL).
-//
-// Set TEST_DATABASE_URL to a throwaway database to run these; the compose
-// Postgres is fine (see `make test-integration`). The suite truncates the tables
-// it uses, so it refuses any database whose name does not end in the suffix below
-// — a destructive suite must not be able to reach real history by mistake.
-const testDatabaseURLEnv = "TEST_DATABASE_URL"
-
-// testDatabaseSuffix is the name ending a database must have before this suite
-// will truncate anything in it. It makes the safety rule mechanical rather than a
-// warning in a comment: pointing the suite at the working database (whose name is
-// plain "temporal_agents") fails the run instead of deleting the recorded history
-// and the stored fleet plans.
-const testDatabaseSuffix = "_test"
-
-// newTestStore opens the test database, applies the schema, and empties the
-// executions table so each test starts from a known state.
-func newTestStore(t *testing.T) *Postgres {
-	t.Helper()
-	dsn := os.Getenv(testDatabaseURLEnv)
-	if dsn == "" {
-		t.Skipf("%s is not set; skipping the real-Postgres adapter suite", testDatabaseURLEnv)
-	}
-	requireThrowawayDatabase(t, dsn)
-	ctx := context.Background()
-	store, err := Open(ctx, dsn)
-	require.NoError(t, err)
-	t.Cleanup(store.Close)
-	require.NoError(t, store.Migrate(ctx))
-	_, err = store.pool.Exec(ctx, "TRUNCATE executions")
-	require.NoError(t, err)
-	return store
-}
-
-// requireThrowawayDatabase fails the test unless the DSN names a database whose
-// name ends in testDatabaseSuffix. Only the database name is inspected, and the
-// DSN itself is never reported: it commonly carries credentials.
-func requireThrowawayDatabase(t *testing.T, dsn string) {
-	t.Helper()
-	u, err := url.Parse(dsn)
-	require.NoErrorf(t, err, "%s is not a valid connection string", testDatabaseURLEnv)
-	name := strings.TrimPrefix(u.Path, "/")
-	require.Truef(t, strings.HasSuffix(name, testDatabaseSuffix),
-		"%s points at database %q, which does not end in %q; this suite truncates the tables it uses, "+
-			"so it only runs against a throwaway database (see 'make test-integration')",
-		testDatabaseURLEnv, name, testDatabaseSuffix)
-}
+// The behaviour of the adapter against a real Postgres. The container and the
+// per-test database it runs on are set up in suite_test.go.
 
 // stamp is a fixed, microsecond-precision instant: Postgres stores timestamps to
 // the microsecond, so a nanosecond-precision value would not compare equal after
@@ -77,6 +27,41 @@ func TestPostgres_MigrateIsIdempotent(t *testing.T) {
 	// schema must be a no-op rather than an error.
 	require.NoError(t, store.Migrate(ctx))
 	require.NoError(t, store.Migrate(ctx))
+}
+
+func TestPostgres_ConcurrentMigrateSucceedsForEveryWorker(t *testing.T) {
+	// Every worker migrates at startup and treats a failure as fatal, so two workers
+	// starting together must both succeed. Without the advisory lock in Migrate the
+	// unguarded CREATE TABLE IF NOT EXISTS lets one of them lose on a catalog
+	// duplicate-key error and refuse to start.
+	dsn := newTestDatabase(t)
+	const workers = 4
+	stores := make([]*Postgres, 0, workers)
+	for range workers {
+		stores = append(stores, openTestStore(t, dsn))
+	}
+
+	errs := make(chan error, workers)
+	var start sync.WaitGroup
+	start.Add(1)
+	for _, store := range stores {
+		go func(store *Postgres) {
+			start.Wait()
+			errs <- store.Migrate(context.Background())
+		}(store)
+	}
+	start.Done()
+	for range workers {
+		require.NoError(t, <-errs)
+	}
+
+	// Each migration was applied exactly once, so no worker skipped or repeated one.
+	names, err := migrationNames()
+	require.NoError(t, err)
+	var applied int
+	require.NoError(t, stores[0].pool.QueryRow(context.Background(),
+		"SELECT count(*) FROM schema_migrations").Scan(&applied))
+	require.Equal(t, len(names), applied)
 }
 
 func TestPostgres_RoundTripsAnExecutionIncludingItsDetail(t *testing.T) {

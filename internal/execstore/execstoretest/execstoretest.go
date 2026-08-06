@@ -11,13 +11,14 @@ package execstoretest
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"testing"
 
 	"temporal-agents/internal/execstore"
 )
 
-// Store is an in-memory execstore.Store and execstore.PlanStore. The zero value
+// Store is an in-memory implementation of every execstore port. The zero value
 // is ready to use and records everything written to it; use Failing to stand in
 // for a store outage.
 type Store struct {
@@ -31,27 +32,51 @@ type Store struct {
 	plans map[string]execstore.Plan
 	// err, when set, fails every operation, standing in for a store outage.
 	err error
+	// healthy is how many operations still succeed before err takes effect, so a
+	// test can put the outage between the start write and the terminal one (see
+	// FailingAfter).
+	healthy int
 }
 
 // Compile-time proof the fake satisfies the ports it is injected as.
 var (
-	_ execstore.Store     = (*Store)(nil)
-	_ execstore.PlanStore = (*Store)(nil)
+	_ execstore.ExecutionWriter = (*Store)(nil)
+	_ execstore.ExecutionReader = (*Store)(nil)
+	_ execstore.PlanStore       = (*Store)(nil)
 )
 
 // New returns an empty store.
 func New() *Store { return &Store{} }
 
 // Failing returns a store whose every operation fails with err, which is how a
-// test drives the "recording is a hard dependency" paths.
+// test drives the "a start write must succeed" paths.
 func Failing(err error) *Store { return &Store{err: err} }
+
+// FailingAfter returns a store whose first healthy operations succeed and whose
+// later ones fail with err. It stands in for a store that goes down mid-execution,
+// which is the only way to reach the terminal-write path with the start write
+// already landed.
+func FailingAfter(healthy int, err error) *Store { return &Store{err: err, healthy: healthy} }
+
+// outage reports the error the next operation must fail with, consuming the
+// allowance FailingAfter granted. The caller must hold mu.
+func (s *Store) outage() error {
+	if s.err == nil {
+		return nil
+	}
+	if s.healthy > 0 {
+		s.healthy--
+		return nil
+	}
+	return s.err
+}
 
 // SaveExecution appends the record, or fails when the store is failing.
 func (s *Store) SaveExecution(_ context.Context, e execstore.Execution) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.err != nil {
-		return s.err
+	if err := s.outage(); err != nil {
+		return err
 	}
 	s.saved = append(s.saved, e)
 	return nil
@@ -62,8 +87,8 @@ func (s *Store) SaveExecution(_ context.Context, e execstore.Execution) error {
 func (s *Store) ListExecutions(_ context.Context, _ execstore.Filter) ([]execstore.Execution, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.err != nil {
-		return nil, s.err
+	if err := s.outage(); err != nil {
+		return nil, err
 	}
 	return s.records(), nil
 }
@@ -72,8 +97,8 @@ func (s *Store) ListExecutions(_ context.Context, _ execstore.Filter) ([]execsto
 func (s *Store) SavePlan(_ context.Context, plan execstore.Plan) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.err != nil {
-		return s.err
+	if err := s.outage(); err != nil {
+		return err
 	}
 	if s.plans == nil {
 		s.plans = map[string]execstore.Plan{}
@@ -87,8 +112,8 @@ func (s *Store) SavePlan(_ context.Context, plan execstore.Plan) error {
 func (s *Store) Plan(_ context.Context, id string) (execstore.Plan, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.err != nil {
-		return execstore.Plan{}, s.err
+	if err := s.outage(); err != nil {
+		return execstore.Plan{}, err
 	}
 	plan, ok := s.plans[id]
 	if !ok {
@@ -97,18 +122,29 @@ func (s *Store) Plan(_ context.Context, id string) (execstore.Plan, error) {
 	return plan, nil
 }
 
-// ListPlans returns the stored plans. The limit is ignored, for the same reason
-// ListExecutions ignores its filter.
+// ListPlans returns the stored plans, newest first. The limit is ignored, for the
+// same reason ListExecutions ignores its filter, but the order is not: the port
+// promises newest first, and a fake that returned map order would make a test
+// asserting that order flaky and hide the ordering as a real requirement.
 func (s *Store) ListPlans(_ context.Context, _ int) ([]execstore.Plan, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.err != nil {
-		return nil, s.err
+	if err := s.outage(); err != nil {
+		return nil, err
 	}
 	out := make([]execstore.Plan, 0, len(s.plans))
 	for _, p := range s.plans {
 		out = append(out, p)
 	}
+	// Ties on the creation time are broken by handle, the same way the adapter's SQL
+	// does, so the order is total and the fake cannot return two different answers
+	// for the same content.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
 	return out, nil
 }
 

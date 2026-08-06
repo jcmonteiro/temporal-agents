@@ -19,6 +19,7 @@ import (
 // develop record), but the activity bundle still needs the port satisfied, so the
 // environment gets a throwaway store.
 func newOpenPREnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
+	t.Helper()
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestWorkflowEnvironment()
 	env.RegisterActivity(&Activities{Store: execstoretest.New()})

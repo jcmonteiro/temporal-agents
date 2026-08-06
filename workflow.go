@@ -41,9 +41,10 @@ type PromptRequest struct {
 //
 // The run is also durably recorded: it persists a "started" record before the
 // agent runs and a terminal record once it settles, so the execution survives
-// Temporal's retention and a reset of Temporal's own state. Recording is a hard
-// dependency — a record that cannot be written fails the workflow (see
-// persistRunState).
+// Temporal's retention and a reset of Temporal's own state. The start write is a
+// hard dependency — an unrecordable run does not start (see persistRunState) —
+// while a failed terminal write is reported without discarding the finished work
+// (see wfrecord.TerminalWriteFailed).
 func PromptWorkflow(ctx workflow.Context, req PromptRequest) (out string, err error) {
 	// Notify best-effort when the run fails. Continue-as-new is a control signal
 	// (chained runs), not a failure, so NotifyFailureBestEffort excludes it.
@@ -76,11 +77,10 @@ func PromptWorkflow(ctx workflow.Context, req PromptRequest) (out string, err er
 	var res piagent.Result
 	if aerr := workflow.ExecuteActivity(agentCtx, RunPiAgent, req).Get(agentCtx, &res); aerr != nil {
 		// The run has failed; record that terminal state and surface the original
-		// failure. A record write that also fails is not allowed to replace the more
-		// informative agent error — the workflow fails either way, which is the
-		// must-succeed guarantee.
+		// failure. A record write that also fails is only reported: the agent error is
+		// the informative one, and it is what the run fails with.
 		if perr := finishRunState(ctx, rec, 0, aerr); perr != nil {
-			workflow.GetLogger(ctx).Error("could not record the run's terminal state", "error", perr)
+			wfrecord.TerminalWriteFailed(ctx, "run", "", aerr, perr)
 		}
 		return "", aerr
 	}
@@ -97,11 +97,11 @@ func PromptWorkflow(ctx workflow.Context, req PromptRequest) (out string, err er
 		// control signal: each iteration is its own row, keyed on its own run ID, and
 		// carries only its own token usage.
 		if perr := finishRunState(ctx, rec, res.Tokens, nil); perr != nil {
-			// As on the terminal path below, log the work that the failed record write
-			// throws away so it survives in the worker log.
-			workflow.GetLogger(ctx).Error("the chained iteration succeeded but its terminal record could not be written; the output is only available here",
-				"error", perr, "output", res.Output)
-			return "", perr
+			// The iteration's work has landed, so the chain keeps going: the failed write
+			// is reported instead of being turned into a failure that would both discard
+			// this iteration's output and break the chain (see
+			// wfrecord.TerminalWriteFailed).
+			wfrecord.TerminalWriteFailed(ctx, "chained iteration", res.Output, nil, perr)
 		}
 		next := req
 		next.TokensSoFar = total
@@ -113,13 +113,12 @@ func PromptWorkflow(ctx workflow.Context, req PromptRequest) (out string, err er
 	// before continue-as-new, which would cancel the in-flight activity).
 	result := res.Output + "\n\n" + piagent.FormatTokenTotal(total)
 	if perr := finishRunState(ctx, rec, res.Tokens, nil); perr != nil {
-		// Recording must succeed, so the run fails here even though the agent did its
-		// work. Log the result first: it is up to an hour of agent output that the
-		// failed workflow discards, and the worker log is then the only place it can be
-		// recovered from.
-		workflow.GetLogger(ctx).Error("the run succeeded but its terminal record could not be written; the result is only available here",
-			"error", perr, "result", result)
-		return "", perr
+		// The agent did up to an hour of work, which the record is now missing. Report
+		// the bookkeeping failure and hand the result back anyway; the notification it
+		// sends carries the result, so the plain "Run complete" one below would only
+		// repeat it.
+		wfrecord.TerminalWriteFailed(ctx, "run", result, nil, perr)
+		return result, nil
 	}
 	wfnotify.NotifyBestEffort(ctx, notification.Notification{Title: "Run complete", Body: result})
 	return result, nil

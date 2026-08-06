@@ -23,7 +23,7 @@ func RunPiAgent(ctx context.Context, req PromptRequest) (piagent.Result, error) 
 type Activities struct {
 	// Store is the durable execution history port. A nil Store makes the persist
 	// activity fail loudly rather than panic, since recording is a hard dependency.
-	Store execstore.Store
+	Store execstore.ExecutionWriter
 }
 
 // RunState is the typed input to PersistRunWorkflowState: everything

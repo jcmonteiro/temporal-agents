@@ -73,7 +73,9 @@ func main() {
 	case "list":
 		listRunning()
 	case "history":
-		historyCmd(os.Args[2:])
+		if err := historyCmd(os.Args[2:]); err != nil {
+			fatalf("%v", err)
+		}
 	default:
 		usage()
 	}

@@ -16,25 +16,32 @@ import (
 // historyCmd lists the durably recorded executions. It is the counterpart to
 // `list`: `list` shows what Temporal is running right now, while `history` reads
 // the record that outlives Temporal's retention and a reset of its state.
-func historyCmd(args []string) {
+// It returns its failures instead of exiting, so the whole command — including
+// the "DATABASE_URL is unset" contract — is reachable from a test; main turns the
+// error into the exit.
+func historyCmd(args []string) error {
 	if wantsHelp(args) {
 		historyHelp(os.Stdout)
-		return
+		return nil
 	}
 	filter, err := parseHistoryFlags(args)
 	if err != nil {
-		fatalf("%v", err)
+		return err
 	}
 
 	ctx := context.Background()
-	store := openStore(ctx)
+	store, err := openStore(ctx)
+	if err != nil {
+		return err
+	}
 	defer store.Close()
 
 	execs, err := store.ListExecutions(ctx, filter)
 	if err != nil {
-		fatalf("Could not read the execution history: %v", err)
+		return fmt.Errorf("could not read the execution history: %w", err)
 	}
 	fmt.Print(formatHistory(execs))
+	return nil
 }
 
 // parseHistoryFlags reads the history filters: --kind <kind> keeps one command
@@ -53,6 +60,11 @@ func parseHistoryFlags(args []string) (execstore.Filter, error) {
 		}
 		if i+1 >= len(args) {
 			return "", i, fmt.Errorf("%s requires a value", flag)
+		}
+		// A value that looks like a flag is a forgotten value, not an ID: accepting it
+		// would make "--workflow-id --kind" quietly search for the workflow "--kind".
+		if v := args[i+1]; strings.HasPrefix(v, "--") {
+			return "", i, fmt.Errorf("%s requires a value, got the flag %q", flag, v)
 		}
 		return args[i+1], i + 1, nil
 	}
@@ -81,6 +93,9 @@ func parseHistoryFlags(args []string) (execstore.Filter, error) {
 			n, cerr := strconv.Atoi(v)
 			if cerr != nil || n <= 0 {
 				return execstore.Filter{}, fmt.Errorf("--limit requires a positive number, got %q", v)
+			}
+			if n > execstore.MaxListLimit {
+				return execstore.Filter{}, fmt.Errorf("--limit is capped at %d, got %d", execstore.MaxListLimit, n)
 			}
 			f.Limit = n
 		case "--workflow-id":
@@ -175,9 +190,17 @@ func historyRows(execs []execstore.Execution) []historyRow {
 
 // executionNote picks the most useful bit of context for a record's note column:
 // why it failed, or which schedule fired it.
+//
+// A failed scheduled run needs both: without the schedule the operator cannot see
+// that a schedule keeps failing, and without the reason the row says nothing, so
+// they are printed together (the reason is shortened to keep the row on one line).
 func executionNote(e execstore.Execution) string {
 	if e.Detail.Error != "" {
-		return truncate(firstLine(e.Detail.Error), 60)
+		reason := truncate(firstLine(e.Detail.Error), 60)
+		if e.ScheduleID != "" {
+			return "schedule " + e.ScheduleID + ": " + reason
+		}
+		return reason
 	}
 	if e.ScheduleID != "" {
 		return "schedule " + e.ScheduleID
@@ -292,7 +315,7 @@ hours old as abandoned and check "list" for the live Temporal view.
 FLAGS
   --kind <kind>        Keep one command type: run, develop, review, pilot, fleet,
                        fleet-plan (a fleet node is a develop record)
-  --limit <n>          How many executions to list (default 20)
+  --limit <n>          How many executions to list (default 20, at most 1000)
   --workflow-id <id>   Show one execution and its children (a fleet run's nodes,
                        a develop run's review)
   --schedule-id <id>   Keep only the runs a schedule fired

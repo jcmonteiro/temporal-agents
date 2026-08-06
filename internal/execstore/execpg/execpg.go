@@ -21,16 +21,20 @@ import (
 	"temporal-agents/internal/execstore"
 )
 
-// Postgres is the driven adapter implementing execstore.Store and
-// execstore.PlanStore over Postgres with pgx. It is the only place SQL and pgx
+// Postgres is the driven adapter implementing the execstore ports (both halves of
+// execution recording plus the plan store) over Postgres with pgx. It is the only place SQL and pgx
 // types appear: everything it exposes is the port's plain record types, so no
 // driver detail reaches workflow or domain code.
 type Postgres struct {
 	pool *pgxpool.Pool
 }
 
-// Compile-time proof the adapter satisfies the port it is injected as.
-var _ execstore.Store = (*Postgres)(nil)
+// Compile-time proof the adapter satisfies both halves of the execution port it is
+// injected as: the worker's activities take the writer, the CLI takes the reader.
+var (
+	_ execstore.ExecutionWriter = (*Postgres)(nil)
+	_ execstore.ExecutionReader = (*Postgres)(nil)
+)
 
 // Open connects to the Postgres instance at dsn and verifies the connection is
 // usable, so a misconfigured DSN fails at startup rather than on the first

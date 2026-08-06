@@ -12,21 +12,12 @@ import (
 
 // The plan store is exercised against a real Postgres for the same reason the
 // execution store is: the jsonb document round-trip and the upsert's conflict
-// handling are properties of the database, not of the Go code. See
-// execpg_integration_test.go for how to run these.
-
-// newTestPlanStore opens the test database, applies the schema, and empties the
-// plans table so each test starts from a known state.
-func newTestPlanStore(t *testing.T) *Postgres {
-	t.Helper()
-	store := newTestStore(t)
-	_, err := store.pool.Exec(context.Background(), "TRUNCATE plans")
-	require.NoError(t, err)
-	return store
-}
+// handling are properties of the database, not of the Go code. Each test runs on a
+// database of its own (see suite_test.go), so it starts from an empty table without
+// truncating anything.
 
 func TestPostgres_RoundTripsAPlanByHandle(t *testing.T) {
-	store := newTestPlanStore(t)
+	store := newTestStore(t)
 	ctx := context.Background()
 	want := execstore.Plan{
 		ID:        "plan-abcd1234efgh",
@@ -51,7 +42,7 @@ func TestPostgres_RoundTripsAPlanByHandle(t *testing.T) {
 }
 
 func TestPostgres_PlanWithoutAName(t *testing.T) {
-	store := newTestPlanStore(t)
+	store := newTestStore(t)
 	ctx := context.Background()
 
 	require.NoError(t, store.SavePlan(ctx, execstore.Plan{
@@ -64,7 +55,7 @@ func TestPostgres_PlanWithoutAName(t *testing.T) {
 }
 
 func TestPostgres_SavePlanUpsertsOnHandleAndKeepsTheOriginalTime(t *testing.T) {
-	store := newTestPlanStore(t)
+	store := newTestStore(t)
 	ctx := context.Background()
 	plan := execstore.Plan{ID: "plan-1", Goal: "first", Nodes: 1,
 		Document: []byte(`{"goal":"first"}`), CreatedAt: stamp}
@@ -86,7 +77,7 @@ func TestPostgres_SavePlanUpsertsOnHandleAndKeepsTheOriginalTime(t *testing.T) {
 }
 
 func TestPostgres_PlanUnknownHandle(t *testing.T) {
-	store := newTestPlanStore(t)
+	store := newTestStore(t)
 
 	_, err := store.Plan(context.Background(), "plan-nope")
 
@@ -96,7 +87,7 @@ func TestPostgres_PlanUnknownHandle(t *testing.T) {
 }
 
 func TestPostgres_ListPlansNewestFirst(t *testing.T) {
-	store := newTestPlanStore(t)
+	store := newTestStore(t)
 	ctx := context.Background()
 	for i, id := range []string{"plan-1", "plan-2", "plan-3"} {
 		require.NoError(t, store.SavePlan(ctx, execstore.Plan{

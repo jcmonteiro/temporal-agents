@@ -25,16 +25,45 @@ const schemaMigrationsDDL = `CREATE TABLE IF NOT EXISTS schema_migrations (
 	applied_at timestamptz NOT NULL DEFAULT now()
 )`
 
+// migrateLockID identifies the session-level advisory lock that serializes
+// Migrate. The value is arbitrary but must never change: it is the name two
+// workers agree on.
+const migrateLockID int64 = 8_060_926_014_071_701
+
 // Migrate applies every embedded migration that has not been applied yet, in
 // filename order, and records each in the schema_migrations table. It is
 // idempotent: re-running it against an up-to-date database does nothing, so the
 // worker can simply call it at startup.
 //
-// Each migration runs in its own transaction together with its tracking-table
+// The whole of it runs under an advisory lock, so two workers starting together
+// serialize rather than race. The per-migration transactions below would already
+// settle who applies a migration body, but CREATE TABLE IF NOT EXISTS is not
+// itself concurrency-safe in Postgres: two sessions can both pass the existence
+// check and one then fails with a duplicate-key error on the system catalog. Since
+// the worker treats a failed Migrate as fatal, that race would stop a worker from
+// starting.
+//
+// Each migration then runs in its own transaction together with its tracking-table
 // insert, so a migration and the record that it ran commit or roll back as one —
 // a crash mid-way can never leave the schema half-applied but marked as done.
 func (p *Postgres) Migrate(ctx context.Context) error {
-	if _, err := p.pool.Exec(ctx, schemaMigrationsDDL); err != nil {
+	conn, err := p.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire a connection to migrate on: %w", err)
+	}
+	// The advisory lock is session-scoped, so it must be taken and released on one
+	// pinned connection rather than on the pool.
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrateLockID); err != nil {
+		return fmt.Errorf("take the migration lock: %w", err)
+	}
+	defer func() {
+		// Releasing is best-effort: the lock is session-scoped, so it is dropped anyway
+		// when the connection closes.
+		_, _ = conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, migrateLockID)
+	}()
+
+	if _, err := conn.Exec(ctx, schemaMigrationsDDL); err != nil {
 		return fmt.Errorf("create schema_migrations table: %w", err)
 	}
 

@@ -236,6 +236,13 @@ const DefaultHistoryLimit = 20
 // views that may want different defaults.
 const DefaultPlanLimit = 20
 
+// MaxListLimit is the largest limit a listing accepts, for history and for stored
+// plans alike. Both read their whole result set into memory and print it as one
+// table, so an absurd limit would be answered by pulling the table into the CLI
+// rather than by refusing; the same rule applies to both because the reason is the
+// same.
+const MaxListLimit = 1000
+
 // Plan is a stored fleet plan: the approved graph an operator reviews and later
 // executes by handle. It replaces the loose fleet-plan.json the plan used to live
 // in, so a plan cannot be lost, overwritten, or left uncorrelated with the runs it
@@ -261,15 +268,21 @@ type Plan struct {
 	CreatedAt time.Time
 }
 
-// Store is the port the application core persists and reads execution history
-// through. The Postgres adapter in this package implements it.
+// ExecutionWriter is the port a workflow records through. It is deliberately
+// separate from ExecutionReader: the two have exactly one caller each — an
+// activity bundle only ever writes, the CLI only ever reads — so splitting them
+// makes that a fact the compiler holds rather than a rule stated in a comment.
 //
 // SaveExecution must be idempotent on Execution.RunID: Temporal may re-run an
 // activity whose result was lost after a partial success, so a retried start or
 // terminal write must neither duplicate a row nor corrupt the existing one.
-type Store interface {
+type ExecutionWriter interface {
 	// SaveExecution inserts or updates the record for e.RunID.
 	SaveExecution(ctx context.Context, e Execution) error
+}
+
+// ExecutionReader is the port the `history` command reads through.
+type ExecutionReader interface {
 	// ListExecutions returns the records matching f, newest first.
 	ListExecutions(ctx context.Context, f Filter) ([]Execution, error)
 }

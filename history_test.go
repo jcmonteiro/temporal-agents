@@ -40,6 +40,12 @@ func TestParseHistoryFlags_RejectsBadInput(t *testing.T) {
 		"negative limit":    {"--limit", "-3"},
 		"unknown flag":      {"--everything"},
 		"stray positional":  {"fleet-1"},
+		// A forgotten value must not be filled in from the next flag: without this,
+		// "--workflow-id --kind" quietly searches for the workflow "--kind".
+		"flag as a value": {"--workflow-id", "--kind", "run"},
+		// The listing is read into memory and printed as one table, so the cap is a
+		// refusal rather than an attempt.
+		"limit above the cap": {"--limit", "1001"},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -47,6 +53,13 @@ func TestParseHistoryFlags_RejectsBadInput(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestParseHistoryFlags_AcceptsTheLimitCapItself(t *testing.T) {
+	f, err := parseHistoryFlags([]string{"--limit", "1000"})
+
+	require.NoError(t, err)
+	require.Equal(t, execstore.MaxListLimit, f.Limit)
 }
 
 func TestFormatHistory_Empty(t *testing.T) {
@@ -120,6 +133,17 @@ func TestHistoryRows_NoteSurfacesFailureScheduleAndPR(t *testing.T) {
 	// A multi-line failure is reduced to its first line so the table stays aligned.
 	require.Equal(t, "pi crashed", rows[1].Note)
 	require.Equal(t, "https://github.com/o/r/pull/7", rows[2].Note)
+}
+
+func TestHistoryRows_FailedScheduledRunKeepsBothItsScheduleAndItsReason(t *testing.T) {
+	// A schedule that keeps failing is only visible if the note says both which
+	// schedule fired the run and why the run failed.
+	rows := historyRows([]execstore.Execution{{
+		WorkflowID: "run-1", Kind: execstore.KindRun, ScheduleID: "schedule-9",
+		Status: execstore.StatusFailed, Detail: execstore.Detail{Error: "pi crashed"},
+	}})
+
+	require.Equal(t, "schedule schedule-9: pi crashed", rows[0].Note)
 }
 
 func TestHistoryRows_ExpandedNodeIsNotLabelledAsAFilterableKind(t *testing.T) {

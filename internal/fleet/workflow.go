@@ -12,6 +12,7 @@ import (
 	"temporal-agents/internal/codereview"
 	"temporal-agents/internal/notification"
 	"temporal-agents/internal/wfnotify"
+	"temporal-agents/internal/wfrecord"
 )
 
 // FleetPlanInput is the input to FleetPlanWorkflow.
@@ -46,17 +47,13 @@ func FleetPlanWorkflow(ctx workflow.Context, in FleetPlanInput) (plan FleetPlan,
 	if perr != nil {
 		return FleetPlan{}, perr
 	}
-	// Settle the record on every path out, including a cancellation. Recording is a
-	// hard dependency: when planning would otherwise have succeeded a failed write
-	// becomes its error; when it was already failing the original (more informative)
-	// error is kept and planning fails either way.
+	// Settle the record on every path out, including a cancellation. A failed
+	// terminal write is reported and never changes planning's outcome: the plan
+	// itself is already stored, so failing here would throw away a usable plan over
+	// bookkeeping (see wfrecord.TerminalWriteFailed).
 	defer func() {
 		if perr := finishFleetPlanState(ctx, rec, err); perr != nil {
-			if err == nil {
-				err = perr
-				return
-			}
-			workflow.GetLogger(ctx).Error("could not record the planning run's terminal state", "error", perr)
+			wfrecord.TerminalWriteFailed(ctx, "fleet planning run", "stored plan "+rec.PlanID, err, perr)
 		}
 	}()
 
@@ -162,17 +159,13 @@ func FleetWorkflow(ctx workflow.Context, in FleetInput) (result string, err erro
 	if perr != nil {
 		return "", perr
 	}
-	// Settle the record on every path out, including a cancellation. Recording is a
-	// hard dependency: when the run would otherwise have succeeded a failed write
-	// becomes its error; when it was already failing the original (more informative)
-	// error is kept and the run fails either way.
+	// Settle the record on every path out, including a cancellation. A failed
+	// terminal write is reported and never changes the run's outcome: every node has
+	// already done its work, and the record is bookkeeping (see
+	// wfrecord.TerminalWriteFailed).
 	defer func() {
 		if perr := finishFleetState(ctx, rec, err); perr != nil {
-			if err == nil {
-				err = perr
-				return
-			}
-			workflow.GetLogger(ctx).Error("could not record the fleet run's terminal state", "error", perr)
+			wfrecord.TerminalWriteFailed(ctx, "fleet run", result, err, perr)
 		}
 	}()
 

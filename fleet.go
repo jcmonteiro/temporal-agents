@@ -134,6 +134,11 @@ func parseFleetPlanListFlags(args []string) (limit int) {
 		if err != nil || n <= 0 {
 			fatalf("--limit requires a positive number, got %q", v)
 		}
+		// Capped exactly like `history --limit`, and for the same reason: the listing is
+		// read into memory and printed as one table.
+		if n > execstore.MaxListLimit {
+			fatalf("--limit is capped at %d, got %d", execstore.MaxListLimit, n)
+		}
 		limit = n
 	}
 	return limit
@@ -175,12 +180,18 @@ func parseFleetExecuteFlags(args []string) (planID string, summary bool) {
 	return planID, summary
 }
 
-// newPlanHandle mints the handle a plan is stored and referred to by. It is short
-// enough to type on the command line while staying collision-free in practice,
-// and is generated up front so the CLI can print it before the (long) planning
-// run finishes.
+// planHandleHexDigits is how much of a UUID a plan handle keeps. The store upserts
+// on the handle, so a collision would silently overwrite somebody's plan instead of
+// failing — the one outcome with no error to report. 16 hex digits are 64 bits,
+// which keeps that outcome out of reach (a 50% chance needs on the order of 2^32
+// plans) while still being short enough to type on the command line.
+const planHandleHexDigits = 16
+
+// newPlanHandle mints the handle a plan is stored and referred to by. It is
+// generated up front so the CLI can print it before the (long) planning run
+// finishes.
 func newPlanHandle() string {
-	return "plan-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+	return "plan-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:planHandleHexDigits]
 }
 
 // runFleetPlan starts the planning workflow, waits for the generated dependency
@@ -231,7 +242,10 @@ func runFleetPlan(prompt, name string) {
 // the cap to the store's default).
 func fleetPlanList(limit int) {
 	ctx := context.Background()
-	store := openStore(ctx)
+	store, err := openStore(ctx)
+	if err != nil {
+		fatalf("%v", err)
+	}
 	defer store.Close()
 
 	plans, err := store.ListPlans(ctx, limit)
@@ -277,7 +291,10 @@ func effectivePlanLimit(limit int) int {
 // fleetPlanShow prints one stored plan in full.
 func fleetPlanShow(handle string) {
 	ctx := context.Background()
-	store := openStore(ctx)
+	store, err := openStore(ctx)
+	if err != nil {
+		fatalf("%v", err)
+	}
 	defer store.Close()
 
 	stored, err := store.Plan(ctx, handle)
@@ -344,7 +361,10 @@ func decodePlan(handle string, document []byte) fleet.FleetPlan {
 // workflow, returning immediately (like `run`) with a watch hint.
 func runFleetExecute(planID string, summary bool) {
 	ctx := context.Background()
-	store := openStore(ctx)
+	store, err := openStore(ctx)
+	if err != nil {
+		fatalf("%v", err)
+	}
 	defer store.Close()
 
 	stored, err := store.Plan(ctx, planID)
@@ -445,7 +465,7 @@ USAGE
 
 FLAGS
   --name <name>   Label shown next to the plan in "fleet plan list"
-  --limit <n>     How many plans "fleet plan list" shows (default 20)
+  --limit <n>     How many plans "fleet plan list" shows (default 20, at most 1000)
 
 EXAMPLES
   temporal-agents fleet plan "expose the pricing domain via REST and gRPC"

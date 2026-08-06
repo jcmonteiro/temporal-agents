@@ -29,7 +29,7 @@ type Activities struct {
 	// Store is the durable execution history port driven by the
 	// Persist<Type>WorkflowState activities in recording.go. A nil Store makes them
 	// fail loudly rather than panic, since recording is a hard dependency.
-	Store execstore.Store
+	Store execstore.ExecutionWriter
 }
 
 // LoadCommentsResult is the output of LoadUnresolvedComments.

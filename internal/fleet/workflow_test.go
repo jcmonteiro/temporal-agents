@@ -24,6 +24,7 @@ import (
 // newEnv builds the fleet test environment with a throwaway store, for the tests
 // that are not about the durable execution record.
 func newEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
+	t.Helper()
 	return newEnvWithStore(t, execstoretest.New())
 }
 
@@ -32,6 +33,7 @@ func newEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 // itself, and the fleet also stores its plan there, so the store is a required
 // dependency rather than an option.
 func newEnvWithStore(t *testing.T, store *execstoretest.Store) *testsuite.TestWorkflowEnvironment {
+	t.Helper()
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestWorkflowEnvironment()
 	env.RegisterActivity(&Activities{Store: store, Plans: store})

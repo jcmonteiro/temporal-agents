@@ -13,16 +13,21 @@ import (
 	"temporal-agents/internal/execstore"
 	"temporal-agents/internal/notification"
 	"temporal-agents/internal/piagent"
+	"temporal-agents/internal/wftest"
 )
 
 // ra references the root activity bundle's method names for OnActivity; the real
 // methods are never invoked because every call is mocked.
 var ra *Activities
 
+// pna references the notification activity's method name, for the same reason.
+var pna *notification.Activity
+
 // newPromptEnv builds a test environment with every activity PromptWorkflow uses
 // registered, and the durable recording activity mocked as succeeding. Tests that
 // care about the records override the mock or capture what it received.
 func newPromptEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
+	t.Helper()
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestWorkflowEnvironment()
 	env.RegisterActivity(RunPiAgent)
@@ -161,7 +166,58 @@ func TestPromptWorkflow_RecordingFailure_FailsTheWorkflow(t *testing.T) {
 	require.ErrorContains(t, env.GetWorkflowError(), "postgres is down")
 	// The agent never runs: the run is recorded as started first, so an
 	// unrecordable run does no work at all.
-	env.AssertNotCalled(t, "RunPiAgent", mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, wftest.ActivityName(RunPiAgent), mock.Anything, mock.Anything)
+}
+
+func TestPromptWorkflow_TerminalRecordFailure_StillReturnsTheResult(t *testing.T) {
+	env := newPromptEnv(t)
+
+	env.OnActivity(RunPiAgent, mock.Anything, mock.Anything).
+		Return(piagent.Result{Output: "the agent output", Tokens: 12345}, nil)
+	// The start write lands, the terminal one does not. The agent has done its work
+	// by then, so the bookkeeping failure must not throw the result away.
+	env.OnActivity(ra.PersistRunWorkflowState, mock.Anything, mock.Anything).Once().Return(nil)
+	env.OnActivity(ra.PersistRunWorkflowState, mock.Anything, mock.Anything).
+		Return(errors.New("postgres is down"))
+	var got notification.Notification
+	var na *notification.Activity
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			got = args.Get(1).(notification.Notification)
+		}).Return(nil)
+
+	env.ExecuteWorkflow(PromptWorkflow, PromptRequest{Prompt: "summarize", WorkDir: "/repo"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	var out string
+	require.NoError(t, env.GetWorkflowResult(&out))
+	require.Contains(t, out, "the agent output")
+	// The failure is reported rather than swallowed, and the notification carries
+	// the result the record no longer holds.
+	require.Contains(t, got.Title, "Record not written")
+	require.Contains(t, got.Body, "postgres is down")
+	require.Contains(t, got.Body, "the agent output")
+}
+
+func TestPromptWorkflow_Chain_TerminalRecordFailure_StillContinuesTheChain(t *testing.T) {
+	env := newPromptEnv(t)
+
+	env.OnActivity(RunPiAgent, mock.Anything, mock.Anything).
+		Return(piagent.Result{Output: "output", Tokens: 500}, nil)
+	env.OnActivity(ra.PersistRunWorkflowState, mock.Anything, mock.Anything).Once().Return(nil)
+	env.OnActivity(ra.PersistRunWorkflowState, mock.Anything, mock.Anything).
+		Return(errors.New("postgres is down"))
+	var na *notification.Activity
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(PromptWorkflow, PromptRequest{Prompt: "watch", WorkDir: "/repo", Chain: true})
+
+	require.True(t, env.IsWorkflowCompleted())
+	// An unrecordable iteration must not break the chain: continue-as-new is the
+	// control signal that keeps it running.
+	var canErr *workflow.ContinueAsNewError
+	require.ErrorAs(t, env.GetWorkflowError(), &canErr)
 }
 
 func TestPromptWorkflow_Failure_SendsFailureNotification(t *testing.T) {
@@ -233,7 +289,7 @@ func TestPromptWorkflow_Chain_ContinuesAsNewWithoutNotifying(t *testing.T) {
 	// not notify yet.
 	var canErr *workflow.ContinueAsNewError
 	require.ErrorAs(t, env.GetWorkflowError(), &canErr)
-	env.AssertNotCalled(t, "Notify", mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, wftest.ActivityName(pna.Notify), mock.Anything, mock.Anything)
 }
 
 func TestPromptWorkflow_ScheduleFiredRun_RecordsItsSchedule(t *testing.T) {

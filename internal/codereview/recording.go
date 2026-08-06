@@ -17,11 +17,13 @@ import (
 // the workflows stay deterministic, and no SQL or driver type reaches this
 // package — only the port's record types.
 //
-// Recording is a hard dependency, not best-effort like notification: a state that
-// cannot be written fails the workflow (Temporal's retries absorb a transient
-// store outage). Each write is an idempotent upsert on the Temporal run ID, so a
-// retried activity that had already committed neither duplicates the row nor
-// corrupts it.
+// Recording is not best-effort like notification: Temporal's retries absorb a
+// transient store outage, and an exhausted policy is never ignored. A start write
+// that cannot land fails the workflow (nothing has happened yet); a terminal one is
+// reported without discarding the work it was recording (see
+// wfrecord.TerminalWriteFailed). Each write is an idempotent upsert on the Temporal
+// run ID, so a retried activity that had already committed neither duplicates the
+// row nor corrupts it.
 
 // DevelopState is the typed input to PersistDevelopWorkflowState.
 //

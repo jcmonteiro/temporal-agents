@@ -44,8 +44,10 @@ func TestNewPlanHandle_IsShortPrefixedAndUnique(t *testing.T) {
 	first, second := newPlanHandle(), newPlanHandle()
 
 	require.True(t, strings.HasPrefix(first, "plan-"))
-	// Short enough to retype on the command line.
-	require.Len(t, first, len("plan-")+12)
+	// Short enough to retype on the command line, wide enough that a collision —
+	// which the store's upsert would answer by overwriting a plan, silently — stays
+	// out of reach.
+	require.Len(t, first, len("plan-")+planHandleHexDigits)
 	require.NotEqual(t, first, second)
 }
 

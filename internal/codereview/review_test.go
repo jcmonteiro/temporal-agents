@@ -20,6 +20,7 @@ import (
 // newReviewEnv builds the review test environment with a throwaway store, for the
 // tests that are not about the durable execution record.
 func newReviewEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
+	t.Helper()
 	return newReviewEnvWithStore(t, execstoretest.New())
 }
 
@@ -27,6 +28,7 @@ func newReviewEnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 // assert on what was written (see recording_test.go). Every workflow records
 // itself, so the store is a required dependency rather than an option.
 func newReviewEnvWithStore(t *testing.T, store *execstoretest.Store) *testsuite.TestWorkflowEnvironment {
+	t.Helper()
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestWorkflowEnvironment()
 	env.RegisterActivity(&Activities{Store: store})

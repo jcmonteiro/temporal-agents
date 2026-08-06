@@ -69,9 +69,12 @@ run's parent, its nodes and their reviews without counting the same tokens twice
 A skipped fleet node never starts a workflow of its own, so it is listed from its
 parent's per-node breakdown.
 
-Recording is a hard dependency, not best-effort: a workflow that cannot write
-its record retries and, if Postgres stays down, fails. `list` remains the live
-Temporal view; `history` is the durable one.
+Recording is not best-effort: a write retries until it succeeds or Postgres has
+clearly stayed down. What an exhausted retry costs then depends on which write it
+was — a workflow that cannot record its *start* does not run at all, while one that
+cannot record its *outcome* keeps its result and reports the bookkeeping failure
+(the row is left at `running`, so treat an hours-old `running` row as abandoned).
+`list` remains the live Temporal view; `history` is the durable one.
 
 ## Commands
 
@@ -135,17 +138,16 @@ every node it depends on has been both developed and reviewed.
 ## Tests
 
 ```sh
-make test              # unit + workflow tests (the Postgres adapter suite skips itself)
-make test-integration  # also runs the adapter suite against the compose Postgres
+make test   # every test, integration suites included
 ```
 
 The `execstore` adapter is tested against a real Postgres, since the database and
-its schema are the out-of-process dependency under test. That suite skips unless
-`TEST_DATABASE_URL` is set, and it truncates the tables it uses, so it refuses any
-database whose name does not end in `_test`. `make test-integration` creates and
-uses `temporal_agents_test` on the compose Postgres — never the `temporal_agents`
-database you work in, whose recorded history and stored plans would be deleted.
-CI runs the same suite against a throwaway Postgres service container.
+its schema are the out-of-process dependency under test. That suite starts its own
+throwaway Postgres with [testcontainers-go](https://golang.testcontainers.org/),
+so it needs a running Docker daemon but no setup and no environment variable — and
+it never touches the `temporal_agents` database you work in. Each test gets a fresh
+database inside the container, so no test can see another's rows. CI runs exactly
+the same command.
 
 ## Docker
 

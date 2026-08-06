@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -11,6 +12,8 @@ import (
 	"temporal-agents/internal/codereview"
 	"temporal-agents/internal/execstore"
 	"temporal-agents/internal/execstore/execstoretest"
+	"temporal-agents/internal/wfrecord"
+	"temporal-agents/internal/wftest"
 )
 
 // The recording tests drive the real PersistFleetWorkflowState activity against
@@ -108,7 +111,7 @@ func TestFleetWorkflow_RecordingFailure_FailsTheWorkflow(t *testing.T) {
 	require.True(t, env.IsWorkflowCompleted())
 	require.ErrorContains(t, env.GetWorkflowError(), "postgres is down")
 	// The record comes first, so an unrecordable run starts no node.
-	env.AssertNotCalled(t, "ResolveBase", mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, wftest.ActivityName(fa.ResolveBase), mock.Anything, mock.Anything)
 }
 
 // cra references the codereview activity bundle's method names for OnActivity, so
@@ -217,6 +220,36 @@ func TestFleetPlanWorkflow_PlanThatCannotBeStoredFailsPlanning(t *testing.T) {
 	require.ErrorContains(t, env.GetWorkflowError(), "postgres is down")
 	end := store.Last(t)
 	require.Equal(t, execstore.StatusFailed, end.Status)
+}
+
+func TestNodeOutcomes_RedactsACredentialAChildErrorCarries(t *testing.T) {
+	// A node's detail is the child workflow's error verbatim, and git echoes the
+	// remote it failed on — which embeds the token when the remote is
+	// token-authenticated. The durable record must not keep it.
+	results := []NodeResult{{
+		ID:     "core",
+		Status: StatusFailed,
+		Detail: "push failed: unable to access 'https://x-access-token:ghs_0123456789abcdefghij@github.com/o/r.git/'",
+	}}
+
+	out := nodeOutcomes(results)
+
+	require.Len(t, out, 1)
+	require.NotContains(t, out[0].Detail, "ghs_0123456789abcdefghij")
+	require.Contains(t, out[0].Detail, "github.com/o/r.git", "the reason the node failed still reads")
+}
+
+func TestNodeOutcomes_CapsANodesDetail(t *testing.T) {
+	// On the success path the detail is the child's whole summary output, and the
+	// parent row holds one per node, so an uncapped detail would let one node bloat
+	// the row.
+	results := []NodeResult{{ID: "core", Status: StatusSucceeded,
+		Detail: strings.Repeat("agent output\n", 4*wfrecord.MaxDetailText)}}
+
+	out := nodeOutcomes(results)
+
+	require.Len(t, out, 1)
+	require.Less(t, len(out[0].Detail), 2*wfrecord.MaxDetailText)
 }
 
 func TestStorePlan_RequiresAStore(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 
 	"temporal-agents/internal/notification"
 	"temporal-agents/internal/wfnotify"
+	"temporal-agents/internal/wfrecord"
 )
 
 // reviewPollInterval is how long the workflow sleeps between checks for a
@@ -167,18 +168,13 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 	if perr != nil {
 		return "", perr
 	}
-	// Settle the record on every path out of this pass, including a cancellation.
-	// Recording is a hard dependency: when the pass would otherwise have succeeded,
-	// a failed write becomes its error. When it was already failing the original
-	// error is kept (the pass fails either way), since it is the more informative of
-	// the two.
+	// Settle the record on every path out of this pass, including a cancellation. A
+	// failed terminal write is reported and never changes the pass's outcome (see
+	// wfrecord.TerminalWriteFailed) — which matters most here, where err carries the
+	// continue-as-new control signal that keeps the loop going.
 	defer func() {
 		if perr := finishPilotState(ctx, rec, err); perr != nil {
-			if err == nil {
-				err = perr
-				return
-			}
-			workflow.GetLogger(ctx).Error("could not record the pilot pass's terminal state", "error", perr)
+			wfrecord.TerminalWriteFailed(ctx, "pilot pass", summary, err, perr)
 		}
 	}()
 
@@ -459,16 +455,12 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 		return "", perr
 	}
 	// Settle the record on every path out of this workflow, including a
-	// cancellation. Recording is a hard dependency: when development would otherwise
-	// have succeeded a failed write becomes its error; when it was already failing
-	// the original (more informative) error is kept and the run fails either way.
+	// cancellation. A failed terminal write is reported and never changes the run's
+	// outcome: the development has landed, and the record is bookkeeping (see
+	// wfrecord.TerminalWriteFailed).
 	defer func() {
 		if perr := finishDevelopState(ctx, rec, err); perr != nil {
-			if err == nil {
-				err = perr
-				return
-			}
-			workflow.GetLogger(ctx).Error("could not record the develop run's terminal state", "error", perr)
+			wfrecord.TerminalWriteFailed(ctx, "develop run", result, err, perr)
 		}
 	}()
 
@@ -867,17 +859,13 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome,
 	if perr != nil {
 		return ReviewOutcome{}, perr
 	}
-	// Settle the record on every path out of this pass, including a cancellation.
-	// Recording is a hard dependency: when the pass would otherwise have succeeded a
-	// failed write becomes its error; when it was already failing the original (more
-	// informative) error is kept and the pass fails either way.
+	// Settle the record on every path out of this pass, including a cancellation. A
+	// failed terminal write is reported and never changes the pass's outcome (see
+	// wfrecord.TerminalWriteFailed) — which matters most here, where err carries the
+	// continue-as-new control signal that drives the next pass.
 	defer func() {
 		if perr := finishReviewState(ctx, rec, err); perr != nil {
-			if err == nil {
-				err = perr
-				return
-			}
-			workflow.GetLogger(ctx).Error("could not record the review pass's terminal state", "error", perr)
+			wfrecord.TerminalWriteFailed(ctx, "review pass", result.Summary, err, perr)
 		}
 	}()
 

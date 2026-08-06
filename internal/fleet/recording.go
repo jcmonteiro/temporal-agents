@@ -77,6 +77,12 @@ func (a *Activities) PersistFleetWorkflowState(ctx context.Context, in FleetStat
 
 // nodeOutcomes maps the fleet's own per-node results onto the record type, so the
 // domain type stays free of any persistence concern.
+//
+// A node's detail is the one recorded text that does not come from
+// wfrecord.FailureText: it is a child workflow's error verbatim (a git failure can
+// echo a token-authenticated remote) or its whole summary output (unbounded), and
+// the parent row holds one per node. It therefore goes through the same funnel
+// here, so nothing reaches the store unredacted or uncapped.
 func nodeOutcomes(results []NodeResult) []execstore.NodeOutcome {
 	if len(results) == 0 {
 		return nil
@@ -86,7 +92,7 @@ func nodeOutcomes(results []NodeResult) []execstore.NodeOutcome {
 		out = append(out, execstore.NodeOutcome{
 			ID:     r.ID,
 			Status: string(r.Status),
-			Detail: r.Detail,
+			Detail: wfrecord.Sanitize(r.Detail),
 			Tokens: r.Tokens,
 		})
 	}

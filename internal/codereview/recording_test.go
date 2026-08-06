@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/temporal"
+	"go.temporal.io/sdk/workflow"
 
 	"temporal-agents/internal/execstore"
 	"temporal-agents/internal/execstore/execstoretest"
@@ -107,7 +108,7 @@ func TestDevelopWorkflow_RecordingFailure_FailsTheWorkflow(t *testing.T) {
 	require.True(t, env.IsWorkflowCompleted())
 	require.ErrorContains(t, env.GetWorkflowError(), "postgres is down")
 	// The record comes first, so an unrecordable run never touches the repository.
-	env.AssertNotCalled(t, "CreateBranch", mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, activityName(a.CreateBranch), mock.Anything, mock.Anything)
 }
 
 func TestReviewWorkflow_Converged_RecordsOwnTokensAndConvergence(t *testing.T) {
@@ -170,6 +171,48 @@ func TestReviewWorkflow_ContinuedPass_RecordsItselfAsSucceededWithoutDecidingCon
 	require.Equal(t, 120, end.Tokens)
 }
 
+func TestReviewWorkflow_TerminalRecordFailure_StillContinuesTheLoop(t *testing.T) {
+	// The start write lands and the store then goes down. The pass has done its
+	// work, and its error is the continue-as-new control signal that drives the next
+	// pass, so a failed terminal write must neither fail the pass nor strand the loop
+	// (see wfrecord.TerminalWriteFailed).
+	store := execstoretest.FailingAfter(1, errors.New("postgres is down"))
+	env := newReviewEnvWithStore(t, store)
+
+	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).
+		Return(AgentResult{Output: "feedback", Tokens: 120}, nil)
+
+	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	var canErr *workflow.ContinueAsNewError
+	require.ErrorAs(t, env.GetWorkflowError(), &canErr)
+}
+
+func TestDevelopWorkflow_TerminalRecordFailure_StillReturnsTheResult(t *testing.T) {
+	// Development has landed on the branch by the time the terminal write runs, so a
+	// bookkeeping outage must not discard it: the row stays "running", the run
+	// succeeds.
+	store := execstoretest.FailingAfter(1, errors.New("postgres is down"))
+	env := newDevelopEnvWithStore(t, store)
+
+	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
+		Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
+	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).
+		Return(AgentResult{Output: "done", Tokens: 700}, nil)
+	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).
+		Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
+
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Prompt: "do the thing"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	var out string
+	require.NoError(t, env.GetWorkflowResult(&out))
+	require.Contains(t, out, "Developed branch feat/x", "the run's own summary is handed back intact")
+}
+
 func TestReviewWorkflow_ChildReviewRecordsItsParent(t *testing.T) {
 	store := execstoretest.New()
 	env := newDevelopEnvWithStore(t, store)
@@ -230,7 +273,7 @@ func TestPilotWorkflow_RecordingFailure_FailsTheWorkflow(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.ErrorContains(t, env.GetWorkflowError(), "postgres is down")
-	env.AssertNotCalled(t, "DeterminePR", mock.Anything, mock.Anything)
+	env.AssertNotCalled(t, activityName(a.DeterminePR), mock.Anything, mock.Anything)
 }
 
 func TestDevelopWorkflow_WithRemote_FailedPipelineStillRecordsTheOpenedPR(t *testing.T) {

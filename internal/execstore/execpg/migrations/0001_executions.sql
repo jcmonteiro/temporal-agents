@@ -27,9 +27,10 @@ CREATE TABLE IF NOT EXISTS executions (
 );
 
 -- history reads newest-first, optionally narrowed by kind, by workflow (a run
--- and its children) or by schedule; index each of those access paths. Ordering
--- the composite indexes by started_at DESC lets a limited query stop early
--- instead of sorting the whole table as history grows.
+-- and its children) or by schedule; index each of those access paths, ordered by
+-- started_at DESC to match the query. These definitions stop one column short of
+-- the query's run_id tie-break, so 0003 recreates them with it: an applied
+-- migration is never edited, it is superseded.
 CREATE INDEX IF NOT EXISTS executions_started_at_idx ON executions (started_at DESC);
 CREATE INDEX IF NOT EXISTS executions_kind_started_at_idx ON executions (kind, started_at DESC);
 CREATE INDEX IF NOT EXISTS executions_workflow_id_idx ON executions (workflow_id, started_at DESC);
