@@ -156,29 +156,37 @@ func readError(what string, err error) error {
 	return fmt.Errorf("%s: %w", what, err)
 }
 
+// filterPlaceholder marks where a clause takes its argument. It is deliberately
+// not "?": Postgres reads "?" as the jsonb existence operator (detail ? 'nodes'),
+// so a future clause using that operator would have it silently rewritten into a
+// positional parameter and produce a mangled query rather than a compile error.
+// "{}" cannot occur in SQL, so no clause can contain one by accident.
+const filterPlaceholder = "{}"
+
 // buildFilter renders f as a WHERE clause plus its positional arguments. An
 // empty filter yields no clause at all.
 func buildFilter(f execstore.Filter) (string, []any) {
 	var clauses []string
 	var args []any
 	// add takes exactly one argument, however many placeholders the clause has:
-	// every "?" in the clause is rewritten to the *same* positional parameter. That
-	// is what lets "(workflow_id = ? OR parent_workflow_id = ?)" match one value in
-	// two columns. A clause needing two distinct values must be added as two calls.
+	// every filterPlaceholder in the clause is rewritten to the *same* positional
+	// parameter. That is what lets "(workflow_id = {} OR parent_workflow_id = {})"
+	// match one value in two columns. A clause needing two distinct values must be
+	// added as two calls.
 	add := func(clause string, arg any) {
 		args = append(args, arg)
-		clauses = append(clauses, strings.ReplaceAll(clause, "?", "$"+strconv.Itoa(len(args))))
+		clauses = append(clauses, strings.ReplaceAll(clause, filterPlaceholder, "$"+strconv.Itoa(len(args))))
 	}
 	if f.Kind != "" {
-		add("kind = ?", string(f.Kind))
+		add("kind = {}", string(f.Kind))
 	}
 	if f.WorkflowID != "" {
 		// One execution and its children: the row(s) under that workflow ID (every
 		// continue-as-new iteration) plus every child that recorded it as its parent.
-		add("(workflow_id = ? OR parent_workflow_id = ?)", f.WorkflowID)
+		add("(workflow_id = {} OR parent_workflow_id = {})", f.WorkflowID)
 	}
 	if f.ScheduleID != "" {
-		add("schedule_id = ?", f.ScheduleID)
+		add("schedule_id = {}", f.ScheduleID)
 	}
 	if len(clauses) == 0 {
 		return "", nil

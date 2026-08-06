@@ -146,8 +146,10 @@ its schema are the out-of-process dependency under test. That suite starts its o
 throwaway Postgres with [testcontainers-go](https://golang.testcontainers.org/),
 so it needs a running Docker daemon but no setup and no environment variable — and
 it never touches the `temporal_agents` database you work in. Each test gets a fresh
-database inside the container, so no test can see another's rows. CI runs exactly
-the same command.
+database inside the container, so no test can see another's rows.
+
+The target runs `go test -race -shuffle=on ./...`, which is exactly what CI runs, so
+a green run locally means what a green run in CI means.
 
 ## Docker
 

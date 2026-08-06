@@ -8,6 +8,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 
 	"temporal-agents/internal/execstore"
+	"temporal-agents/internal/wfrecord"
 )
 
 // errInvalidPlan is the error type returned (non-retryable) when the agent's
@@ -27,6 +28,11 @@ const errMissingWorktreesDir = "MissingWorktreesDir"
 // read-only planning contract's tripwire fires: the source repository changed
 // while planning ran. Retrying cannot undo a mutation, so it fails fast.
 const errPlanningMutatedRepo = "PlanningMutatedRepo"
+
+// errPlanTooLarge is the error type returned (non-retryable) when the generated
+// plan's document exceeds execstore.MaxPlanDocument. Storing the same oversized
+// document again cannot succeed, so it fails fast.
+const errPlanTooLarge = "PlanTooLarge"
 
 // Activities bundles the driven adapters the fleet workflows orchestrate. It is
 // registered with the Temporal worker; each exported method is an activity.
@@ -182,6 +188,11 @@ type StorePlanRequest struct {
 // is surfaced, never swallowed: a plan that was not stored cannot be executed
 // later, so planning must fail loudly instead of reporting a handle that resolves
 // to nothing.
+//
+// The plan is agent-generated, so neither its goal nor its size is bounded by
+// anything the CLI typed. The goal goes through the same redact-and-cap funnel as
+// every other stored free text, while the document — which must stay decodable, so
+// it can be neither trimmed nor rewritten — is size-guarded instead of capped.
 func (a *Activities) StorePlan(ctx context.Context, req StorePlanRequest) error {
 	if a.Plans == nil {
 		return execstore.ErrNotConfigured
@@ -190,10 +201,15 @@ func (a *Activities) StorePlan(ctx context.Context, req StorePlanRequest) error 
 	if err != nil {
 		return fmt.Errorf("encode fleet plan: %w", err)
 	}
+	if len(document) > execstore.MaxPlanDocument {
+		return temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("the generated fleet plan is %d bytes, over the %d the store accepts",
+				len(document), execstore.MaxPlanDocument), errPlanTooLarge, nil)
+	}
 	return a.Plans.SavePlan(ctx, execstore.Plan{
 		ID:       req.PlanID,
 		Name:     req.Name,
-		Goal:     req.Plan.Goal,
+		Goal:     wfrecord.Sanitize(req.Plan.Goal),
 		Nodes:    len(req.Plan.Nodes),
 		Document: document,
 	})

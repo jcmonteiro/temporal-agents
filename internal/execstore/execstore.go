@@ -243,6 +243,16 @@ const DefaultPlanLimit = 20
 // same.
 const MaxListLimit = 1000
 
+// MaxPlanDocument is the largest plan document the store accepts, in bytes.
+//
+// The document is the only stored text that cannot go through the free-text funnel:
+// truncating it would leave undecodable JSON, and a plan that does not decode is
+// worthless. So the budget is enforced as a refusal instead of a trim. It is
+// generous next to any plan a human would approve — a plan is a list of node
+// prompts, and the largest realistic one is a few hundred KiB — so reaching it means
+// the planning agent produced something no operator was going to read.
+const MaxPlanDocument = 1 << 20 // 1 MiB
+
 // Plan is a stored fleet plan: the approved graph an operator reviews and later
 // executes by handle. It replaces the loose fleet-plan.json the plan used to live
 // in, so a plan cannot be lost, overwritten, or left uncorrelated with the runs it

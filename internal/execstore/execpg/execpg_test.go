@@ -32,4 +32,5 @@ func TestBuildFilter_WorkflowIDMatchesTheWholeTreeWithOneArgument(t *testing.T) 
 	require.Equal(t, []any{"fleet-1"}, args, "one value, however many columns it is matched against")
 	require.Equal(t, 2, strings.Count(where, "$1"))
 	require.NotContains(t, where, "$2")
+	require.NotContains(t, where, filterPlaceholder, "every placeholder is rendered, none reaches Postgres")
 }

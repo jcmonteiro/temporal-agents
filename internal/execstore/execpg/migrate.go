@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // migrationFS holds the schema as embedded SQL files, applied in filename order.
@@ -45,7 +46,10 @@ const migrateLockID int64 = 8_060_926_014_071_701
 //
 // Each migration then runs in its own transaction together with its tracking-table
 // insert, so a migration and the record that it ran commit or roll back as one —
-// a crash mid-way can never leave the schema half-applied but marked as done.
+// a crash mid-way can never leave the schema half-applied but marked as done. The
+// transactions run on the same pinned connection that holds the lock, so migrating
+// needs exactly one connection: taking a second one from the pool would deadlock a
+// worker whose DSN caps the pool at one (pool_max_conns=1).
 func (p *Postgres) Migrate(ctx context.Context) error {
 	conn, err := p.pool.Acquire(ctx)
 	if err != nil {
@@ -76,19 +80,22 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", name, err)
 		}
-		if err := p.applyMigration(ctx, name, string(body)); err != nil {
+		if err := p.applyMigration(ctx, conn, name, string(body)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// applyMigration runs one migration unless it is already recorded as applied.
+// applyMigration runs one migration unless it is already recorded as applied, on
+// the caller's already-acquired connection (see Migrate: the whole operation must
+// need only the one).
+//
 // The "already applied?" check runs inside the transaction that applies it, so
 // two workers starting at once cannot both apply the same migration: the second
 // blocks on the first's row lock and then sees it recorded.
-func (p *Postgres) applyMigration(ctx context.Context, name, body string) error {
-	tx, err := p.pool.Begin(ctx)
+func (p *Postgres) applyMigration(ctx context.Context, conn *pgxpool.Conn, name, body string) error {
+	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin migration %s: %w", name, err)
 	}
@@ -106,7 +113,11 @@ func (p *Postgres) applyMigration(ctx context.Context, name, body string) error 
 		return fmt.Errorf("record migration %s: %w", name, err)
 	}
 	if len(applied) == 0 {
-		return tx.Rollback(ctx)
+		// Nothing to do: another worker already applied this migration. The deferred
+		// rollback closes the transaction, and its error is deliberately not returned —
+		// failing Migrate (and with it the worker's startup) over a rollback of a
+		// correctly skipped migration would turn a success into an outage.
+		return nil
 	}
 
 	if _, err := tx.Exec(ctx, body); err != nil {

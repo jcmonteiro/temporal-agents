@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 
 	"temporal-agents/internal/execstore"
 	"temporal-agents/internal/execstore/execstoretest"
+	"temporal-agents/internal/wfrecord"
 )
 
 // The persist activity is the one place where PromptWorkflow's own state type is
@@ -51,6 +53,41 @@ func TestPersistRunWorkflowState_MapsARunOntoTheSharedRecord(t *testing.T) {
 	// The failure text is the only detail a run produces, so the record says why it
 	// failed rather than merely that it did.
 	require.Equal(t, execstore.Detail{Error: "pi crashed"}, got.Detail)
+}
+
+func TestPersistRunWorkflowState_RedactsACredentialInThePrompt(t *testing.T) {
+	// A prompt is operator-written free text, so it can carry a token as easily as a
+	// failure text can — and the record is long-lived, so it must go through the same
+	// funnel as every other recorded free text.
+	store := execstoretest.New()
+	a := &Activities{Store: store}
+
+	err := a.PersistRunWorkflowState(context.Background(), RunState{
+		WorkflowID: "run-1",
+		RunID:      "run-1-a",
+		Prompt:     "clone https://x-access-token:ghs_0123456789abcdef@github.com/o/r.git",
+	})
+
+	require.NoError(t, err)
+	got := store.Last(t)
+	require.NotContains(t, got.Prompt, "ghs_0123456789abcdef")
+	require.Contains(t, got.Prompt, "REDACTED")
+}
+
+func TestPersistRunWorkflowState_CapsAnUnboundedPrompt(t *testing.T) {
+	// Nothing bounds a prompt's length, so an uncapped column would let one run bloat
+	// its row without limit.
+	store := execstoretest.New()
+	a := &Activities{Store: store}
+
+	err := a.PersistRunWorkflowState(context.Background(), RunState{
+		WorkflowID: "run-1",
+		RunID:      "run-1-a",
+		Prompt:     strings.Repeat("x", 4*wfrecord.MaxDetailText),
+	})
+
+	require.NoError(t, err)
+	require.Less(t, len(store.Last(t).Prompt), 2*wfrecord.MaxDetailText)
 }
 
 func TestPersistRunWorkflowState_WithoutAStoreFailsInsteadOfPanicking(t *testing.T) {

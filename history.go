@@ -13,13 +13,19 @@ import (
 	"temporal-agents/internal/execstore"
 )
 
+// openReader opens the read side of the execution store, returning the port and
+// the function that releases it. It is a parameter of historyCmd rather than a
+// direct call so the command reads through the port instead of the adapter, and so
+// a test can put the in-memory fake in its place (see openExecutionReader).
+type openReader func(context.Context) (execstore.ExecutionReader, func(), error)
+
 // historyCmd lists the durably recorded executions. It is the counterpart to
 // `list`: `list` shows what Temporal is running right now, while `history` reads
 // the record that outlives Temporal's retention and a reset of its state.
 // It returns its failures instead of exiting, so the whole command — including
 // the "DATABASE_URL is unset" contract — is reachable from a test; main turns the
 // error into the exit.
-func historyCmd(args []string) error {
+func historyCmd(args []string, open openReader) error {
 	if wantsHelp(args) {
 		historyHelp(os.Stdout)
 		return nil
@@ -30,13 +36,13 @@ func historyCmd(args []string) error {
 	}
 
 	ctx := context.Background()
-	store, err := openStore(ctx)
+	reader, release, err := open(ctx)
 	if err != nil {
 		return err
 	}
-	defer store.Close()
+	defer release()
 
-	execs, err := store.ListExecutions(ctx, filter)
+	execs, err := reader.ListExecutions(ctx, filter)
 	if err != nil {
 		return fmt.Errorf("could not read the execution history: %w", err)
 	}
@@ -138,10 +144,14 @@ type historyRow struct {
 	Kind string
 	// Status is the recorded status.
 	Status string
-	// Started and Ended are the execution's timestamps; either may be zero (still
-	// running, or an expanded node that never ran).
+	// Started is when the execution began; it is zero for an expanded node, which
+	// never ran.
 	Started time.Time
-	Ended   time.Time
+	// Took is how long the execution took, or 0 when there is none to report yet: a
+	// still-running execution, or an expanded node. It is reported instead of the end
+	// stamp because "11m0s" is what an operator reads a settled row for, while the
+	// exact end time of a row whose start is already printed adds little.
+	Took time.Duration
 	// Tokens is the row's own incremental token usage, so the printed total is a
 	// true sum rather than a double-count of the fleet→node→review tree.
 	Tokens int
@@ -161,15 +171,20 @@ type historyRow struct {
 func historyRows(execs []execstore.Execution) []historyRow {
 	rows := make([]historyRow, 0, len(execs))
 	for _, e := range execs {
-		rows = append(rows, historyRow{
+		row := historyRow{
 			Kind:    string(e.Kind),
 			Status:  string(e.Status),
 			Started: e.StartedAt,
-			Ended:   e.EndedAt,
 			Tokens:  e.Tokens,
 			ID:      e.WorkflowID,
 			Note:    executionNote(e),
-		})
+		}
+		if !e.Running() {
+			// An in-flight execution has not taken its final time yet, so it reports none
+			// rather than a duration that grows every time the table is printed.
+			row.Took = e.Duration()
+		}
+		rows = append(rows, row)
 		for _, n := range e.Detail.Nodes {
 			if n.Status != string(execstore.StatusSkipped) {
 				// A node that actually ran recorded itself as a develop execution, so
@@ -188,17 +203,22 @@ func historyRows(execs []execstore.Execution) []historyRow {
 	return rows
 }
 
-// executionNote picks the most useful bit of context for a record's note column:
-// why it failed, or which schedule fired it.
+// executionNote picks the most useful bits of context for a record's note column:
+// why it failed, which schedule fired it, and the pull request it operated on.
 //
 // A failed scheduled run needs both: without the schedule the operator cannot see
 // that a schedule keeps failing, and without the reason the row says nothing, so
 // they are printed together (the reason is shortened to keep the row on one line).
+// A failure keeps the PR link for the same reason: a develop pipeline that failed
+// *after* opening the PR is exactly the row an operator follows to the PR.
 func executionNote(e execstore.Execution) string {
 	if e.Detail.Error != "" {
 		reason := truncate(firstLine(e.Detail.Error), 60)
 		if e.ScheduleID != "" {
-			return "schedule " + e.ScheduleID + ": " + reason
+			reason = "schedule " + e.ScheduleID + ": " + reason
+		}
+		if e.Detail.PRURL != "" {
+			reason += " · " + e.Detail.PRURL
 		}
 		return reason
 	}
@@ -232,26 +252,47 @@ func formatHistory(execs []execstore.Execution) string {
 
 	var b strings.Builder
 	tw := tabwriter.NewWriter(&b, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(tw, "KIND\tSTATUS\tSTARTED\tENDED\tTOKENS\tWORKFLOW-ID\tNOTE")
-	fmt.Fprintln(tw, "────\t──────\t───────\t─────\t──────\t───────────\t────")
+	fmt.Fprintln(tw, "KIND\tSTATUS\tSTARTED\tTOOK\tTOKENS\tWORKFLOW-ID\tNOTE")
+	fmt.Fprintln(tw, "────\t──────\t───────\t────\t──────\t───────────\t────")
 	for _, r := range rows {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			r.Kind, r.Status, formatStamp(r.Started), formatStamp(r.Ended),
+			r.Kind, r.Status, formatStamp(r.Started), formatDuration(r.Took),
 			groupThousands(r.Tokens), r.ID, r.Note)
 	}
 	tw.Flush()
-	fmt.Fprintf(&b, "\n%d execution(s) · %s tokens\n", len(execs), groupThousands(sumTokens(execs)))
+	// The count is of recorded executions, which is not the number of printed lines:
+	// a fleet parent's skipped nodes are expanded into rows of their own and have no
+	// record. Both are reported so the table and its summary line agree.
+	fmt.Fprintf(&b, "\n%d execution(s)", len(execs))
+	if skipped := len(rows) - len(execs); skipped > 0 {
+		fmt.Fprintf(&b, " · %d skipped node(s)", skipped)
+	}
+	fmt.Fprintf(&b, " · %s tokens\n", groupThousands(sumTokens(execs)))
 	return b.String()
 }
 
-// formatStamp renders a timestamp in local time, or "-" when it is unset (a
-// still-running execution has no end time, and an expanded skipped node has
-// neither).
+// formatStamp renders a timestamp in local time, or "-" when it is unset (an
+// expanded skipped node has no start time, because it never ran).
 func formatStamp(t time.Time) string {
 	if t.IsZero() {
 		return "-"
 	}
 	return t.Local().Format("2006-01-02 15:04:05")
+}
+
+// formatDuration renders how long an execution took, rounded to the second, or
+// "-" when there is nothing to report (still running, or a node that never ran).
+// A sub-second execution is reported as such rather than as "0s", which would read
+// like a missing value.
+func formatDuration(d time.Duration) string {
+	switch {
+	case d <= 0:
+		return "-"
+	case d < time.Second:
+		return "<1s"
+	default:
+		return d.Round(time.Second).String()
+	}
 }
 
 // sumTokens totals the token usage of the given records. Every record carries

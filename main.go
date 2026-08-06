@@ -73,7 +73,7 @@ func main() {
 	case "list":
 		listRunning()
 	case "history":
-		if err := historyCmd(os.Args[2:]); err != nil {
+		if err := historyCmd(os.Args[2:], openExecutionReader); err != nil {
 			fatalf("%v", err)
 		}
 	default:

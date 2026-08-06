@@ -139,12 +139,20 @@ the type boundary lives in code, not schema.
     lives in one place (`wfrecord.TerminalWriteFailed`) so every workflow behaves
     identically.
 - **Recorded free text is redacted and capped (decided).** A failure text can
-  echo a token-authenticated git remote, and a fleet node's detail is a whole
-  agent output, so every recorded free-text field passes through one funnel
-  (`wfrecord.Sanitize`, reached via `wfrecord.FailureText` and the fleet's
-  `nodeOutcomes`) that removes URL credentials and GitHub token shapes and caps
-  the length. The record is long-lived and local, so an unredacted token would sit
-  in it indefinitely and an uncapped detail would grow a row without bound.
+  echo a token-authenticated git remote, a prompt or goal is operator-written (or
+  agent-generated, for a fleet node), and a fleet node's detail is a whole agent
+  output, so **every** recorded free-text field passes through one funnel
+  (`wfrecord.Sanitize`) that removes URL credentials and GitHub token shapes and
+  caps the length. The funnel is applied at the port boundary of each persistence
+  activity, so no field can reach a column around it: the failure text (via
+  `wfrecord.FailureText`), the prompt/goal of every kind, the fleet's per-node
+  detail (`nodeOutcomes`), and the stored plan's goal. The record is long-lived and
+  local, so an unredacted token would sit in it indefinitely and an uncapped field
+  would grow a row without bound.
+  The one exception is the stored plan's **document**, which must stay decodable
+  and therefore can be neither redacted nor trimmed: it is size-guarded instead
+  (`execstore.MaxPlanDocument`), and an oversized plan is refused non-retryably
+  rather than stored.
 - **Idempotent writes under retry.** Because Temporal may re-run an activity that
   already committed (result lost after a partial success), every `Persist…` write
   must be idempotent — an upsert keyed on `run_id` (`INSERT … ON CONFLICT
@@ -180,9 +188,13 @@ the type boundary lives in code, not schema.
   (a store that was down only for the terminal write), which the same
   reconciliation pass would settle.
 - Replay coverage of the recording version gate (`wfrecord.Enabled`):
-  **closed** — `PromptWorkflow` and `ReviewWorkflow` are replayed against real
-  histories captured from the pre-recording code (`testdata/*_before_recording.json`),
-  so the upgrade path of an in-flight execution is asserted, not assumed.
+  **closed** — every recorded workflow (`PromptWorkflow`, `DevelopWorkflow`,
+  `ReviewWorkflow`, `PilotWorkflow`, `FleetWorkflow`, `FleetPlanWorkflow`) is
+  replayed against a real history captured from the pre-recording code
+  (`testdata/*_before_recording.json`), so the upgrade path of an in-flight
+  execution is asserted per workflow, not assumed from the two that were covered
+  first. The `FleetPlanWorkflow` fixture carries no plan handle, which pins the
+  second gate on that path too (the `in.PlanID != ""` guard around `StorePlan`).
 - Whether `templates.json` remains the store for `run`/`schedule` templates or
   also moves to Postgres (out of scope here). `fleet-plan.json` is removed
   (decided, slice 5).
@@ -202,11 +214,18 @@ Three layers, each tested for behavior:
   the `codereview` tests.
 - **Workflows/activities**: use Temporal's Go testing suite
   (`testsuite.WorkflowTestSuite` / `TestWorkflowEnvironment`,
-  https://docs.temporal.io/develop/go/best-practices/testing-suite). Mock the
-  `Persist<Type>WorkflowState` activities via `env.OnActivity` to assert they are
-  invoked at start and terminal with the right record (kind, own-incremental
-  tokens, `parent_workflow_id`, status), and inject a `Persist…` failure to verify
-  the workflow fails (must-succeed semantics).
+  https://docs.temporal.io/develop/go/best-practices/testing-suite). The store is a
+  managed dependency, so the real `Persist<Type>WorkflowState` activities run
+  against one in-memory fake of the port (`execstoretest.Store`) rather than being
+  mocked: the assertion is then the *record* that was written (kind,
+  own-incremental tokens, `parent_workflow_id`, status, detail) instead of the fact
+  that a call happened. `execstoretest.Failing` and `FailingAfter` inject the two
+  outages that matter — a start write that cannot land (the workflow must fail) and
+  a store that goes down between the start and terminal writes (the workflow must
+  keep its outcome).
+- **Replay**: each recorded workflow is replayed against a genuine history
+  captured from the pre-recording code, because the recording version gate is code
+  whose mistakes surface only at replay time, in production.
 - **`execstore` Postgres adapter**: a **real-Postgres integration suite** on
   `testcontainers-go` (per `AGENTS.md`), since the DB and schema are owned
   out-of-process dependencies a mock would not exercise. It starts its own

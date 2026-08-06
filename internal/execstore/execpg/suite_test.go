@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -34,35 +35,54 @@ const postgresImage = "postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e
 // it is only where CREATE DATABASE is issued from.
 const adminDatabase = "postgres"
 
-// container is the throwaway Postgres the whole package's suite shares, started
-// once by TestMain.
+// container is the throwaway Postgres the whole package's suite shares, started on
+// first use by sharedContainer.
 //
 // One container per test would also be correct, but a cold Postgres costs seconds
 // and this package has a suite's worth of tests. Instead each test gets a database
 // of its own inside the one container (see newTestStore), which isolates it just as
 // completely for a few milliseconds — and, unlike truncating shared tables, it
 // cannot leak state in either direction.
-var container *postgres.PostgresContainer
+//
+// It is started lazily rather than in TestMain so the package's pure tests (the
+// buildFilter ones) need no Docker daemon at all: only a test that asks for a
+// database pays for one.
+var (
+	container     *postgres.PostgresContainer
+	containerOnce sync.Once
+)
 
 func TestMain(m *testing.M) {
-	ctx := context.Background()
-	ctr, err := postgres.Run(ctx, postgresImage,
-		postgres.WithDatabase(adminDatabase),
-		postgres.WithUsername("postgres"),
-		postgres.WithPassword("postgres"),
-		postgres.BasicWaitStrategies())
-	if err != nil {
-		log.Fatalf("could not start the throwaway Postgres for the execstore adapter suite "+
-			"(is a Docker daemon running?): %v", err)
-	}
-	container = ctr
 	code := m.Run()
-	// os.Exit skips deferred calls, so the container is stopped explicitly. The
-	// testcontainers reaper would collect it anyway, but only after a delay.
-	if err := testcontainers.TerminateContainer(ctr); err != nil {
-		log.Printf("could not terminate the throwaway Postgres: %v", err)
+	// os.Exit skips deferred calls, so the container is stopped explicitly — when a
+	// test asked for one at all. The testcontainers reaper would collect it anyway,
+	// but only after a delay.
+	if container != nil {
+		if err := testcontainers.TerminateContainer(container); err != nil {
+			log.Printf("could not terminate the throwaway Postgres: %v", err)
+		}
 	}
 	os.Exit(code)
+}
+
+// sharedContainer returns the package's Postgres, starting it on first use. A
+// failure to start is fatal rather than a skip: a suite that quietly skips itself
+// reports green while exercising none of the SQL it exists for.
+func sharedContainer(t *testing.T) *postgres.PostgresContainer {
+	t.Helper()
+	containerOnce.Do(func() {
+		ctr, err := postgres.Run(context.Background(), postgresImage,
+			postgres.WithDatabase(adminDatabase),
+			postgres.WithUsername("postgres"),
+			postgres.WithPassword("postgres"),
+			postgres.BasicWaitStrategies())
+		if err != nil {
+			log.Fatalf("could not start the throwaway Postgres for the execstore adapter suite "+
+				"(is a Docker daemon running?): %v", err)
+		}
+		container = ctr
+	})
+	return container
 }
 
 // newTestStore gives the calling test a database of its own on the shared
@@ -75,7 +95,8 @@ func newTestStore(t *testing.T) *Postgres {
 }
 
 // newUnmigratedTestStore is newTestStore without the schema, for the tests that
-// are about applying it.
+// are about applying it (and for the read that must report an unmigrated database
+// as one).
 func newUnmigratedTestStore(t *testing.T) *Postgres {
 	t.Helper()
 	return openTestStore(t, newTestDatabase(t))
@@ -101,7 +122,7 @@ var dbSeq atomic.Int64
 func newTestDatabase(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
-	adminDSN, err := container.ConnectionString(ctx, "sslmode=disable")
+	adminDSN, err := sharedContainer(t).ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
 
 	admin, err := pgx.Connect(ctx, adminDSN)

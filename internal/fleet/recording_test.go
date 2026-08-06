@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/temporal"
 
 	"temporal-agents/internal/codereview"
 	"temporal-agents/internal/execstore"
@@ -222,6 +223,34 @@ func TestFleetPlanWorkflow_PlanThatCannotBeStoredFailsPlanning(t *testing.T) {
 	require.Equal(t, execstore.StatusFailed, end.Status)
 }
 
+func TestPersistFleetWorkflowState_RedactsAndCapsTheGoal(t *testing.T) {
+	// The goal is free text like every other recorded field, so it goes through the
+	// same funnel: a credential is removed and the length is bounded.
+	store := execstoretest.New()
+	a := &Activities{Store: store}
+
+	require.NoError(t, a.PersistFleetWorkflowState(context.Background(), FleetState{
+		WorkflowID: "fleet-1", RunID: "fleet-1-a",
+		Goal: "mirror https://user:s3cret@example.test/repo.git " + strings.Repeat("x", 4*wfrecord.MaxDetailText),
+	}))
+
+	got := store.Last(t)
+	require.NotContains(t, got.Prompt, "s3cret")
+	require.Less(t, len(got.Prompt), 2*wfrecord.MaxDetailText)
+}
+
+func TestPersistFleetPlanWorkflowState_RedactsTheGoal(t *testing.T) {
+	store := execstoretest.New()
+	a := &Activities{Store: store}
+
+	require.NoError(t, a.PersistFleetPlanWorkflowState(context.Background(), FleetPlanState{
+		WorkflowID: "fleet-plan-1", RunID: "fleet-plan-1-a",
+		Goal: "use ghp_0123456789abcdefghij to read the issues",
+	}))
+
+	require.NotContains(t, store.Last(t).Prompt, "ghp_0123456789abcdefghij")
+}
+
 func TestNodeOutcomes_RedactsACredentialAChildErrorCarries(t *testing.T) {
 	// A node's detail is the child workflow's error verbatim, and git echoes the
 	// remote it failed on — which embeds the token when the remote is
@@ -259,4 +288,40 @@ func TestStorePlan_RequiresAStore(t *testing.T) {
 	err := a.StorePlan(context.Background(), StorePlanRequest{PlanID: "plan-1", Plan: linearPlan()})
 
 	require.ErrorIs(t, err, execstore.ErrNotConfigured)
+}
+
+func TestStorePlan_RedactsACredentialInTheStoredGoal(t *testing.T) {
+	// The goal is agent-restated free text stored for the listing, so it passes
+	// through the same funnel as every other stored text.
+	store := execstoretest.New()
+	a := &Activities{Plans: store}
+	plan := linearPlan()
+	plan.Goal = "mirror https://user:s3cret@example.test/repo.git"
+
+	require.NoError(t, a.StorePlan(context.Background(),
+		StorePlanRequest{PlanID: "plan-1", Plan: plan}))
+
+	stored, err := store.Plan(context.Background(), "plan-1")
+	require.NoError(t, err)
+	require.NotContains(t, stored.Goal, "s3cret")
+	require.Contains(t, stored.Goal, "REDACTED")
+}
+
+func TestStorePlan_RefusesADocumentOverTheStoresBudget(t *testing.T) {
+	// The document must stay decodable, so it can be neither redacted nor trimmed: an
+	// oversized plan is refused instead, and refused non-retryably, since storing the
+	// same bytes again cannot succeed.
+	store := execstoretest.New()
+	a := &Activities{Plans: store}
+	plan := linearPlan()
+	plan.Nodes[0].Prompt = strings.Repeat("x", execstore.MaxPlanDocument+1)
+
+	err := a.StorePlan(context.Background(), StorePlanRequest{PlanID: "plan-1", Plan: plan})
+
+	var appErr *temporal.ApplicationError
+	require.ErrorAs(t, err, &appErr)
+	require.Equal(t, errPlanTooLarge, appErr.Type())
+	require.True(t, appErr.NonRetryable(), "retrying the same oversized plan cannot succeed")
+	_, perr := store.Plan(context.Background(), "plan-1")
+	require.ErrorIs(t, perr, execstore.ErrNoSuchPlan, "nothing was written")
 }

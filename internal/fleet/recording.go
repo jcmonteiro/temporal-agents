@@ -53,6 +53,10 @@ type FleetState struct {
 // each node's develop (and that node's review) records its own usage, so summing
 // rows gives the run's real cost with nothing counted twice. The per-node token
 // figures in the breakdown are there to read, not to add.
+//
+// The goal passes through wfrecord.Sanitize like every other free text the record
+// carries (see nodeOutcomes): it is operator-written, unbounded, and could embed a
+// credential.
 func (a *Activities) PersistFleetWorkflowState(ctx context.Context, in FleetState) error {
 	if a.Store == nil {
 		return execstore.ErrNotConfigured
@@ -61,7 +65,7 @@ func (a *Activities) PersistFleetWorkflowState(ctx context.Context, in FleetStat
 		WorkflowID:       in.WorkflowID,
 		RunID:            in.RunID,
 		Kind:             execstore.KindFleet,
-		Prompt:           in.Goal,
+		Prompt:           wfrecord.Sanitize(in.Goal),
 		StartedAt:        in.StartedAt,
 		EndedAt:          in.EndedAt,
 		Status:           in.Status,
@@ -176,7 +180,8 @@ type FleetPlanState struct {
 	Error  string
 }
 
-// PersistFleetPlanWorkflowState records a FleetPlanWorkflow execution's state.
+// PersistFleetPlanWorkflowState records a FleetPlanWorkflow execution's state. The
+// goal goes through the same funnel as every other recorded free text.
 func (a *Activities) PersistFleetPlanWorkflowState(ctx context.Context, in FleetPlanState) error {
 	if a.Store == nil {
 		return execstore.ErrNotConfigured
@@ -185,7 +190,7 @@ func (a *Activities) PersistFleetPlanWorkflowState(ctx context.Context, in Fleet
 		WorkflowID:       in.WorkflowID,
 		RunID:            in.RunID,
 		Kind:             execstore.KindFleetPlan,
-		Prompt:           in.Goal,
+		Prompt:           wfrecord.Sanitize(in.Goal),
 		StartedAt:        in.StartedAt,
 		EndedAt:          in.EndedAt,
 		Status:           in.Status,

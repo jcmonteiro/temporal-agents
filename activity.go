@@ -6,6 +6,7 @@ import (
 
 	"temporal-agents/internal/execstore"
 	"temporal-agents/internal/piagent"
+	"temporal-agents/internal/wfrecord"
 )
 
 // RunPiAgent runs the Pi agent for req.Prompt in req.WorkDir. The heavy lifting
@@ -63,6 +64,12 @@ type RunState struct {
 // called twice per iteration — once when the run starts and once when it settles
 // — and each write is an idempotent upsert on the run ID, so a Temporal retry of
 // an activity that already committed neither duplicates the row nor corrupts it.
+//
+// The prompt passes through wfrecord.Sanitize at this boundary, like every other
+// free text the record carries: a prompt is operator-written ("use ghp_… to fetch
+// the issues" is plausible) and has no length bound of its own, and the record is
+// long-lived, so it goes through the one funnel rather than straight into the
+// column.
 func (a *Activities) PersistRunWorkflowState(ctx context.Context, in RunState) error {
 	if a.Store == nil {
 		return execstore.ErrNotConfigured
@@ -71,7 +78,7 @@ func (a *Activities) PersistRunWorkflowState(ctx context.Context, in RunState) e
 		WorkflowID:       in.WorkflowID,
 		RunID:            in.RunID,
 		Kind:             execstore.KindRun,
-		Prompt:           in.Prompt,
+		Prompt:           wfrecord.Sanitize(in.Prompt),
 		StartedAt:        in.StartedAt,
 		EndedAt:          in.EndedAt,
 		Status:           in.Status,

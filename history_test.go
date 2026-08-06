@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"temporal-agents/internal/execstore"
+	"temporal-agents/internal/execstore/execstoretest"
 )
 
 func TestParseHistoryFlags_ReadsEveryFilter(t *testing.T) {
@@ -81,11 +84,13 @@ func TestFormatHistory_ShowsKindStatusTimingAndTokens(t *testing.T) {
 	require.Contains(t, out, "succeeded")
 	require.Contains(t, out, "develop-abc")
 	require.Contains(t, out, started.Local().Format("2006-01-02 15:04:05"))
+	// A settled row reports how long it took, which is what an operator reads it for.
+	require.Contains(t, out, "11m0s")
 	require.Contains(t, out, "1,234,567")
 	require.Contains(t, out, "1 execution(s) · 1,234,567 tokens")
 }
 
-func TestFormatHistory_RunningExecutionHasNoEndTime(t *testing.T) {
+func TestFormatHistory_RunningExecutionHasNoDurationYet(t *testing.T) {
 	out := formatHistory([]execstore.Execution{{
 		WorkflowID: "run-abc",
 		Kind:       execstore.KindRun,
@@ -93,8 +98,8 @@ func TestFormatHistory_RunningExecutionHasNoEndTime(t *testing.T) {
 		StartedAt:  time.Date(2026, time.August, 6, 9, 30, 0, 0, time.UTC),
 	}})
 
-	// An in-flight execution is listed and distinguished by its status; its end
-	// column is empty rather than a bogus timestamp.
+	// An in-flight execution is listed and distinguished by its status; it reports no
+	// duration rather than one that grows every time the table is printed.
 	require.Contains(t, out, "running")
 	require.Contains(t, out, "-")
 }
@@ -133,6 +138,101 @@ func TestHistoryRows_NoteSurfacesFailureScheduleAndPR(t *testing.T) {
 	// A multi-line failure is reduced to its first line so the table stays aligned.
 	require.Equal(t, "pi crashed", rows[1].Note)
 	require.Equal(t, "https://github.com/o/r/pull/7", rows[2].Note)
+}
+
+func TestHistoryRows_FailedPipelineStillPointsAtItsPR(t *testing.T) {
+	// A develop pipeline that failed *after* the PR was opened is exactly the row an
+	// operator follows to the PR, so the failure must not drop the link.
+	rows := historyRows([]execstore.Execution{{
+		WorkflowID: "develop-1", Kind: execstore.KindDevelop, Status: execstore.StatusFailed,
+		Detail: execstore.Detail{Error: "pilot exploded", PRURL: "https://github.com/o/r/pull/7"},
+	}})
+
+	require.Contains(t, rows[0].Note, "pilot exploded")
+	require.Contains(t, rows[0].Note, "https://github.com/o/r/pull/7")
+}
+
+func TestFormatHistory_CountsRecordedExecutionsAndExpandedNodesApart(t *testing.T) {
+	// The table prints more lines than there are records: a skipped node has no
+	// record of its own. The summary line reports both, so it cannot contradict the
+	// table it closes.
+	out := formatHistory([]execstore.Execution{{
+		WorkflowID: "fleet-1", Kind: execstore.KindFleet, Status: execstore.StatusSucceeded,
+		Detail: execstore.Detail{Nodes: []execstore.NodeOutcome{
+			{ID: "rest", Status: string(execstore.StatusSkipped), Detail: "dependency did not succeed"},
+		}},
+	}})
+
+	require.Contains(t, out, "1 execution(s) · 1 skipped node(s)")
+}
+
+func TestFormatDuration(t *testing.T) {
+	require.Equal(t, "-", formatDuration(0), "nothing to report reads as absent, not as 0s")
+	require.Equal(t, "<1s", formatDuration(400*time.Millisecond))
+	require.Equal(t, "11m0s", formatDuration(11*time.Minute))
+}
+
+// The history command reads through the execstore port, so the whole command —
+// flag parsing, the store failure, and the release of the connection — is reachable
+// with the in-memory fake in the adapter's place.
+
+func TestHistoryCmd_ReadsThroughThePortAndReleasesIt(t *testing.T) {
+	reader := &filterCapturingReader{}
+	released := false
+
+	err := historyCmd([]string{"--kind", "develop", "--limit", "5"},
+		func(context.Context) (execstore.ExecutionReader, func(), error) {
+			return reader, func() { released = true }, nil
+		})
+
+	require.NoError(t, err)
+	require.Equal(t, execstore.Filter{Kind: execstore.KindDevelop, Limit: 5}, reader.filter,
+		"the parsed filter is what the port is queried with")
+	require.True(t, released, "the store is released even on the success path")
+}
+
+func TestHistoryCmd_ReportsAStoreThatCannotBeRead(t *testing.T) {
+	err := historyCmd(nil, func(context.Context) (execstore.ExecutionReader, func(), error) {
+		return execstoretest.Failing(errors.New("postgres is down")), func() {}, nil
+	})
+
+	require.ErrorContains(t, err, "could not read the execution history")
+	require.ErrorContains(t, err, "postgres is down")
+}
+
+func TestHistoryCmd_ReportsAStoreThatCannotBeOpened(t *testing.T) {
+	// The "DATABASE_URL is unset" contract reaches the operator through this path.
+	err := historyCmd(nil, func(context.Context) (execstore.ExecutionReader, func(), error) {
+		return nil, nil, errors.New("DATABASE_URL is not set")
+	})
+
+	require.ErrorContains(t, err, "DATABASE_URL is not set")
+}
+
+func TestHistoryCmd_RejectsABadFlagBeforeTouchingTheStore(t *testing.T) {
+	opened := false
+
+	err := historyCmd([]string{"--kind", "developp"},
+		func(context.Context) (execstore.ExecutionReader, func(), error) {
+			opened = true
+			return execstoretest.New(), func() {}, nil
+		})
+
+	require.Error(t, err)
+	require.False(t, opened, "an unusable filter is refused before a connection is made")
+}
+
+// filterCapturingReader is a stub of the read port that records the filter it was
+// queried with. The shared fake deliberately ignores the filter (filtering is SQL,
+// covered by the adapter's own suite), so capturing it here is what pins that the
+// command's parsed filter reaches the port unchanged.
+type filterCapturingReader struct {
+	filter execstore.Filter
+}
+
+func (r *filterCapturingReader) ListExecutions(_ context.Context, f execstore.Filter) ([]execstore.Execution, error) {
+	r.filter = f
+	return nil, nil
 }
 
 func TestHistoryRows_FailedScheduledRunKeepsBothItsScheduleAndItsReason(t *testing.T) {

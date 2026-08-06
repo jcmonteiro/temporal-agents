@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
+	"temporal-agents/internal/execstore"
 	"temporal-agents/internal/execstore/execpg"
 )
 
@@ -16,6 +18,19 @@ import (
 // it. Its value is never printed — a DSN commonly carries credentials, so this
 // follows the worker's webhook precedent of reporting only that it is configured.
 const databaseURLEnv = "DATABASE_URL"
+
+// storeConnectTimeout bounds reaching the store. Without it an unreachable or
+// black-holed host would leave pool.Ping waiting indefinitely, so `history` would
+// hang instead of reporting the failure its message promises — and fail-fast is the
+// whole contract of a required DSN.
+const storeConnectTimeout = 10 * time.Second
+
+// storeMigrateTimeout bounds bringing the schema up to date. It is far longer than
+// the connect budget because the advisory lock legitimately waits here: several
+// workers starting together serialize on it. It exists so a lock never held (a
+// session that died mid-migration) surfaces as a startup failure rather than a
+// worker that hangs silently.
+const storeMigrateTimeout = 2 * time.Minute
 
 // databaseURL returns the configured DSN, or an error naming what to set when it
 // is unset or blank.
@@ -40,11 +55,30 @@ func openStore(ctx context.Context) (*execpg.Postgres, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, err := execpg.Open(ctx, dsn)
+	// Bound the connect (see storeConnectTimeout). The deadline covers reaching the
+	// store, not the pool's later life: the pool keeps working after this context is
+	// released.
+	cctx, cancel := context.WithTimeout(ctx, storeConnectTimeout)
+	defer cancel()
+	store, err := execpg.Open(cctx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("could not reach the execution store: %w", err)
 	}
 	return store, nil
+}
+
+// openExecutionReader opens the store as the read-only port `history` consumes,
+// together with the function that releases it.
+//
+// The command takes the port rather than the adapter, exactly as the workflows'
+// activities take the writer: it keeps the read path free of any pgx type and makes
+// the whole command reachable from a test with the in-memory fake in its place.
+func openExecutionReader(ctx context.Context) (execstore.ExecutionReader, func(), error) {
+	store, err := openStore(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return store, store.Close, nil
 }
 
 // openMigratedStore connects the worker to the execution store and brings its
@@ -57,7 +91,9 @@ func openMigratedStore(ctx context.Context) *execpg.Postgres {
 	if err != nil {
 		fatalf("%v", err)
 	}
-	if err := store.Migrate(ctx); err != nil {
+	mctx, cancel := context.WithTimeout(ctx, storeMigrateTimeout)
+	defer cancel()
+	if err := store.Migrate(mctx); err != nil {
 		store.Close()
 		fatalf("Could not apply the execution store schema: %v", err)
 	}

@@ -29,6 +29,19 @@ func TestPostgres_MigrateIsIdempotent(t *testing.T) {
 	require.NoError(t, store.Migrate(ctx))
 }
 
+func TestPostgres_MigrateNeedsOnlyOneConnection(t *testing.T) {
+	// Migrating pins one connection for the advisory lock and runs every migration on
+	// that same connection. Taking a second one from the pool would deadlock a worker
+	// whose DSN caps the pool at one — silently, at startup, with no message.
+	dsn := newTestDatabase(t) + "&pool_max_conns=1"
+	store := openTestStore(t, dsn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	require.NoError(t, store.Migrate(ctx))
+}
+
 func TestPostgres_ConcurrentMigrateSucceedsForEveryWorker(t *testing.T) {
 	// Every worker migrates at startup and treats a failure as fatal, so two workers
 	// starting together must both succeed. Without the advisory lock in Migrate the
@@ -246,6 +259,17 @@ func TestPostgres_ListExecutionsFilters(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, got, "the review is a child of the node, not of the fleet")
 	})
+}
+
+func TestPostgres_ReadBeforeAnyWorkerMigrated(t *testing.T) {
+	// Only the worker applies migrations, so `history` can legitimately be the first
+	// thing to touch a fresh database. That must read as "start the worker once"
+	// rather than as Postgres's own "relation does not exist".
+	store := newUnmigratedTestStore(t)
+
+	_, err := store.ListExecutions(context.Background(), execstore.Filter{})
+
+	require.ErrorIs(t, err, execstore.ErrNotMigrated)
 }
 
 func TestOpen_RejectsAnEmptyDSN(t *testing.T) {

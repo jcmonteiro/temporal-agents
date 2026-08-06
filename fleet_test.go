@@ -86,3 +86,30 @@ func TestEffectivePlanLimit_ResolvesTheStoresDefault(t *testing.T) {
 	require.Equal(t, execstore.DefaultPlanLimit, effectivePlanLimit(0))
 	require.Equal(t, 5, effectivePlanLimit(5))
 }
+
+func TestFleetPlanSubcommand_TellsASubcommandFromAPrompt(t *testing.T) {
+	// A plan prompt is free text, so a goal can begin with "list" or "show". A
+	// subcommand is recognized only when the whole argument list reads as that
+	// subcommand's own usage; anything else plans, instead of silently listing and
+	// leaving the operator without a plan and without an error.
+	cases := map[string]struct {
+		args []string
+		want string
+	}{
+		"bare list":           {[]string{"list"}, "list"},
+		"list alias":          {[]string{"ls"}, "list"},
+		"list with its flags": {[]string{"list", "--limit", "5"}, "list"},
+		"show with a handle":  {[]string{"show", "plan-abcd1234"}, "show"},
+		"show without one":    {[]string{"show"}, "show"},
+		// Prompts that merely start with a subcommand word.
+		"a goal that lists things": {[]string{"list", "every", "public", "endpoint"}, ""},
+		"a goal that shows things": {[]string{"show", "the", "plan"}, ""},
+		"an ordinary goal":         {[]string{"split the parser"}, ""},
+		"no arguments":             {nil, ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, tc.want, fleetPlanSubcommand(tc.args))
+		})
+	}
+}
