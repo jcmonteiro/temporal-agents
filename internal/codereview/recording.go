@@ -170,6 +170,12 @@ func (a *Activities) PersistPilotWorkflowState(ctx context.Context, in PilotStat
 // startDevelopState builds and writes the "started" record for the running
 // DevelopWorkflow, returning the state the terminal write updates.
 func startDevelopState(ctx workflow.Context, in DevelopInput) (DevelopState, error) {
+	// An execution whose history predates durable recording must not have a record
+	// write inserted into its replay (see wfrecord.Enabled); it simply goes
+	// unrecorded.
+	if !wfrecord.Enabled(ctx) {
+		return DevelopState{}, nil
+	}
 	id := wfrecord.Of(ctx)
 	st := DevelopState{
 		WorkflowID:       id.WorkflowID,
@@ -192,6 +198,9 @@ func startDevelopState(ctx workflow.Context, in DevelopInput) (DevelopState, err
 // context, so a cancelled run still settles its record rather than staying
 // "running" forever.
 func finishDevelopState(ctx workflow.Context, st DevelopState, err error) error {
+	if !wfrecord.Enabled(ctx) {
+		return nil
+	}
 	st.EndedAt = workflow.Now(ctx)
 	st.Status = wfrecord.StatusOf(err)
 	st.Error = wfrecord.FailureText(err)
@@ -208,6 +217,12 @@ func finishDevelopState(ctx workflow.Context, st DevelopState, err error) error 
 // startReviewState builds and writes the "started" record for the running
 // ReviewWorkflow pass.
 func startReviewState(ctx workflow.Context, in ReviewInput) (ReviewState, error) {
+	// An execution whose history predates durable recording must not have a record
+	// write inserted into its replay (see wfrecord.Enabled); it simply goes
+	// unrecorded.
+	if !wfrecord.Enabled(ctx) {
+		return ReviewState{}, nil
+	}
 	id := wfrecord.Of(ctx)
 	st := ReviewState{
 		WorkflowID:       id.WorkflowID,
@@ -227,6 +242,9 @@ func startReviewState(ctx workflow.Context, in ReviewInput) (ReviewState, error)
 
 // finishReviewState records the review pass's terminal state.
 func finishReviewState(ctx workflow.Context, st ReviewState, err error) error {
+	if !wfrecord.Enabled(ctx) {
+		return nil
+	}
 	st.EndedAt = workflow.Now(ctx)
 	st.Status = wfrecord.StatusOf(err)
 	st.Error = wfrecord.FailureText(err)
@@ -243,6 +261,12 @@ func finishReviewState(ctx workflow.Context, st ReviewState, err error) error {
 // startPilotState builds and writes the "started" record for the running
 // PilotWorkflow pass.
 func startPilotState(ctx workflow.Context) (PilotState, error) {
+	// An execution whose history predates durable recording must not have a record
+	// write inserted into its replay (see wfrecord.Enabled); it simply goes
+	// unrecorded.
+	if !wfrecord.Enabled(ctx) {
+		return PilotState{}, nil
+	}
 	id := wfrecord.Of(ctx)
 	st := PilotState{
 		WorkflowID:       id.WorkflowID,
@@ -261,6 +285,9 @@ func startPilotState(ctx workflow.Context) (PilotState, error) {
 
 // finishPilotState records the pilot pass's terminal state.
 func finishPilotState(ctx workflow.Context, st PilotState, err error) error {
+	if !wfrecord.Enabled(ctx) {
+		return nil
+	}
 	st.EndedAt = workflow.Now(ctx)
 	st.Status = wfrecord.StatusOf(err)
 	st.Error = wfrecord.FailureText(err)

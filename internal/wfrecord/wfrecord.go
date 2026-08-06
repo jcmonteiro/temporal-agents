@@ -20,6 +20,28 @@ import (
 	"temporal-agents/internal/execstore"
 )
 
+// recordingChangeID names the workflow change that introduced durable recording,
+// so histories written before it replay unchanged. See Enabled.
+const recordingChangeID = "record-execution-state"
+
+// Enabled reports whether the executing workflow records its state.
+//
+// Recording added activity calls to workflows that were already running, so it is
+// gated behind a workflow version: an execution whose history predates the change
+// would otherwise replay against code that schedules a record write its history
+// lacks, and fail nondeterministically. Long-lived executions make this concrete —
+// a chained run, a schedule, and the pilot loop can all be in flight across the
+// worker upgrade that turns recording on.
+//
+// The consequence is deliberate: an execution started before the upgrade is never
+// recorded, while every execution started after it (including the next iteration
+// of a chain, which begins a fresh history) is. It is safe to call more than once
+// per execution — the same change ID always yields the same answer, and only the
+// first call records the marker — so the terminal write can consult it again.
+func Enabled(ctx workflow.Context) bool {
+	return workflow.GetVersion(ctx, recordingChangeID, workflow.DefaultVersion, 1) == 1
+}
+
 // Identity is a workflow execution's correlation handles, copied into every
 // record it writes.
 type Identity struct {

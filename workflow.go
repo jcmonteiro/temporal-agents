@@ -119,6 +119,12 @@ func PromptWorkflow(ctx workflow.Context, req PromptRequest) (out string, err er
 // shared must-succeed policy: Temporal's retries absorb a transient store outage
 // and an exhausted policy surfaces as an error the caller must propagate.
 func persistRunState(ctx workflow.Context, rec RunState) error {
+	// An execution whose history predates durable recording must not have a record
+	// write inserted into its replay (see wfrecord.Enabled); it simply goes
+	// unrecorded.
+	if !wfrecord.Enabled(ctx) {
+		return nil
+	}
 	opts := wfrecord.WithOptions(ctx)
 	var a *Activities
 	return workflow.ExecuteActivity(opts, a.PersistRunWorkflowState, rec).Get(opts, nil)
@@ -129,6 +135,9 @@ func persistRunState(ctx workflow.Context, rec RunState) error {
 // context so a cancelled run still settles its record instead of being left
 // "running" forever.
 func finishRunState(ctx workflow.Context, rec RunState, tokens int, err error) error {
+	if !wfrecord.Enabled(ctx) {
+		return nil
+	}
 	rec.EndedAt = workflow.Now(ctx)
 	rec.Status = wfrecord.StatusOf(err)
 	rec.Tokens = tokens

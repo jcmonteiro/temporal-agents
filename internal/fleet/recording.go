@@ -96,6 +96,12 @@ func nodeOutcomes(results []NodeResult) []execstore.NodeOutcome {
 // startFleetState builds and writes the "started" record for the running fleet
 // orchestration, returning the state the terminal write updates.
 func startFleetState(ctx workflow.Context, in FleetInput) (FleetState, error) {
+	// An execution whose history predates durable recording must not have a record
+	// write inserted into its replay (see wfrecord.Enabled); it simply goes
+	// unrecorded.
+	if !wfrecord.Enabled(ctx) {
+		return FleetState{}, nil
+	}
 	id := wfrecord.Of(ctx)
 	st := FleetState{
 		WorkflowID:       id.WorkflowID,
@@ -119,6 +125,9 @@ func startFleetState(ctx workflow.Context, in FleetInput) (FleetState, error) {
 // included, on a disconnected context so a cancelled run still settles its
 // record.
 func finishFleetState(ctx workflow.Context, st FleetState, err error) error {
+	if !wfrecord.Enabled(ctx) {
+		return nil
+	}
 	st.EndedAt = workflow.Now(ctx)
 	st.Status = wfrecord.StatusOf(err)
 	st.Error = wfrecord.FailureText(err)
@@ -187,6 +196,12 @@ func (a *Activities) PersistFleetPlanWorkflowState(ctx context.Context, in Fleet
 // startFleetPlanState builds and writes the "started" record for the running
 // planning workflow.
 func startFleetPlanState(ctx workflow.Context, in FleetPlanInput) (FleetPlanState, error) {
+	// An execution whose history predates durable recording must not have a record
+	// write inserted into its replay (see wfrecord.Enabled); it simply goes
+	// unrecorded.
+	if !wfrecord.Enabled(ctx) {
+		return FleetPlanState{}, nil
+	}
 	id := wfrecord.Of(ctx)
 	st := FleetPlanState{
 		WorkflowID:       id.WorkflowID,
@@ -208,6 +223,9 @@ func startFleetPlanState(ctx workflow.Context, in FleetPlanInput) (FleetPlanStat
 // finishFleetPlanState records the planning run's terminal state on a
 // disconnected context, so a cancelled run still settles its record.
 func finishFleetPlanState(ctx workflow.Context, st FleetPlanState, err error) error {
+	if !wfrecord.Enabled(ctx) {
+		return nil
+	}
 	st.EndedAt = workflow.Now(ctx)
 	st.Status = wfrecord.StatusOf(err)
 	st.Error = wfrecord.FailureText(err)

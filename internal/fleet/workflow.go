@@ -82,13 +82,20 @@ func FleetPlanWorkflow(ctx workflow.Context, in FleetPlanInput) (plan FleetPlan,
 	// will look for it, so a plan that was not written must not be announced as
 	// ready. The write is a quick, idempotent upsert on the handle, so it is safe to
 	// retry.
-	storeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: 30 * time.Second,
-		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 5},
-	})
-	if err := workflow.ExecuteActivity(storeCtx, a.StorePlan,
-		StorePlanRequest{PlanID: in.PlanID, Name: in.Name, Plan: plan}).Get(storeCtx, nil); err != nil {
-		return FleetPlan{}, fmt.Errorf("store the fleet plan: %w", err)
+	//
+	// A run started before plans moved into the store carries no handle, so there is
+	// nothing to store it under; skipping the write also keeps such a run replayable
+	// against this code, since its history has no store command. Every run started by
+	// this CLI carries one.
+	if in.PlanID != "" {
+		storeCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+			StartToCloseTimeout: 30 * time.Second,
+			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 5},
+		})
+		if err := workflow.ExecuteActivity(storeCtx, a.StorePlan,
+			StorePlanRequest{PlanID: in.PlanID, Name: in.Name, Plan: plan}).Get(storeCtx, nil); err != nil {
+			return FleetPlan{}, fmt.Errorf("store the fleet plan: %w", err)
+		}
 	}
 
 	wfnotify.NotifyBestEffort(ctx, notification.Notification{
