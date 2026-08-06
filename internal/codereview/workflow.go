@@ -189,11 +189,14 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 	// Record only this pass's own token usage, never the inclusive total carried
 	// across chained passes, so summing the rows of a loop gives a true total.
 	rec.Tokens = tokens
-	rec.Addressed = boolPtr(addressed)
 	rec.PRURL = prURL
 	if err != nil {
+		// The pass failed before deciding whether there were comments to address, so
+		// Addressed stays nil: the tri-state exists to keep "addressed nothing" apart
+		// from "never got that far", and recording false here would lose that.
 		return "", err
 	}
+	rec.Addressed = boolPtr(addressed)
 	// Fold this pass's usage into the running total carried across chained runs.
 	total := in.TokensSoFar + tokens
 	if in.Chain && addressed {

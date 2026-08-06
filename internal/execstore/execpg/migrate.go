@@ -1,4 +1,4 @@
-package execstore
+package execpg
 
 import (
 	"context"

@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"temporal-agents/internal/execstore"
+	"temporal-agents/internal/execstore/execpg"
 )
 
 // databaseURLEnv names the environment variable carrying the execution store's
@@ -31,8 +31,8 @@ func databaseURL() string {
 // openStore connects the CLI to the execution store. The CLI only ever reads
 // (every write is owned by a workflow activity), so it does not apply migrations:
 // the worker does that at startup.
-func openStore(ctx context.Context) *execstore.Postgres {
-	store, err := execstore.Open(ctx, databaseURL())
+func openStore(ctx context.Context) *execpg.Postgres {
+	store, err := execpg.Open(ctx, databaseURL())
 	if err != nil {
 		fatalf("Could not reach the execution store: %v", err)
 	}
@@ -44,8 +44,8 @@ func openStore(ctx context.Context) *execstore.Postgres {
 // `docker compose up -d` plus a worker enough to run — no migrate binary, no psql
 // step — and it is idempotent, so restarting a worker against an up-to-date
 // database does nothing.
-func openMigratedStore(ctx context.Context) *execstore.Postgres {
-	store, err := execstore.Open(ctx, databaseURL())
+func openMigratedStore(ctx context.Context) *execpg.Postgres {
+	store, err := execpg.Open(ctx, databaseURL())
 	if err != nil {
 		fatalf("Could not reach the execution store: %v", err)
 	}

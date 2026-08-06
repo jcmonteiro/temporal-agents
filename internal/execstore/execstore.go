@@ -1,6 +1,6 @@
 // Package execstore owns the durable record of what the tool has executed: the
-// port (repository interface) the application core persists through, the record
-// types that cross it, and the Postgres adapter that implements it.
+// port (repository interface) the application core persists through and the
+// record types that cross it.
 //
 // Temporal's event history is retention-limited and wiped whenever its own
 // datastore is reset, so it cannot answer "what have I run, with what outcome,
@@ -8,12 +8,15 @@
 // row per Temporal run ID, written when a workflow starts and updated when it
 // settles, plus the fleet plans an operator approves.
 //
-// The package follows the same hexagonal split as codereview and fleet: this
-// file is the port and the record types (standard library only, no SQL or driver
-// types), while postgres.go is the driven adapter. The Persist<Type>WorkflowState
-// activities that drive the port live next to the workflows that call them (the
-// root bundle for PromptWorkflow, codereview.Activities, fleet.Activities), so
-// no SQL or pgx type ever reaches workflow or domain code.
+// The package follows the same hexagonal split as codereview and fleet, and
+// enforces it with the compiler: this package is the port and the record types
+// (standard library only, no SQL and no driver dependency at all), while the
+// driven adapter lives in the nested execpg package. Only main imports execpg, so
+// a domain package cannot start depending on pgx by accident. The
+// Persist<Type>WorkflowState activities that drive the port live next to the
+// workflows that call them (the root bundle for PromptWorkflow,
+// codereview.Activities, fleet.Activities), so no SQL or pgx type ever reaches
+// workflow or domain code.
 package execstore
 
 import (
@@ -227,6 +230,12 @@ type Filter struct {
 // caller sets no limit.
 const DefaultHistoryLimit = 20
 
+// DefaultPlanLimit is how many stored plans a listing returns when the caller
+// sets no limit. It is a constant of its own rather than a reuse of
+// DefaultHistoryLimit because a plan listing and a history query are different
+// views that may want different defaults.
+const DefaultPlanLimit = 20
+
 // Plan is a stored fleet plan: the approved graph an operator reviews and later
 // executes by handle. It replaces the loose fleet-plan.json the plan used to live
 // in, so a plan cannot be lost, overwritten, or left uncorrelated with the runs it
@@ -279,6 +288,6 @@ type PlanStore interface {
 	// none.
 	Plan(ctx context.Context, id string) (Plan, error)
 	// ListPlans returns the stored plans, newest first, capped at limit (a
-	// non-positive limit falls back to DefaultHistoryLimit).
+	// non-positive limit falls back to DefaultPlanLimit).
 	ListPlans(ctx context.Context, limit int) ([]Plan, error)
 }

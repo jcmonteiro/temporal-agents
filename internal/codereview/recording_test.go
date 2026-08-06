@@ -1,9 +1,7 @@
 package codereview
 
 import (
-	"context"
 	"errors"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -11,66 +9,17 @@ import (
 	"go.temporal.io/sdk/temporal"
 
 	"temporal-agents/internal/execstore"
+	"temporal-agents/internal/execstore/execstoretest"
 )
 
 // The recording tests drive the real Persist<Type>WorkflowState activities
-// against an in-memory stand-in for the execstore port, so what they assert on is
-// the record that was written rather than which activity happened to be called.
-// The port is a single method over plain record types, which makes a fake cheap
-// and far more revealing than a mock here.
-
-// fakeStore is an in-memory execstore.Store. Setting err makes every write fail,
-// standing in for a store outage.
-type fakeStore struct {
-	mu    sync.Mutex
-	saved []execstore.Execution
-	err   error
-}
-
-func (f *fakeStore) SaveExecution(_ context.Context, e execstore.Execution) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.err != nil {
-		return f.err
-	}
-	f.saved = append(f.saved, e)
-	return nil
-}
-
-func (f *fakeStore) ListExecutions(_ context.Context, _ execstore.Filter) ([]execstore.Execution, error) {
-	return f.records(), nil
-}
-
-// records returns the executions written so far, in write order.
-func (f *fakeStore) records() []execstore.Execution {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]execstore.Execution{}, f.saved...)
-}
-
-// last returns the most recent write, which for a settled workflow is its
-// terminal record.
-func (f *fakeStore) last(t *testing.T) execstore.Execution {
-	t.Helper()
-	recs := f.records()
-	require.NotEmpty(t, recs, "expected the workflow to record its state")
-	return recs[len(recs)-1]
-}
-
-// storeFor picks the store an env constructor was given, or a fresh one when a
-// test does not care about the records. The env constructors take it as a
-// variadic parameter so the many tests that are not about recording stay
-// untouched.
-func storeFor(opts []*fakeStore) *fakeStore {
-	if len(opts) > 0 {
-		return opts[0]
-	}
-	return &fakeStore{}
-}
+// against execstoretest.Store, an in-memory stand-in for the execstore port, so
+// what they assert on is the record that was written rather than which activity
+// happened to be called.
 
 func TestDevelopWorkflow_RecordsStartAndTerminalState(t *testing.T) {
-	store := &fakeStore{}
-	env := newDevelopEnv(t, store)
+	store := execstoretest.New()
+	env := newDevelopEnvWithStore(t, store)
 
 	// The branch is auto-generated, so the start record cannot name it; the
 	// terminal record must carry the branch actually developed on.
@@ -85,7 +34,7 @@ func TestDevelopWorkflow_RecordsStartAndTerminalState(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	recs := store.records()
+	recs := store.Records()
 	require.Len(t, recs, 2)
 
 	start := recs[0]
@@ -106,8 +55,8 @@ func TestDevelopWorkflow_RecordsStartAndTerminalState(t *testing.T) {
 }
 
 func TestDevelopWorkflow_WithRemote_RecordsThePRURL(t *testing.T) {
-	store := &fakeStore{}
-	env := newDevelopEnv(t, store)
+	store := execstoretest.New()
+	env := newDevelopEnvWithStore(t, store)
 
 	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
 		Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
@@ -125,14 +74,14 @@ func TestDevelopWorkflow_WithRemote_RecordsThePRURL(t *testing.T) {
 	require.NoError(t, env.GetWorkflowError())
 	// Open-pr is not an execution of its own: it runs only inside this pipeline, so
 	// its outcome is folded into the develop record.
-	end := store.last(t)
+	end := store.Last(t)
 	require.Equal(t, "https://github.com/o/r/pull/7", end.Detail.PRURL)
 	require.Equal(t, 500, end.Tokens, "the pipeline's children report their own usage")
 }
 
 func TestDevelopWorkflow_Failure_RecordsFailedState(t *testing.T) {
-	store := &fakeStore{}
-	env := newDevelopEnv(t, store)
+	store := execstoretest.New()
+	env := newDevelopEnvWithStore(t, store)
 
 	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
 		Return(CreateBranchResult{}, errors.New("working tree is dirty"))
@@ -141,7 +90,7 @@ func TestDevelopWorkflow_Failure_RecordsFailedState(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.Error(t, env.GetWorkflowError())
-	end := store.last(t)
+	end := store.Last(t)
 	require.Equal(t, execstore.StatusFailed, end.Status)
 	require.Contains(t, end.Detail.Error, "working tree is dirty")
 	require.False(t, end.EndedAt.IsZero())
@@ -150,8 +99,8 @@ func TestDevelopWorkflow_Failure_RecordsFailedState(t *testing.T) {
 func TestDevelopWorkflow_RecordingFailure_FailsTheWorkflow(t *testing.T) {
 	// Recording is a hard dependency, not best-effort: a store that cannot be
 	// written fails the workflow rather than letting it run unrecorded.
-	store := &fakeStore{err: errors.New("postgres is down")}
-	env := newDevelopEnv(t, store)
+	store := execstoretest.Failing(errors.New("postgres is down"))
+	env := newDevelopEnvWithStore(t, store)
 
 	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Prompt: "do the thing"})
 
@@ -162,8 +111,8 @@ func TestDevelopWorkflow_RecordingFailure_FailsTheWorkflow(t *testing.T) {
 }
 
 func TestReviewWorkflow_Converged_RecordsOwnTokensAndConvergence(t *testing.T) {
-	store := &fakeStore{}
-	env := newReviewEnv(t, store)
+	store := execstoretest.New()
+	env := newReviewEnvWithStore(t, store)
 
 	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).Return(Checkpoint{HeadSHA: "head"}, nil)
 	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "implemented", Tokens: 300}, nil)
@@ -176,7 +125,7 @@ func TestReviewWorkflow_Converged_RecordsOwnTokensAndConvergence(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	end := store.last(t)
+	end := store.Last(t)
 	require.Equal(t, execstore.KindReview, end.Kind)
 	require.Equal(t, execstore.StatusSucceeded, end.Status)
 	require.Equal(t, 2, end.Detail.Pass)
@@ -188,8 +137,8 @@ func TestReviewWorkflow_Converged_RecordsOwnTokensAndConvergence(t *testing.T) {
 }
 
 func TestReviewWorkflow_PassCapped_RecordsThatItDidNotConverge(t *testing.T) {
-	store := &fakeStore{}
-	env := newReviewEnv(t, store)
+	store := execstoretest.New()
+	env := newReviewEnvWithStore(t, store)
 
 	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "more feedback", Tokens: 50}, nil)
 
@@ -197,22 +146,22 @@ func TestReviewWorkflow_PassCapped_RecordsThatItDidNotConverge(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	end := store.last(t)
+	end := store.Last(t)
 	require.NotNil(t, end.Detail.Converged)
 	require.False(t, *end.Detail.Converged, "stopping at the pass cap is explicitly not convergence")
 	require.Equal(t, 50, end.Tokens)
 }
 
 func TestReviewWorkflow_ContinuedPass_RecordsItselfAsSucceededWithoutDecidingConvergence(t *testing.T) {
-	store := &fakeStore{}
-	env := newReviewEnv(t, store)
+	store := execstoretest.New()
+	env := newReviewEnvWithStore(t, store)
 
 	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "feedback", Tokens: 120}, nil)
 
 	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo"})
 
 	require.True(t, env.IsWorkflowCompleted())
-	end := store.last(t)
+	end := store.Last(t)
 	// Continuing as new is a control signal: this pass did its work and settled, and
 	// the next pass is a row of its own. Convergence is not yet decided, so it must
 	// not be recorded as "did not converge".
@@ -222,8 +171,8 @@ func TestReviewWorkflow_ContinuedPass_RecordsItselfAsSucceededWithoutDecidingCon
 }
 
 func TestReviewWorkflow_ChildReviewRecordsItsParent(t *testing.T) {
-	store := &fakeStore{}
-	env := newDevelopEnv(t, store)
+	store := execstoretest.New()
+	env := newDevelopEnvWithStore(t, store)
 
 	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
 		Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
@@ -240,7 +189,7 @@ func TestReviewWorkflow_ChildReviewRecordsItsParent(t *testing.T) {
 	// from a standalone `code review` and makes the develop→review tree
 	// reconstructable.
 	var reviews []execstore.Execution
-	for _, r := range store.records() {
+	for _, r := range store.Records() {
 		if r.Kind == execstore.KindReview {
 			reviews = append(reviews, r)
 		}
@@ -250,8 +199,8 @@ func TestReviewWorkflow_ChildReviewRecordsItsParent(t *testing.T) {
 }
 
 func TestPilotWorkflow_RecordsPassOutcomeWithPRAndOwnTokens(t *testing.T) {
-	store := &fakeStore{}
-	env := newEnv(t, store)
+	store := execstoretest.New()
+	env := newEnvWithStore(t, store)
 
 	pr := PullRequest{Number: 7, URL: "https://github.com/o/r/pull/7", HeadRef: "feat/x"}
 	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)
@@ -263,7 +212,7 @@ func TestPilotWorkflow_RecordsPassOutcomeWithPRAndOwnTokens(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	end := store.last(t)
+	end := store.Last(t)
 	require.Equal(t, execstore.KindPilot, end.Kind)
 	require.Equal(t, execstore.StatusSucceeded, end.Status)
 	require.Equal(t, "https://github.com/o/r/pull/7", end.Detail.PRURL)
@@ -274,8 +223,8 @@ func TestPilotWorkflow_RecordsPassOutcomeWithPRAndOwnTokens(t *testing.T) {
 }
 
 func TestPilotWorkflow_RecordingFailure_FailsTheWorkflow(t *testing.T) {
-	store := &fakeStore{err: errors.New("postgres is down")}
-	env := newEnv(t, store)
+	store := execstoretest.Failing(errors.New("postgres is down"))
+	env := newEnvWithStore(t, store)
 
 	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo"})
 
@@ -285,8 +234,8 @@ func TestPilotWorkflow_RecordingFailure_FailsTheWorkflow(t *testing.T) {
 }
 
 func TestDevelopWorkflow_WithRemote_FailedPipelineStillRecordsTheOpenedPR(t *testing.T) {
-	store := &fakeStore{}
-	env := newDevelopEnv(t, store)
+	store := execstoretest.New()
+	env := newDevelopEnvWithStore(t, store)
 
 	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).
 		Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
@@ -303,10 +252,30 @@ func TestDevelopWorkflow_WithRemote_FailedPipelineStillRecordsTheOpenedPR(t *tes
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.Error(t, env.GetWorkflowError())
-	end := store.last(t)
+	end := store.Last(t)
 	require.Equal(t, execstore.StatusFailed, end.Status)
 	// A pipeline that failed after opening the PR still points at it, so the record
 	// leads somewhere useful.
 	require.Equal(t, "https://github.com/o/r/pull/7", end.Detail.PRURL)
 	require.Contains(t, end.Detail.Error, "pilot exploded")
+}
+
+func TestPilotWorkflow_FailedPass_LeavesAddressedUndecided(t *testing.T) {
+	store := execstoretest.New()
+	env := newEnvWithStore(t, store)
+
+	// The pass fails before it ever learns whether there are comments to address.
+	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).
+		Return(PullRequest{}, errors.New("no open PR for this branch"))
+
+	env.ExecuteWorkflow(PilotWorkflow, PilotInput{WorkDir: "/repo"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	end := store.Last(t)
+	require.Equal(t, execstore.StatusFailed, end.Status)
+	// "Addressed nothing" and "never reached that decision" are different facts, so
+	// a pass that failed first must not be recorded as having decided anything.
+	require.Nil(t, end.Detail.Addressed)
+	require.Contains(t, end.Detail.Error, "no open PR")
 }

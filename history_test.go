@@ -102,7 +102,7 @@ func TestHistoryRows_ExpandsSkippedFleetNodes(t *testing.T) {
 	// must not be expanded too (that would duplicate it).
 	require.Len(t, rows, 2)
 	require.Equal(t, "fleet", rows[0].Kind)
-	require.Equal(t, "fleet-node", rows[1].Kind)
+	require.Equal(t, skippedNodeKind, rows[1].Kind)
 	require.Equal(t, string(execstore.StatusSkipped), rows[1].Status)
 	require.Equal(t, "fleet-1-rest", rows[1].ID)
 	require.Contains(t, rows[1].Note, "core")
@@ -120,6 +120,15 @@ func TestHistoryRows_NoteSurfacesFailureScheduleAndPR(t *testing.T) {
 	// A multi-line failure is reduced to its first line so the table stays aligned.
 	require.Equal(t, "pi crashed", rows[1].Note)
 	require.Equal(t, "https://github.com/o/r/pull/7", rows[2].Note)
+}
+
+func TestHistoryRows_ExpandedNodeIsNotLabelledAsAFilterableKind(t *testing.T) {
+	// The KIND column must never print a value that --kind rejects, so the expanded
+	// row's label is deliberately outside the recorded vocabulary.
+	require.False(t, execstore.ValidKind(execstore.Kind(skippedNodeKind)))
+	for _, k := range execstore.Kinds() {
+		require.NotEqual(t, string(k), skippedNodeKind)
+	}
 }
 
 func TestSumTokens_AddsOwnIncrementalUsageOnly(t *testing.T) {

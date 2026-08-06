@@ -33,14 +33,19 @@ services:
   postgres:
     image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
     environment:
-      # Fixed local dev credentials: this is a single-operator local stack with no
-      # network exposure beyond the host port, so the DSN is predictable and the
-      # database is created for you on first start.
+      # Fixed local dev credentials: this is a single-operator local stack, so the
+      # DSN is predictable and the database is created for you on first start.
+      # Because the credentials are deliberately guessable, the loopback-only port
+      # binding below is what keeps the store private.
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: temporal_agents
     ports:
-      - "15432:5432"
+      # Loopback only. The store holds prompts, agent output, PR links and verbatim
+      # failure text, and the credentials are fixed, so it must not be reachable
+      # from the rest of the network. The worker and CLI run on the host, so nothing
+      # else needs the port.
+      - "127.0.0.1:15432:5432"
     volumes:
       - postgres-storage:/var/lib/postgresql/data
     healthcheck:

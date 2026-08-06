@@ -1,4 +1,9 @@
-package execstore
+// Package execpg is the Postgres adapter behind the execstore ports: it is the
+// only package that depends on pgx and the only one that holds SQL, so the
+// dependency direction of the hexagon is enforced by the compiler rather than by
+// convention. Only main imports it, to wire the adapter into the worker and the
+// store-backed CLI commands.
+package execpg
 
 import (
 	"context"
@@ -12,18 +17,20 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"temporal-agents/internal/execstore"
 )
 
-// Postgres is the driven adapter implementing Store and PlanStore over Postgres
-// with pgx. It is the only place SQL and pgx types appear: everything it exposes
-// is the port's plain record types, so no driver detail reaches workflow or
-// domain code.
+// Postgres is the driven adapter implementing execstore.Store and
+// execstore.PlanStore over Postgres with pgx. It is the only place SQL and pgx
+// types appear: everything it exposes is the port's plain record types, so no
+// driver detail reaches workflow or domain code.
 type Postgres struct {
 	pool *pgxpool.Pool
 }
 
 // Compile-time proof the adapter satisfies the port it is injected as.
-var _ Store = (*Postgres)(nil)
+var _ execstore.Store = (*Postgres)(nil)
 
 // Open connects to the Postgres instance at dsn and verifies the connection is
 // usable, so a misconfigured DSN fails at startup rather than on the first
@@ -80,7 +87,7 @@ WHERE NOT (executions.status <> 'running' AND EXCLUDED.status = 'running')`
 
 // SaveExecution inserts or updates the record for e.RunID, idempotently (see
 // saveExecutionSQL).
-func (p *Postgres) SaveExecution(ctx context.Context, e Execution) error {
+func (p *Postgres) SaveExecution(ctx context.Context, e execstore.Execution) error {
 	detail, err := json.Marshal(e.Detail)
 	if err != nil {
 		return fmt.Errorf("encode execution detail: %w", err)
@@ -101,11 +108,11 @@ const executionColumns = `run_id, workflow_id, kind, prompt, started_at, ended_a
 
 // ListExecutions returns the records matching f, newest first. Ties on
 // started_at are broken by run ID so paging and output stay stable.
-func (p *Postgres) ListExecutions(ctx context.Context, f Filter) ([]Execution, error) {
+func (p *Postgres) ListExecutions(ctx context.Context, f execstore.Filter) ([]execstore.Execution, error) {
 	where, args := buildFilter(f)
 	limit := f.Limit
 	if limit <= 0 {
-		limit = DefaultHistoryLimit
+		limit = execstore.DefaultHistoryLimit
 	}
 	args = append(args, limit)
 	query := "SELECT " + executionColumns + " FROM executions" + where +
@@ -117,7 +124,7 @@ func (p *Postgres) ListExecutions(ctx context.Context, f Filter) ([]Execution, e
 	}
 	defer rows.Close()
 
-	var out []Execution
+	var out []execstore.Execution
 	for rows.Next() {
 		e, err := scanExecution(rows)
 		if err != nil {
@@ -135,21 +142,25 @@ func (p *Postgres) ListExecutions(ctx context.Context, f Filter) ([]Execution, e
 const undefinedTable = "42P01"
 
 // readError wraps a read failure, translating a missing table into
-// ErrNotMigrated so a reader that runs before any worker has applied the schema
-// gets an actionable message instead of raw SQL wording.
+// execstore.ErrNotMigrated, so a reader that runs before any worker has applied
+// the schema gets an actionable message instead of raw SQL wording.
 func readError(what string, err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == undefinedTable {
-		return ErrNotMigrated
+		return execstore.ErrNotMigrated
 	}
 	return fmt.Errorf("%s: %w", what, err)
 }
 
 // buildFilter renders f as a WHERE clause plus its positional arguments. An
 // empty filter yields no clause at all.
-func buildFilter(f Filter) (string, []any) {
+func buildFilter(f execstore.Filter) (string, []any) {
 	var clauses []string
 	var args []any
+	// add takes exactly one argument, however many placeholders the clause has:
+	// every "?" in the clause is rewritten to the *same* positional parameter. That
+	// is what lets "(workflow_id = ? OR parent_workflow_id = ?)" match one value in
+	// two columns. A clause needing two distinct values must be added as two calls.
 	add := func(clause string, arg any) {
 		args = append(args, arg)
 		clauses = append(clauses, strings.ReplaceAll(clause, "?", "$"+strconv.Itoa(len(args))))
@@ -173,9 +184,9 @@ func buildFilter(f Filter) (string, []any) {
 
 // scanExecution reads one row into the port's record type, translating the
 // nullable columns into their zero-value equivalents.
-func scanExecution(row pgx.Row) (Execution, error) {
+func scanExecution(row pgx.Row) (execstore.Execution, error) {
 	var (
-		e      Execution
+		e      execstore.Execution
 		kind   string
 		status string
 		ended  *time.Time
@@ -185,10 +196,10 @@ func scanExecution(row pgx.Row) (Execution, error) {
 	)
 	if err := row.Scan(&e.RunID, &e.WorkflowID, &kind, &e.Prompt, &e.StartedAt,
 		&ended, &status, &e.Tokens, &sched, &parent, &detail); err != nil {
-		return Execution{}, fmt.Errorf("read execution row: %w", err)
+		return execstore.Execution{}, fmt.Errorf("read execution row: %w", err)
 	}
-	e.Kind = Kind(kind)
-	e.Status = Status(status)
+	e.Kind = execstore.Kind(kind)
+	e.Status = execstore.Status(status)
 	if ended != nil {
 		e.EndedAt = *ended
 	}
@@ -200,7 +211,7 @@ func scanExecution(row pgx.Row) (Execution, error) {
 	}
 	if len(detail) > 0 {
 		if err := json.Unmarshal(detail, &e.Detail); err != nil {
-			return Execution{}, fmt.Errorf("decode execution detail: %w", err)
+			return execstore.Execution{}, fmt.Errorf("decode execution detail: %w", err)
 		}
 	}
 	return e, nil

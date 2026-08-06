@@ -496,9 +496,10 @@ func runWorker(opts notifyOptions) {
 	// bearer-like secrets in their path or query, so printing the URL would leak
 	// credentials into terminal captures and service logs.
 	fmt.Printf(" · webhook %s", onOff(opts.webhookURL != ""))
-	// Report only that the store is reachable, never the DSN: it commonly embeds
-	// credentials, exactly like the webhook URL above.
-	fmt.Printf(" · execution history on")
+	// Execution history is deliberately not reported: DATABASE_URL is required and
+	// the worker has already failed fast without a reachable store, so recording is
+	// always on by the time this line prints. (The DSN is never printed either — it
+	// commonly embeds credentials, exactly like the webhook URL above.)
 	fmt.Printf(" · press Ctrl+C to stop\n")
 	if err := w.Run(worker.InterruptCh()); err != nil {
 		fatalf("Worker stopped with error: %v", err)

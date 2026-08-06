@@ -111,8 +111,9 @@ temporal-agents fleet plan show <handle>
 temporal-agents fleet execute --plan-id <handle>
 ```
 
-Plans live in Postgres, not in a file: `fleet plan list` shows every stored plan
-and `fleet plan show <handle>` prints one. Like execution recording, the plan
+Plans live in Postgres, not in a file: `fleet plan list` shows the newest stored
+plans (20 by default, `--limit <n>` for more) and `fleet plan show <handle>` prints
+one. Like execution recording, the plan
 store is authoritative — a plan that cannot be written or read aborts loudly
 rather than proceeding.
 
@@ -140,8 +141,11 @@ make test-integration  # also runs the adapter suite against the compose Postgre
 
 The `execstore` adapter is tested against a real Postgres, since the database and
 its schema are the out-of-process dependency under test. That suite skips unless
-`TEST_DATABASE_URL` points at a throwaway database (it truncates the tables it
-uses).
+`TEST_DATABASE_URL` is set, and it truncates the tables it uses, so it refuses any
+database whose name does not end in `_test`. `make test-integration` creates and
+uses `temporal_agents_test` on the compose Postgres — never the `temporal_agents`
+database you work in, whose recorded history and stored plans would be deleted.
+CI runs the same suite against a throwaway Postgres service container.
 
 ## Docker
 
@@ -151,6 +155,10 @@ Temporal and Postgres run in Docker (see `docker-compose.yml`); the worker and C
 docker compose up -d      # start Temporal + Postgres (each persists in a named volume)
 docker compose down       # stop, keeping both volumes
 ```
+
+Postgres is published on `127.0.0.1:15432` only. The credentials are fixed local
+dev values, and the store holds prompts, agent output, PR links and verbatim
+failure text, so the loopback binding is what keeps it off the network.
 
 Avoid `docker compose down -v`: it removes **every** named volume, so it wipes
 the recorded execution history and stored fleet plans along with Temporal's

@@ -8,9 +8,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These are pure tests of the record types and the query-building logic: no
-// database, no mocks. The adapter's behavior against a real Postgres lives in
-// postgres_integration_test.go.
+// These are pure tests of the record types: no database, no mocks. The adapter's
+// SQL, and its behavior against a real Postgres, are tested in the execpg package
+// next door.
 
 func TestValidKind_AcceptsEveryRecordedKindAndNothingElse(t *testing.T) {
 	for _, k := range Kinds() {
@@ -71,52 +71,4 @@ func TestDetail_RoundTripsAFleetsPerNodeBreakdown(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &back))
 
 	require.Equal(t, detail, back)
-}
-
-func TestBuildFilter_EmptyFilterConstrainsNothing(t *testing.T) {
-	where, args := buildFilter(Filter{})
-
-	require.Empty(t, where)
-	require.Empty(t, args)
-}
-
-func TestBuildFilter_NumbersPlaceholdersPerConstraint(t *testing.T) {
-	where, args := buildFilter(Filter{Kind: KindRun, ScheduleID: "schedule-9"})
-
-	require.Equal(t, " WHERE kind = $1 AND schedule_id = $2", where)
-	require.Equal(t, []any{"run", "schedule-9"}, args)
-}
-
-func TestBuildFilter_WorkflowIDMatchesTheWholeTree(t *testing.T) {
-	// One workflow ID must select the execution itself (every continue-as-new
-	// iteration) and its children, so a run's whole tree is shown.
-	where, args := buildFilter(Filter{WorkflowID: "fleet-1"})
-
-	require.Equal(t, " WHERE (workflow_id = $1 OR parent_workflow_id = $1)", where)
-	require.Equal(t, []any{"fleet-1"}, args)
-}
-
-func TestNullMapping_AbsentValuesBecomeNull(t *testing.T) {
-	// Empty strings and the zero time are "absent", and must reach Postgres as
-	// NULL rather than as an empty string or a year-zero timestamp.
-	require.Nil(t, nullString(""))
-	require.Nil(t, nullTime(time.Time{}))
-
-	s := nullString("schedule-9")
-	require.NotNil(t, s)
-	require.Equal(t, "schedule-9", *s)
-
-	now := time.Now()
-	ts := nullTime(now)
-	require.NotNil(t, ts)
-	require.Equal(t, now, *ts)
-}
-
-func TestMigrationNames_AreOrderedAndPresent(t *testing.T) {
-	names, err := migrationNames()
-
-	require.NoError(t, err)
-	require.NotEmpty(t, names, "the schema must ship as embedded migrations")
-	// Filenames are numbered, so lexical order is apply order.
-	require.IsIncreasing(t, names)
 }

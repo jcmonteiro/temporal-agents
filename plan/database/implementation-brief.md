@@ -151,7 +151,12 @@ the type boundary lives in code, not schema.
   default, fail-fast at startup in worker and CLI; never logged.
 - Plan handle: **decided** — generated ID (canonical) with optional `--name`.
 - Retention/cleanup of records over time (brief lists this out of scope to
-  decide now, but the schema should not preclude it).
+  decide now, but the schema should not preclude it). Related follow-up, not
+  covered by this work: every write is made by the workflow itself, so a
+  terminated workflow or a worker that never returns leaves its row at `running`
+  for good. Nothing reconciles the store against Temporal and nothing prunes old
+  rows, so a `history prune` command, or a reconciliation pass in `cleanup`, is
+  still needed. `history --help` documents the effect in the meantime.
 - Whether `templates.json` remains the store for `run`/`schedule` templates or
   also moves to Postgres (out of scope here). `fleet-plan.json` is removed
   (decided, slice 5).

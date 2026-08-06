@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -52,11 +53,16 @@ func fleetPlanCmd(args []string) {
 	if len(args) > 0 {
 		switch args[0] {
 		case "list", "ls":
-			fleetPlanList()
+			fleetPlanList(parseFleetPlanListFlags(args[1:]))
 			return
 		case "show":
 			if len(args) < 2 {
 				fatalf("usage: temporal-agents fleet plan show <handle>")
+			}
+			// Reject trailing arguments rather than ignore them, like every other
+			// parser in the CLI: a stray token usually means a mistyped flag.
+			if len(args) > 2 {
+				fatalf("unexpected argument %q", args[2])
 			}
 			fleetPlanShow(args[1])
 			return
@@ -103,6 +109,34 @@ func parseFleetPlanFlags(args []string) (prompt, name string) {
 		fatalf(`fleet plan requires a prompt`)
 	}
 	return prompt, name
+}
+
+// parseFleetPlanListFlags reads the optional --limit <n> (or --limit=<n>) cap on
+// how many stored plans are listed, returning 0 when it is unset so the store
+// applies its default. Anything else is rejected rather than ignored.
+func parseFleetPlanListFlags(args []string) (limit int) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		var v string
+		switch {
+		case a == "--limit":
+			if i+1 >= len(args) {
+				fatalf("--limit requires a value")
+			}
+			v = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--limit="):
+			v = strings.TrimPrefix(a, "--limit=")
+		default:
+			fatalf("unexpected argument %q", a)
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			fatalf("--limit requires a positive number, got %q", v)
+		}
+		limit = n
+	}
+	return limit
 }
 
 // parseFleetExecuteFlags reads the required --plan-id <handle> (or
@@ -193,13 +227,14 @@ func runFleetPlan(prompt, name string) {
 	fmt.Printf("Then run it with:\n  temporal-agents fleet execute --plan-id %s\n", handle)
 }
 
-// fleetPlanList prints the stored plans, newest first.
-func fleetPlanList() {
+// fleetPlanList prints the stored plans, newest first, capped at limit (0 leaves
+// the cap to the store's default).
+func fleetPlanList(limit int) {
 	ctx := context.Background()
 	store := openStore(ctx)
 	defer store.Close()
 
-	plans, err := store.ListPlans(ctx, 0)
+	plans, err := store.ListPlans(ctx, limit)
 	if err != nil {
 		fatalf("Could not read the stored fleet plans: %v", err)
 	}
@@ -222,6 +257,21 @@ func fleetPlanList() {
 	}
 	tw.Flush()
 	fmt.Printf("\n%d plan(s)\n", len(plans))
+	// A full page is indistinguishable from "that is all there is", so say so:
+	// otherwise an operator with more plans than the cap cannot tell that older ones
+	// exist.
+	if len(plans) == effectivePlanLimit(limit) {
+		fmt.Printf("Showing the newest %d; raise the cap with --limit <n>.\n", len(plans))
+	}
+}
+
+// effectivePlanLimit resolves the cap a listing was actually served under, so the
+// "there may be more" hint matches the store's own default when none was given.
+func effectivePlanLimit(limit int) int {
+	if limit <= 0 {
+		return execstore.DefaultPlanLimit
+	}
+	return limit
 }
 
 // fleetPlanShow prints one stored plan in full.
@@ -232,7 +282,7 @@ func fleetPlanShow(handle string) {
 
 	stored, err := store.Plan(ctx, handle)
 	if err != nil {
-		fatalf("%v", planReadError(handle, err))
+		fatalf("%s", planReadError(handle, err))
 	}
 	plan := decodePlan(handle, stored.Document)
 
@@ -258,15 +308,19 @@ func printPlanNodes(plan fleet.FleetPlan) {
 	}
 }
 
-// planReadError renders a failed plan lookup, distinguishing an unknown handle
-// (the operator mistyped it, or the plan was never stored) from a store problem.
-// Either way the operation aborts: the store is the only source of truth for a
-// plan, so there is nothing to fall back on.
-func planReadError(handle string, err error) error {
+// planReadError renders a failed plan lookup as the message to abort with,
+// distinguishing an unknown handle (the operator mistyped it, or the plan was
+// never stored) from a store problem. Either way the operation aborts: the store is
+// the only source of truth for a plan, so there is nothing to fall back on.
+//
+// It returns a plain string rather than an error because the text is a finished,
+// capitalized, punctuated sentence for the operator, which is exactly what a Go
+// error string must not be.
+func planReadError(handle string, err error) string {
 	if errors.Is(err, execstore.ErrNoSuchPlan) {
-		return fmt.Errorf("No fleet plan with handle %q (list them with 'fleet plan list').", handle)
+		return fmt.Sprintf("No fleet plan with handle %q (list them with 'fleet plan list').", handle)
 	}
-	return fmt.Errorf("Could not read fleet plan %s: %v", handle, err)
+	return fmt.Sprintf("Could not read fleet plan %s: %v", handle, err)
 }
 
 // decodePlan decodes a stored plan document into the fleet's own plan type,
@@ -295,7 +349,7 @@ func runFleetExecute(planID string, summary bool) {
 
 	stored, err := store.Plan(ctx, planID)
 	if err != nil {
-		fatalf("%v", planReadError(planID, err))
+		fatalf("%s", planReadError(planID, err))
 	}
 	plan := decodePlan(planID, stored.Document)
 	// The validation gate still runs before any child workflow starts, exactly as
@@ -356,7 +410,7 @@ that handle is how a plan is reviewed and executed later.
 
 USAGE
   temporal-agents fleet plan "<prompt>" [--name <name>]
-  temporal-agents fleet plan list
+  temporal-agents fleet plan list [--limit <n>]
   temporal-agents fleet plan show <handle>
   temporal-agents fleet execute --plan-id <handle> [--summary]
 
@@ -386,16 +440,18 @@ the listing: nothing keeps a name unique, so it could not resolve a plan.
 
 USAGE
   temporal-agents fleet plan "<prompt>" [--name <name>]
-  temporal-agents fleet plan list
+  temporal-agents fleet plan list [--limit <n>]
   temporal-agents fleet plan show <handle>
 
 FLAGS
   --name <name>   Label shown next to the plan in "fleet plan list"
+  --limit <n>     How many plans "fleet plan list" shows (default 20)
 
 EXAMPLES
   temporal-agents fleet plan "expose the pricing domain via REST and gRPC"
   temporal-agents fleet plan "add multi-tenant support" --name tenancy
   temporal-agents fleet plan list
+  temporal-agents fleet plan list --limit 50
   temporal-agents fleet plan show plan-1a2b3c4d5e6f
 `)
 }

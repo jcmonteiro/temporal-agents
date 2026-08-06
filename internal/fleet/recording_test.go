@@ -3,7 +3,6 @@ package fleet
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -11,99 +10,16 @@ import (
 
 	"temporal-agents/internal/codereview"
 	"temporal-agents/internal/execstore"
+	"temporal-agents/internal/execstore/execstoretest"
 )
 
-// The recording tests drive the real PersistFleetWorkflowState activity against an
-// in-memory stand-in for the execstore port, so they assert on the record that was
-// written rather than on which activity was called.
-
-// fakeStore is an in-memory execstore.Store and PlanStore. Setting err makes every
-// write fail, standing in for a store outage.
-type fakeStore struct {
-	mu    sync.Mutex
-	saved []execstore.Execution
-	plans map[string]execstore.Plan
-	err   error
-}
-
-func (f *fakeStore) SaveExecution(_ context.Context, e execstore.Execution) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.err != nil {
-		return f.err
-	}
-	f.saved = append(f.saved, e)
-	return nil
-}
-
-func (f *fakeStore) ListExecutions(_ context.Context, _ execstore.Filter) ([]execstore.Execution, error) {
-	return f.records(), nil
-}
-
-// records returns the executions written so far, in write order.
-func (f *fakeStore) records() []execstore.Execution {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]execstore.Execution{}, f.saved...)
-}
-
-// last returns the most recent write, which for a settled workflow is its
-// terminal record.
-func (f *fakeStore) last(t *testing.T) execstore.Execution {
-	t.Helper()
-	recs := f.records()
-	require.NotEmpty(t, recs, "expected the workflow to record its state")
-	return recs[len(recs)-1]
-}
-
-func (f *fakeStore) SavePlan(_ context.Context, plan execstore.Plan) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.err != nil {
-		return f.err
-	}
-	if f.plans == nil {
-		f.plans = map[string]execstore.Plan{}
-	}
-	f.plans[plan.ID] = plan
-	return nil
-}
-
-func (f *fakeStore) Plan(_ context.Context, id string) (execstore.Plan, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.err != nil {
-		return execstore.Plan{}, f.err
-	}
-	plan, ok := f.plans[id]
-	if !ok {
-		return execstore.Plan{}, execstore.ErrNoSuchPlan
-	}
-	return plan, nil
-}
-
-func (f *fakeStore) ListPlans(_ context.Context, _ int) ([]execstore.Plan, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := make([]execstore.Plan, 0, len(f.plans))
-	for _, p := range f.plans {
-		out = append(out, p)
-	}
-	return out, nil
-}
-
-// storeFor picks the store an env constructor was given, or a fresh one when a
-// test does not care about the records.
-func storeFor(opts []*fakeStore) *fakeStore {
-	if len(opts) > 0 {
-		return opts[0]
-	}
-	return &fakeStore{}
-}
+// The recording tests drive the real PersistFleetWorkflowState activity against
+// execstoretest.Store, an in-memory stand-in for the execstore port, so they
+// assert on the record that was written rather than on which activity was called.
 
 func TestFleetWorkflow_RecordsStartAndTerminalStateWithPerNodeBreakdown(t *testing.T) {
-	store := &fakeStore{}
-	env := newEnv(t, store)
+	store := execstoretest.New()
+	env := newEnvWithStore(t, store)
 
 	env.OnActivity(fa.ResolveBase, mock.Anything, mock.Anything).Return("base-sha", nil)
 	env.OnWorkflow(codereview.DevelopWorkflow, mock.Anything, mock.Anything).
@@ -115,7 +31,7 @@ func TestFleetWorkflow_RecordsStartAndTerminalStateWithPerNodeBreakdown(t *testi
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	recs := store.records()
+	recs := store.Records()
 	require.Len(t, recs, 2)
 
 	start := recs[0]
@@ -137,8 +53,8 @@ func TestFleetWorkflow_RecordsStartAndTerminalStateWithPerNodeBreakdown(t *testi
 }
 
 func TestFleetWorkflow_SkippedNodeLivesInTheParentsDetail(t *testing.T) {
-	store := &fakeStore{}
-	env := newEnv(t, store)
+	store := execstoretest.New()
+	env := newEnvWithStore(t, store)
 
 	env.OnActivity(fa.ResolveBase, mock.Anything, mock.Anything).Return("base-sha", nil)
 	// The first node fails, so its dependent is skipped and never starts a child
@@ -152,7 +68,7 @@ func TestFleetWorkflow_SkippedNodeLivesInTheParentsDetail(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	end := store.last(t)
+	end := store.Last(t)
 	nodes := map[string]execstore.NodeOutcome{}
 	for _, n := range end.Detail.Nodes {
 		nodes[n.ID] = n
@@ -165,8 +81,8 @@ func TestFleetWorkflow_SkippedNodeLivesInTheParentsDetail(t *testing.T) {
 }
 
 func TestFleetWorkflow_RejectedUpFront_StillRecordsTheAttempt(t *testing.T) {
-	store := &fakeStore{}
-	env := newEnv(t, store)
+	store := execstoretest.New()
+	env := newEnvWithStore(t, store)
 
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
 
@@ -175,14 +91,14 @@ func TestFleetWorkflow_RejectedUpFront_StillRecordsTheAttempt(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.Error(t, env.GetWorkflowError())
-	end := store.last(t)
+	end := store.Last(t)
 	require.Equal(t, execstore.StatusFailed, end.Status)
 	require.Contains(t, end.Detail.Error, "WorktreesDir")
 }
 
 func TestFleetWorkflow_RecordingFailure_FailsTheWorkflow(t *testing.T) {
-	store := &fakeStore{err: errors.New("postgres is down")}
-	env := newEnv(t, store)
+	store := execstoretest.Failing(errors.New("postgres is down"))
+	env := newEnvWithStore(t, store)
 
 	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
 
@@ -200,8 +116,8 @@ func TestFleetWorkflow_RecordingFailure_FailsTheWorkflow(t *testing.T) {
 var cra *codereview.Activities
 
 func TestFleetWorkflow_NodeChildRecordsTheFleetAsItsParent(t *testing.T) {
-	store := &fakeStore{}
-	env := newEnv(t, store)
+	store := execstoretest.New()
+	env := newEnvWithStore(t, store)
 	// Let the real child develop workflow run, with the same store, so it records
 	// itself as this fleet's child. Its own review child is mocked away.
 	env.RegisterActivity(&codereview.Activities{Store: store})
@@ -225,7 +141,7 @@ func TestFleetWorkflow_NodeChildRecordsTheFleetAsItsParent(t *testing.T) {
 	require.NoError(t, env.GetWorkflowError())
 
 	var fleetRec, nodeRec execstore.Execution
-	for _, r := range store.records() {
+	for _, r := range store.Records() {
 		switch r.Kind {
 		case execstore.KindFleet:
 			fleetRec = r
@@ -245,8 +161,8 @@ func TestFleetWorkflow_NodeChildRecordsTheFleetAsItsParent(t *testing.T) {
 }
 
 func TestFleetPlanWorkflow_StoresThePlanAndRecordsThePlanningRun(t *testing.T) {
-	store := &fakeStore{}
-	env := newEnv(t, store)
+	store := execstoretest.New()
+	env := newEnvWithStore(t, store)
 	plan := linearPlan()
 
 	env.OnActivity(fa.GeneratePlan, mock.Anything, mock.Anything).
@@ -272,7 +188,7 @@ func TestFleetPlanWorkflow_StoresThePlanAndRecordsThePlanningRun(t *testing.T) {
 
 	// Planning is recorded as its own kind, so its cost is visible separately from
 	// the fleet run that later executes the plan.
-	end := store.last(t)
+	end := store.Last(t)
 	require.Equal(t, execstore.KindFleetPlan, end.Kind)
 	require.Equal(t, execstore.StatusSucceeded, end.Status)
 	require.Equal(t, "expose the core", end.Prompt)
@@ -285,8 +201,8 @@ func TestFleetPlanWorkflow_PlanThatCannotBeStoredFailsPlanning(t *testing.T) {
 	// The store is the plan's only home, so a plan that was not written must not be
 	// announced as ready: planning fails loudly instead of printing a handle that
 	// resolves to nothing.
-	store := &fakeStore{}
-	env := newEnv(t, store)
+	store := execstoretest.New()
+	env := newEnvWithStore(t, store)
 
 	env.OnActivity(fa.GeneratePlan, mock.Anything, mock.Anything).
 		Return(GeneratePlanResult{Plan: linearPlan(), Tokens: 10}, nil)
@@ -299,7 +215,7 @@ func TestFleetPlanWorkflow_PlanThatCannotBeStoredFailsPlanning(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.ErrorContains(t, env.GetWorkflowError(), "postgres is down")
-	end := store.last(t)
+	end := store.Last(t)
 	require.Equal(t, execstore.StatusFailed, end.Status)
 }
 

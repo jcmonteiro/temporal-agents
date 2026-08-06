@@ -1,4 +1,4 @@
-package execstore
+package execpg
 
 import (
 	"context"
@@ -6,12 +6,14 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"temporal-agents/internal/execstore"
 )
 
 // The plan store is exercised against a real Postgres for the same reason the
 // execution store is: the jsonb document round-trip and the upsert's conflict
 // handling are properties of the database, not of the Go code. See
-// postgres_integration_test.go for how to run these.
+// execpg_integration_test.go for how to run these.
 
 // newTestPlanStore opens the test database, applies the schema, and empties the
 // plans table so each test starts from a known state.
@@ -26,7 +28,7 @@ func newTestPlanStore(t *testing.T) *Postgres {
 func TestPostgres_RoundTripsAPlanByHandle(t *testing.T) {
 	store := newTestPlanStore(t)
 	ctx := context.Background()
-	want := Plan{
+	want := execstore.Plan{
 		ID:        "plan-abcd1234efgh",
 		Name:      "tenancy",
 		Goal:      "add multi-tenant support",
@@ -52,7 +54,7 @@ func TestPostgres_PlanWithoutAName(t *testing.T) {
 	store := newTestPlanStore(t)
 	ctx := context.Background()
 
-	require.NoError(t, store.SavePlan(ctx, Plan{
+	require.NoError(t, store.SavePlan(ctx, execstore.Plan{
 		ID: "plan-1", Goal: "a goal", Document: []byte(`{"goal":"a goal"}`)}))
 	got, err := store.Plan(ctx, "plan-1")
 
@@ -64,7 +66,7 @@ func TestPostgres_PlanWithoutAName(t *testing.T) {
 func TestPostgres_SavePlanUpsertsOnHandleAndKeepsTheOriginalTime(t *testing.T) {
 	store := newTestPlanStore(t)
 	ctx := context.Background()
-	plan := Plan{ID: "plan-1", Goal: "first", Nodes: 1,
+	plan := execstore.Plan{ID: "plan-1", Goal: "first", Nodes: 1,
 		Document: []byte(`{"goal":"first"}`), CreatedAt: stamp}
 	require.NoError(t, store.SavePlan(ctx, plan))
 
@@ -90,14 +92,14 @@ func TestPostgres_PlanUnknownHandle(t *testing.T) {
 
 	// "No such plan" must be distinguishable from a store failure: both abort, but
 	// the operator needs to know which happened.
-	require.ErrorIs(t, err, ErrNoSuchPlan)
+	require.ErrorIs(t, err, execstore.ErrNoSuchPlan)
 }
 
 func TestPostgres_ListPlansNewestFirst(t *testing.T) {
 	store := newTestPlanStore(t)
 	ctx := context.Background()
 	for i, id := range []string{"plan-1", "plan-2", "plan-3"} {
-		require.NoError(t, store.SavePlan(ctx, Plan{
+		require.NoError(t, store.SavePlan(ctx, execstore.Plan{
 			ID: id, Goal: "goal", Document: []byte(`{}`),
 			CreatedAt: stamp.Add(time.Duration(i) * time.Minute)}))
 	}

@@ -97,6 +97,10 @@ func PromptWorkflow(ctx workflow.Context, req PromptRequest) (out string, err er
 		// control signal: each iteration is its own row, keyed on its own run ID, and
 		// carries only its own token usage.
 		if perr := finishRunState(ctx, rec, res.Tokens, nil); perr != nil {
+			// As on the terminal path below, log the work that the failed record write
+			// throws away so it survives in the worker log.
+			workflow.GetLogger(ctx).Error("the chained iteration succeeded but its terminal record could not be written; the output is only available here",
+				"error", perr, "output", res.Output)
 			return "", perr
 		}
 		next := req
@@ -107,10 +111,16 @@ func PromptWorkflow(ctx workflow.Context, req PromptRequest) (out string, err er
 	// A non-chained run has reached its terminal step: append the total token
 	// usage to the result and notify best-effort. This runs only here (never
 	// before continue-as-new, which would cancel the in-flight activity).
+	result := res.Output + "\n\n" + piagent.FormatTokenTotal(total)
 	if perr := finishRunState(ctx, rec, res.Tokens, nil); perr != nil {
+		// Recording must succeed, so the run fails here even though the agent did its
+		// work. Log the result first: it is up to an hour of agent output that the
+		// failed workflow discards, and the worker log is then the only place it can be
+		// recovered from.
+		workflow.GetLogger(ctx).Error("the run succeeded but its terminal record could not be written; the result is only available here",
+			"error", perr, "result", result)
 		return "", perr
 	}
-	result := res.Output + "\n\n" + piagent.FormatTokenTotal(total)
 	wfnotify.NotifyBestEffort(ctx, notification.Notification{Title: "Run complete", Body: result})
 	return result, nil
 }

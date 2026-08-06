@@ -110,10 +110,16 @@ func kindNames() []string {
 	return names
 }
 
+// skippedNodeKind labels a fleet node expanded from its parent's breakdown. It is
+// deliberately not a kind name: only recorded kinds may appear in the KIND column
+// as something `--kind` accepts, and a skipped node has no record of its own (a
+// node that ran records itself as a develop row instead).
+const skippedNodeKind = "node (skipped)"
+
 // historyRow is one printed line of history: either a recorded execution or a
 // fleet node expanded from its parent's per-node breakdown.
 type historyRow struct {
-	// Kind labels the command type, or "fleet-node" for an expanded node.
+	// Kind labels the command type, or skippedNodeKind for an expanded node.
 	Kind string
 	// Status is the recorded status.
 	Status string
@@ -156,7 +162,7 @@ func historyRows(execs []execstore.Execution) []historyRow {
 				continue
 			}
 			rows = append(rows, historyRow{
-				Kind:   "fleet-node",
+				Kind:   skippedNodeKind,
 				Status: n.Status,
 				Tokens: n.Tokens,
 				ID:     e.WorkflowID + "-" + n.ID,
@@ -270,9 +276,22 @@ USAGE
   temporal-agents history [--kind <kind>] [--limit <n>] [--workflow-id <id>]
                           [--schedule-id <id>]
 
+A fleet node is recorded as a develop execution carrying its fleet run as its
+parent, so "--kind develop" lists nodes together with standalone develop runs, and
+"--workflow-id <fleet-id>" lists one fleet run with its nodes. A node that ended
+blocked (an unresolved seed conflict, or a review that did not converge) is a
+failed develop row; the parent fleet run's breakdown holds the "blocked" wording.
+A node that was skipped never started a workflow, so it has no record of its own
+and is listed under its parent as "node (skipped)".
+
+A row stays "running" until its workflow settles, and every write is made by the
+workflow itself. A terminated workflow, or a worker that never comes back,
+therefore leaves its row at "running" for good: treat a "running" row that is
+hours old as abandoned and check "list" for the live Temporal view.
+
 FLAGS
   --kind <kind>        Keep one command type: run, develop, review, pilot, fleet,
-                       fleet-plan
+                       fleet-plan (a fleet node is a develop record)
   --limit <n>          How many executions to list (default 20)
   --workflow-id <id>   Show one execution and its children (a fleet run's nodes,
                        a develop run's review)

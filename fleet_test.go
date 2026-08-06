@@ -63,10 +63,24 @@ func TestPlanReadError_TellsAnUnknownHandleFromAStoreFailure(t *testing.T) {
 	// Both abort, but the operator needs to know which happened: a mistyped handle
 	// is theirs to fix, a store outage is not.
 	unknown := planReadError("plan-nope", execstore.ErrNoSuchPlan)
-	require.Contains(t, unknown.Error(), "No fleet plan with handle")
-	require.Contains(t, unknown.Error(), "fleet plan list")
+	require.Contains(t, unknown, "No fleet plan with handle")
+	require.Contains(t, unknown, "fleet plan list")
 
 	outage := planReadError("plan-1", errors.New("connection refused"))
-	require.Contains(t, outage.Error(), "Could not read fleet plan plan-1")
-	require.Contains(t, outage.Error(), "connection refused")
+	require.Contains(t, outage, "Could not read fleet plan plan-1")
+	require.Contains(t, outage, "connection refused")
+}
+
+func TestParseFleetPlanListFlags_OptionalLimit(t *testing.T) {
+	// No flag leaves the cap to the store's default, which is what 0 means.
+	require.Zero(t, parseFleetPlanListFlags(nil))
+	require.Equal(t, 50, parseFleetPlanListFlags([]string{"--limit", "50"}))
+	require.Equal(t, 50, parseFleetPlanListFlags([]string{"--limit=50"}))
+}
+
+func TestEffectivePlanLimit_ResolvesTheStoresDefault(t *testing.T) {
+	// The "there may be more" hint has to compare against the cap the listing was
+	// actually served under, not against 0.
+	require.Equal(t, execstore.DefaultPlanLimit, effectivePlanLimit(0))
+	require.Equal(t, 5, effectivePlanLimit(5))
 }

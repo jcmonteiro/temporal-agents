@@ -1,7 +1,12 @@
 BINARY := temporal-agents
 
-# The compose Postgres, as the adapter integration suite reaches it.
-TEST_DSN := postgres://postgres:postgres@localhost:15432/temporal_agents?sslmode=disable
+# The throwaway database the adapter integration suite reaches on the compose
+# Postgres. It is deliberately *not* the temporal_agents database the README tells
+# you to use for real work: the suite truncates the tables it touches, so pointing
+# it at the working database would delete the recorded history and the stored fleet
+# plans. The name ends in "_test", which is what the suite itself insists on.
+TEST_DB := temporal_agents_test
+TEST_DSN := postgres://postgres:postgres@localhost:15432/$(TEST_DB)?sslmode=disable
 
 .PHONY: build install uninstall setup fmt test test-integration
 
@@ -40,9 +45,13 @@ fmt:
 test:
 	go test ./...
 
-# Run every test including the execstore adapter suite, against the compose
-# Postgres. It truncates the tables it uses, so point it only at a throwaway
-# database.
+# Run every test including the execstore adapter suite, against a throwaway
+# database on the compose Postgres. --wait blocks until the health check passes, so
+# a cold volume does not fail the first run, and the database is created on demand
+# because compose only creates POSTGRES_DB.
 test-integration:
-	docker compose up -d postgres
+	docker compose up -d --wait postgres
+	docker compose exec -T postgres sh -c \
+		'psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='\''$(TEST_DB)'\''" | grep -q 1 \
+			|| psql -U postgres -c "CREATE DATABASE $(TEST_DB)"'
 	TEST_DATABASE_URL="$(TEST_DSN)" go test ./...
