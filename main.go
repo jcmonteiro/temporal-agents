@@ -72,6 +72,8 @@ func main() {
 		watchRun(os.Args[2])
 	case "list":
 		listRunning()
+	case "history":
+		historyCmd(os.Args[2:])
 	default:
 		usage()
 	}
@@ -96,6 +98,7 @@ COMMANDS
   template <subcommand>                  Manage and run saved templates
   watch <workflow-id>                    Stream a workflow's live Pi progress
   list                                   List running workflows and schedules
+  history [--kind <kind>] [--limit <n>]  List durably recorded executions
 
 EXAMPLES
   temporal-agents worker
@@ -106,7 +109,8 @@ EXAMPLES
   temporal-agents template list
   temporal-agents template run triage
   temporal-agents fleet plan "expose the pricing domain via REST and gRPC"
-  temporal-agents fleet execute --plan fleet-plan.json
+  temporal-agents fleet execute --plan-id <handle>
+  temporal-agents history
   temporal-agents cleanup
 
 FLAGS
@@ -424,6 +428,13 @@ func runWorker(opts notifyOptions) {
 	c := dial()
 	defer c.Close()
 
+	// The durable execution store is a hard dependency of every recorded workflow,
+	// so the worker resolves it (and brings its schema up to date) before accepting
+	// work: an unreachable store fails here rather than failing each workflow at its
+	// first record write.
+	store := openMigratedStore(context.Background())
+	defer store.Close()
+
 	// Flush heartbeats promptly so `watch` sees near-real-time Pi progress
 	// instead of the SDK's default ~30s throttle.
 	//
@@ -438,6 +449,9 @@ func runWorker(opts notifyOptions) {
 	})
 	w.RegisterWorkflow(PromptWorkflow)
 	w.RegisterActivity(RunPiAgent)
+	// The root bundle carries PersistRunWorkflowState, PromptWorkflow's durable
+	// recording activity, with the execution store injected as its driven adapter.
+	w.RegisterActivity(&Activities{Store: store})
 
 	// The "code pilot" and "code review" workflows and their port-backed
 	// activities (both share the same Activities bundle).
@@ -467,6 +481,9 @@ func runWorker(opts notifyOptions) {
 	// bearer-like secrets in their path or query, so printing the URL would leak
 	// credentials into terminal captures and service logs.
 	fmt.Printf(" · webhook %s", onOff(opts.webhookURL != ""))
+	// Report only that the store is reachable, never the DSN: it commonly embeds
+	// credentials, exactly like the webhook URL above.
+	fmt.Printf(" · execution history on")
 	fmt.Printf(" · press Ctrl+C to stop\n")
 	if err := w.Run(worker.InterruptCh()); err != nil {
 		fatalf("Worker stopped with error: %v", err)
