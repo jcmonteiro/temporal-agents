@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"go.temporal.io/api/enums/v1"
 	schedulepb "go.temporal.io/api/schedule/v1"
@@ -24,6 +25,8 @@ import (
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/converter"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"temporal-agents/internal/agenthub"
 	"temporal-agents/internal/wfid"
@@ -247,9 +250,15 @@ func (s *Schedules) Schedules(ctx context.Context, limit int) ([]agenthub.Schedu
 	return page.Items, nil
 }
 
-// SchedulePage implements source-native paging with one Temporal service call.
+const (
+	scheduleRetryAttempts = 3
+	scheduleRetryDelay    = 25 * time.Millisecond
+)
+
+// SchedulePage implements source-native paging with one bounded Temporal service
+// call and bounded retries for transient raw-service failures.
 func (s *Schedules) SchedulePage(ctx context.Context, query agenthub.SchedulePageQuery) (agenthub.ScheduleStatePage, error) {
-	resp, err := s.client.ListSchedules(ctx, &workflowservice.ListSchedulesRequest{
+	resp, err := s.listSchedules(ctx, &workflowservice.ListSchedulesRequest{
 		Namespace:       s.namespace,
 		MaximumPageSize: int32(query.Limit),
 		NextPageToken:   query.Cursor,
@@ -274,6 +283,43 @@ func (s *Schedules) SchedulePage(ctx context.Context, query agenthub.SchedulePag
 		}
 	}
 	return page, nil
+}
+
+func (s *Schedules) listSchedules(ctx context.Context, request *workflowservice.ListSchedulesRequest) (*workflowservice.ListSchedulesResponse, error) {
+	var lastErr error
+	for attempt := 0; attempt < scheduleRetryAttempts; attempt++ {
+		response, err := s.client.ListSchedules(ctx, request)
+		if err == nil {
+			return response, nil
+		}
+		lastErr = err
+		if !retryableScheduleError(err) || attempt == scheduleRetryAttempts-1 {
+			return nil, err
+		}
+		delay := scheduleRetryDelay << attempt
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil, lastErr
+}
+
+func retryableScheduleError(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.ResourceExhausted:
+		return true
+	default:
+		return false
+	}
 }
 
 // scheduleStateFrom translates a raw schedule list entry into the port's state.

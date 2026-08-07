@@ -15,6 +15,8 @@ import (
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -66,21 +68,31 @@ func (f *fakeWorkflows) DescribeWorkflowExecution(_ context.Context, workflowID,
 type fakeSchedules struct {
 	pages      []*workflowservice.ListSchedulesResponse
 	calls      int
+	successes  int
 	pageSizes  []int32
 	pageTokens [][]byte
 	namespaces []string
+	failures   []error
 	err        error
 }
 
 func (f *fakeSchedules) ListSchedules(_ context.Context, request *workflowservice.ListSchedulesRequest, _ ...grpc.CallOption) (*workflowservice.ListSchedulesResponse, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
+	f.calls++
 	f.pageSizes = append(f.pageSizes, request.GetMaximumPageSize())
 	f.pageTokens = append(f.pageTokens, append([]byte(nil), request.GetNextPageToken()...))
 	f.namespaces = append(f.namespaces, request.GetNamespace())
-	page := f.pages[f.calls]
-	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	if len(f.failures) > 0 {
+		err := f.failures[0]
+		f.failures = f.failures[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
+	page := f.pages[f.successes]
+	f.successes++
 	return page, nil
 }
 
@@ -293,6 +305,50 @@ func TestSourcePagesClassifyRejectedNativeTokensAsInvalid(t *testing.T) {
 	_, err = schedules.SchedulePage(context.Background(), agenthub.SchedulePageQuery{Limit: 1, Cursor: []byte("bad")})
 	if !errors.Is(err, agenthub.ErrInvalid) {
 		t.Fatalf("SchedulePage error = %v, want ErrInvalid", err)
+	}
+	if schedules.client.(*fakeSchedules).calls != 1 {
+		t.Fatalf("invalid schedule cursor calls = %d, want no retry", schedules.client.(*fakeSchedules).calls)
+	}
+}
+
+func TestSchedulePageStopsRetryingTransientFailuresAtTheAttemptLimit(t *testing.T) {
+	fake := &fakeSchedules{err: status.Error(codes.Unavailable, "still unavailable")}
+	source, err := NewSchedules(fake, client.DefaultNamespace)
+	if err != nil {
+		t.Fatalf("NewSchedules: %v", err)
+	}
+
+	_, err = source.SchedulePage(context.Background(), agenthub.SchedulePageQuery{Limit: 1})
+
+	if err == nil {
+		t.Fatal("SchedulePage = nil error, want the persistent service failure")
+	}
+	if fake.calls != scheduleRetryAttempts {
+		t.Fatalf("schedule calls = %d, want attempt limit %d", fake.calls, scheduleRetryAttempts)
+	}
+}
+
+func TestSchedulePageRetriesTransientServiceFailures(t *testing.T) {
+	fake := &fakeSchedules{
+		failures: []error{
+			status.Error(codes.Unavailable, "temporarily unavailable"),
+			status.Error(codes.ResourceExhausted, "temporarily overloaded"),
+		},
+		pages: []*workflowservice.ListSchedulesResponse{{
+			Schedules: []*schedulepb.ScheduleListEntry{{ScheduleId: "schedule-recovered"}},
+		}},
+	}
+	source, err := NewSchedules(fake, client.DefaultNamespace)
+	if err != nil {
+		t.Fatalf("NewSchedules: %v", err)
+	}
+
+	page, err := source.SchedulePage(context.Background(), agenthub.SchedulePageQuery{Limit: 1})
+	if err != nil {
+		t.Fatalf("SchedulePage: %v", err)
+	}
+	if fake.calls != 3 || len(page.Items) != 1 || page.Items[0].ID != "schedule-recovered" {
+		t.Fatalf("schedule page after %d calls = %+v, want recovery on call 3", fake.calls, page)
 	}
 }
 
