@@ -22,7 +22,7 @@ func ValidateID(id string) error {
 }
 
 func invalidIDRune(r rune) bool {
-	return unicode.IsControl(r) || unicode.IsSpace(r) || r == '\ufeff'
+	return unicode.IsControl(r) || unicode.IsSpace(r) || unicode.Is(unicode.Cf, r)
 }
 
 // Kind is the display type of one top-level work item.
