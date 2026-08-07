@@ -108,10 +108,17 @@ type Options struct {
 	// only sensible in a test.
 	RequestsPerSecond float64
 	Burst             int
+	// AllowedHosts lists additional HTTP Host names accepted by the server. The
+	// loopback names localhost, 127.0.0.1, and ::1 are accepted by default. Every
+	// other name must be explicit to prevent DNS rebinding.
+	AllowedHosts []string
 	// AllowedOrigins lists the browser origins allowed to read the API
-	// cross-origin. It is empty by default: the API is unauthenticated, so any
-	// allowance is an operator's explicit decision.
+	// cross-origin. It is empty by default. A request that supplies any other Origin
+	// is rejected.
 	AllowedOrigins []string
+	// AuthToken, when set, requires an Authorization: Bearer header with this value.
+	// The composition root requires it whenever the listener is not loopback.
+	AuthToken string
 	// WebDir, when set, is a directory of built static assets served outside the API's
 	// path, for local convenience. The API itself never depends on it: the same bundle
 	// can be served by anything else without the API changing.
@@ -136,7 +143,9 @@ type Server struct {
 	timeout         time.Duration
 	maxBodyBytes    int64
 	limiter         *rate.Limiter
+	allowedHosts    map[string]struct{}
 	allowedOrigins  map[string]bool
+	authToken       string
 	webDir          string
 	healthChecks    []HealthCheck
 	deprecatedSince time.Time
@@ -159,12 +168,18 @@ func New(view WorkView, options Options) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		view:            view,
-		basePath:        BasePath,
-		logger:          options.Logger,
-		timeout:         options.RequestTimeout,
-		maxBodyBytes:    options.MaxBodyBytes,
+		view:         view,
+		basePath:     BasePath,
+		logger:       options.Logger,
+		timeout:      options.RequestTimeout,
+		maxBodyBytes: options.MaxBodyBytes,
+		allowedHosts: map[string]struct{}{
+			"localhost": {},
+			"127.0.0.1": {},
+			"::1":       {},
+		},
 		allowedOrigins:  map[string]bool{},
+		authToken:       options.AuthToken,
 		webDir:          options.WebDir,
 		healthChecks:    options.HealthChecks,
 		deprecatedSince: options.DeprecatedSince,
@@ -190,6 +205,11 @@ func New(view WorkView, options Options) (*Server, error) {
 		perSecond, burst = DefaultRequestsPerSecond, DefaultBurst
 	}
 	s.limiter = newLimiter(perSecond, burst)
+	for _, host := range options.AllowedHosts {
+		if canonical := canonicalHost(host); canonical != "" {
+			s.allowedHosts[canonical] = struct{}{}
+		}
+	}
 	for _, origin := range options.AllowedOrigins {
 		if trimmed := strings.TrimSpace(origin); trimmed != "" && trimmed != "*" {
 			// A wildcard is refused silently rather than honoured: it would expose an
@@ -269,7 +289,9 @@ func (s *Server) buildHandler() http.Handler {
 	var handler http.Handler = mux
 	handler = s.withTimeout(handler)
 	handler = s.rateLimit(handler)
+	handler = s.authenticate(handler)
 	handler = s.cors(handler)
+	handler = s.requireHost(handler)
 	handler = s.deprecation(handler)
 	// Recovery is inside security and access logging: a recovered panic receives the
 	// same headers as every answer, and the resulting 500 is included in the access

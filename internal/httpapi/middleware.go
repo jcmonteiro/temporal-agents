@@ -3,11 +3,13 @@ package httpapi
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -113,22 +115,74 @@ func (s *Server) rateLimit(next http.Handler) http.Handler {
 	})
 }
 
+// canonicalHost removes the optional port and normalizes case and a DNS root dot.
+// It returns an empty string for malformed input, which can never match the allowlist.
+func canonicalHost(value string) string {
+	host := strings.TrimSpace(value)
+	if split, _, err := net.SplitHostPort(host); err == nil {
+		host = split
+	} else if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	} else if strings.Count(host, ":") > 1 {
+		// A bare IPv6 address is valid as a configured allowlist entry. A request Host
+		// with a port must use brackets and is rejected by the branch above.
+		if net.ParseIP(host) == nil {
+			return ""
+		}
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	return host
+}
+
+// requireHost rejects every HTTP Host not named by the server configuration. This
+// check is the loopback service's DNS-rebinding boundary; CORS cannot provide it.
+func (s *Server) requireHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, allowed := s.allowedHosts[canonicalHost(r.Host)]; !allowed {
+			http.Error(w, "invalid host", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// authenticate requires the configured bearer token. Preflight requests carry no
+// credentials, so CORS handles them before this middleware reaches an API resource.
+func (s *Server) authenticate(next http.Handler) http.Handler {
+	if s.authToken == "" {
+		return next
+	}
+	want := sha256.Sum256([]byte("Bearer " + s.authToken))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := sha256.Sum256([]byte(r.Header.Get("Authorization")))
+		if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="agent-hub"`)
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // cors answers cross-origin requests, and only for origins an operator listed.
-//
-// There is no default allowance and no wildcard: the API is unauthenticated, so a
-// permissive policy would let any page a browser visits read an operator's work.
-// Credentials are never allowed, because there are none to send.
+// There is no default allowance and no wildcard. An unlisted supplied Origin is
+// rejected, because omitting a response header does not stop a same-origin request
+// after DNS rebinding.
 func (s *Server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin != "" && s.allowedOrigins[origin] {
+		if origin != "" {
+			if !s.allowedOrigins[origin] {
+				http.Error(w, "invalid origin", http.StatusForbidden)
+				return
+			}
 			header := w.Header()
 			header.Set("Access-Control-Allow-Origin", origin)
 			// The answer depends on the request's origin, so a cache must not serve one
 			// origin's response to another.
 			header.Add("Vary", "Origin")
 			header.Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-			header.Set("Access-Control-Allow-Headers", "Content-Type, If-None-Match")
+			header.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, If-None-Match")
 			header.Set("Access-Control-Expose-Headers", strings.Join([]string{
 				"ETag", "Link", requestIDHeader, "Retry-After", "Deprecation", "Sunset",
 			}, ", "))

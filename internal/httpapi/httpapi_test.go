@@ -136,12 +136,18 @@ func newTestServer(t *testing.T, view WorkView, mutate ...func(*Options)) *Serve
 	return server
 }
 
+// newRequest builds a request for the loopback host trusted by the test server.
+func newRequest(method, target string, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, target, body)
+	req.Host = "localhost"
+	return req
+}
+
 // request runs one request through server.
 func request(t *testing.T, server http.Handler, method, target string, body io.Reader) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, target, body)
 	response := httptest.NewRecorder()
-	server.ServeHTTP(response, req)
+	server.ServeHTTP(response, newRequest(method, target, body))
 	return response
 }
 
@@ -287,7 +293,7 @@ func TestConditionalGetAvoidsSendingAnUnchangedBody(t *testing.T) {
 	if etag == "" {
 		t.Fatal("first response has no ETag")
 	}
-	req := httptest.NewRequest(http.MethodGet, BasePath+"/runs", nil)
+	req := newRequest(http.MethodGet, BasePath+"/runs", nil)
 	req.Header.Set("If-None-Match", etag)
 	second := httptest.NewRecorder()
 	server.ServeHTTP(second, req)
@@ -345,7 +351,7 @@ func TestDismissalLifecycle(t *testing.T) {
 	server := newTestServer(t, view)
 
 	body := strings.NewReader(`{"kind":"run","itemId":"run-1"}`)
-	req := httptest.NewRequest(http.MethodPost, BasePath+"/dismissals", body)
+	req := newRequest(http.MethodPost, BasePath+"/dismissals", body)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	created := httptest.NewRecorder()
 	server.ServeHTTP(created, req)
@@ -395,7 +401,7 @@ func TestDismissalBodyIsStrictAndBounded(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, BasePath+"/dismissals", strings.NewReader(tc.body))
+			req := newRequest(http.MethodPost, BasePath+"/dismissals", strings.NewReader(tc.body))
 			if tc.contentType != "" {
 				req.Header.Set("Content-Type", tc.contentType)
 			}
@@ -411,7 +417,7 @@ func TestDismissalBodyIsStrictAndBounded(t *testing.T) {
 func TestActiveItemCannotBeDismissed(t *testing.T) {
 	view := &viewStub{runs: []agenthub.Run{{ID: "run-1", Status: agenthub.StatusInProgress, Iterations: 1}}}
 	server := newTestServer(t, view)
-	req := httptest.NewRequest(http.MethodPost, BasePath+"/dismissals", strings.NewReader(`{"kind":"run","itemId":"run-1"}`))
+	req := newRequest(http.MethodPost, BasePath+"/dismissals", strings.NewReader(`{"kind":"run","itemId":"run-1"}`))
 	req.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, req)
@@ -433,15 +439,33 @@ func TestDependencyFailureIsRetryableAndDoesNotLeakTheCause(t *testing.T) {
 	}
 }
 
-// TestCORSIsDeniedByDefaultAndExactWhenAllowed pins the browser boundary: there is no
-// wildcard and no reflected arbitrary origin on an unauthenticated API.
-func TestCORSIsDeniedByDefaultAndExactWhenAllowed(t *testing.T) {
+// TestHostMustBeExplicitlyAllowed pins the DNS-rebinding boundary: a hostname that
+// resolves to loopback is still refused unless the server configuration names it.
+func TestHostMustBeExplicitlyAllowed(t *testing.T) {
+	server := newTestServer(t, &viewStub{})
+	req := newRequest(http.MethodGet, BasePath+"/runs", nil)
+	req.Host = "attacker.example:8973"
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, req)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("hostile Host status = %d, want 403", response.Code)
+	}
+}
+
+// TestCORSRejectsUnlistedOriginsAndAllowsExactMatches pins that a supplied Origin
+// is an access decision, not only a response-header decision.
+func TestCORSRejectsUnlistedOriginsAndAllowsExactMatches(t *testing.T) {
 	view := &viewStub{}
 	denied := newTestServer(t, view)
-	req := httptest.NewRequest(http.MethodGet, BasePath+"/runs", nil)
+	req := newRequest(http.MethodGet, BasePath+"/runs", nil)
 	req.Header.Set("Origin", "https://hostile.example")
 	response := httptest.NewRecorder()
 	denied.ServeHTTP(response, req)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("unlisted Origin status = %d, want 403", response.Code)
+	}
 	if got := response.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("default Access-Control-Allow-Origin = %q, want none", got)
 	}
@@ -449,20 +473,49 @@ func TestCORSIsDeniedByDefaultAndExactWhenAllowed(t *testing.T) {
 	allowed := newTestServer(t, view, func(options *Options) {
 		options.AllowedOrigins = []string{"https://hub.example", "*"}
 	})
-	for origin, want := range map[string]string{
-		"https://hub.example":     "https://hub.example",
-		"https://hostile.example": "",
+	for origin, want := range map[string]struct {
+		status      int
+		allowOrigin string
+	}{
+		"https://hub.example":     {status: http.StatusNoContent, allowOrigin: "https://hub.example"},
+		"https://hostile.example": {status: http.StatusForbidden},
 	} {
-		req := httptest.NewRequest(http.MethodOptions, BasePath+"/runs", nil)
+		req := newRequest(http.MethodOptions, BasePath+"/runs", nil)
 		req.Header.Set("Origin", origin)
 		res := httptest.NewRecorder()
 		allowed.ServeHTTP(res, req)
-		if res.Code != http.StatusNoContent {
-			t.Errorf("preflight for %s = %d, want 204", origin, res.Code)
+		if res.Code != want.status {
+			t.Errorf("preflight for %s = %d, want %d", origin, res.Code, want.status)
 		}
-		if got := res.Header().Get("Access-Control-Allow-Origin"); got != want {
-			t.Errorf("origin %s allowed as %q, want %q", origin, got, want)
+		if got := res.Header().Get("Access-Control-Allow-Origin"); got != want.allowOrigin {
+			t.Errorf("origin %s allowed as %q, want %q", origin, got, want.allowOrigin)
 		}
+	}
+}
+
+// TestBearerAuthenticationProtectsResources pins the protection used when the
+// composition root exposes the listener beyond loopback.
+func TestBearerAuthenticationProtectsResources(t *testing.T) {
+	server := newTestServer(t, &viewStub{}, func(options *Options) {
+		options.AuthToken = "correct horse battery staple"
+	})
+	for name, want := range map[string]struct {
+		authorization string
+		status        int
+	}{
+		"missing": {status: http.StatusUnauthorized},
+		"wrong":   {authorization: "Bearer wrong", status: http.StatusUnauthorized},
+		"valid":   {authorization: "Bearer correct horse battery staple", status: http.StatusOK},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := newRequest(http.MethodGet, BasePath+"/runs", nil)
+			req.Header.Set("Authorization", want.authorization)
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, req)
+			if response.Code != want.status {
+				t.Fatalf("status = %d, want %d", response.Code, want.status)
+			}
+		})
 	}
 }
 
