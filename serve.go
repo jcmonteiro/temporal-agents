@@ -255,14 +255,20 @@ func runAPIServer(options serveOptions) error {
 			{
 				Name: "temporal",
 				Check: func(ctx context.Context) error {
-					_, err := live.RunningExecutions(ctx, 1)
+					if _, err := live.RunningExecutions(ctx, 1); err != nil {
+						return err
+					}
+					_, err := schedules.Schedules(ctx, 1)
 					return err
 				},
 			},
 			{
 				Name: "execution-store",
 				Check: func(ctx context.Context) error {
-					_, err := records.RecordedExecutions(ctx, agenthub.RecordQuery{Limit: 1})
+					if _, err := records.RecordedExecutions(ctx, agenthub.RecordQuery{Limit: 1}); err != nil {
+						return err
+					}
+					_, err := recordStore.ListPlans(ctx, 1)
 					return err
 				},
 			},
