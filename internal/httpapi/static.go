@@ -3,7 +3,6 @@ package httpapi
 import (
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 )
@@ -40,10 +39,17 @@ func (s *Server) serveAsset(w http.ResponseWriter, r *http.Request) {
 		s.writeProblem(w, r, codeMethodNotAllowed, "this resource offers: GET, HEAD")
 		return
 	}
-	// path.Clean plus the leading separator strips any "..", so a request cannot escape
-	// the configured directory.
-	clean := path.Clean("/" + r.URL.Path)
-	target := filepath.Join(s.webDir, filepath.FromSlash(clean))
+	relative := strings.TrimPrefix(r.URL.Path, "/")
+	if relative == "" {
+		relative = "."
+	}
+	localPath := filepath.FromSlash(relative)
+	if !filepath.IsLocal(localPath) {
+		s.writeProblem(w, r, codeNotFound, "no such asset")
+		return
+	}
+	target := filepath.Join(s.webDir, localPath)
+	requestPath := "/" + filepath.ToSlash(localPath)
 
 	info, err := os.Stat(target)
 	switch {
@@ -51,7 +57,7 @@ func (s *Server) serveAsset(w http.ResponseWriter, r *http.Request) {
 		s.serveEntryDocument(w, r)
 		return
 	case err != nil:
-		if path.Ext(clean) != "" {
+		if filepath.Ext(localPath) != "" {
 			// A missing file with an extension is a missing file, not a route.
 			s.writeProblem(w, r, codeNotFound, "no such asset")
 			return
@@ -60,7 +66,7 @@ func (s *Server) serveAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.applyAssetHeaders(w, clean)
+	s.applyAssetHeaders(w, requestPath)
 	http.ServeFile(w, r, target)
 }
 

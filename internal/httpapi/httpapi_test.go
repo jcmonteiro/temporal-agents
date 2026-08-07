@@ -684,6 +684,30 @@ func TestWellKnownCatalogPointsAtTheContract(t *testing.T) {
 	}
 }
 
+// TestStaticAssetPathsCannotTraverseTheWebDirectory pins the filesystem boundary for
+// both slash and encoded-backslash traversal attempts.
+func TestStaticAssetPathsCannotTraverseTheWebDirectory(t *testing.T) {
+	parent := t.TempDir()
+	webDir := filepath.Join(parent, "web")
+	if err := os.Mkdir(webDir, 0o700); err != nil {
+		t.Fatalf("create web directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, "secret.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatalf("write file outside web directory: %v", err)
+	}
+	server := newTestServer(t, &viewStub{}, func(options *Options) { options.WebDir = webDir })
+
+	for _, target := range []string{"/../secret.txt", "/..%5csecret.txt"} {
+		req := newRequest(http.MethodGet, target, nil)
+		response := httptest.NewRecorder()
+		server.serveAsset(response, req)
+		requireProblem(t, response, http.StatusNotFound, codeNotFound)
+		if response.Body.String() == "secret" {
+			t.Fatalf("%s exposed a file outside the web directory", target)
+		}
+	}
+}
+
 // TestStaticAssetsAreOptionalAndNeverCaptureAPIPaths pins hosting decoupling: a built
 // bundle can be served for local convenience, deep links fall back to its index, and
 // an unknown API endpoint remains a JSON problem rather than the SPA.
