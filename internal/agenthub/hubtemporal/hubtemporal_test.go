@@ -15,8 +15,6 @@ import (
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -312,7 +310,7 @@ func TestSourcePagesClassifyRejectedNativeTokensAsInvalid(t *testing.T) {
 }
 
 func TestSchedulePageStopsRetryingTransientFailuresAtTheAttemptLimit(t *testing.T) {
-	fake := &fakeSchedules{err: status.Error(codes.Unavailable, "still unavailable")}
+	fake := &fakeSchedules{err: serviceerror.NewUnavailable("still unavailable")}
 	source, err := NewSchedules(fake, client.DefaultNamespace)
 	if err != nil {
 		t.Fatalf("NewSchedules: %v", err)
@@ -331,8 +329,8 @@ func TestSchedulePageStopsRetryingTransientFailuresAtTheAttemptLimit(t *testing.
 func TestSchedulePageRetriesTransientServiceFailures(t *testing.T) {
 	fake := &fakeSchedules{
 		failures: []error{
-			status.Error(codes.Unavailable, "temporarily unavailable"),
-			status.Error(codes.ResourceExhausted, "temporarily overloaded"),
+			serviceerror.NewUnavailable("temporarily unavailable"),
+			serviceerror.NewResourceExhausted(enums.RESOURCE_EXHAUSTED_CAUSE_UNSPECIFIED, "temporarily overloaded"),
 		},
 		pages: []*workflowservice.ListSchedulesResponse{{
 			Schedules: []*schedulepb.ScheduleListEntry{{ScheduleId: "schedule-recovered"}},

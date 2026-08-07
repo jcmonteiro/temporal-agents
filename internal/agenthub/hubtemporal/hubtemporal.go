@@ -314,6 +314,12 @@ func (s *Schedules) listSchedules(ctx context.Context, request *workflowservice.
 }
 
 func retryableScheduleError(err error) bool {
+	var unavailable *serviceerror.Unavailable
+	var exhausted *serviceerror.ResourceExhausted
+	if errors.As(err, &unavailable) || errors.As(err, &exhausted) {
+		return true
+	}
+
 	switch status.Code(err) {
 	case codes.Unavailable, codes.ResourceExhausted:
 		return true
