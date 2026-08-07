@@ -196,10 +196,6 @@ func (s *Service) ActiveWork(ctx context.Context, query PageQuery) (Page[ActiveW
 		}
 		return Page[ActiveWorkItem]{}, unavailable("list a page of running executions", err)
 	}
-	fleetStatuses, err := s.activeFleetStatuses(ctx, sourcePage.Items)
-	if err != nil {
-		return Page[ActiveWorkItem]{}, err
-	}
 	items := make([]ActiveWorkItem, 0, len(sourcePage.Items))
 	for _, execution := range sourcePage.Items {
 		if !execution.Running() {
@@ -207,13 +203,9 @@ func (s *Service) ActiveWork(ctx context.Context, query PageQuery) (Page[ActiveW
 		}
 		switch {
 		case isFleet(execution):
-			status := execution.Outcome.WorkStatus()
-			if fleet, ok := fleetStatuses[execution.WorkflowID]; ok {
-				status = fleet.Status
-			}
 			items = append(items, ActiveWorkItem{
 				ID: execution.WorkflowID, Type: ActiveWorkFleet,
-				Status: status, Running: true,
+				Status: execution.Outcome.WorkStatus(), Running: true,
 			})
 		case isRunSatellite(execution):
 			items = append(items, ActiveWorkItem{
@@ -229,50 +221,6 @@ func (s *Service) ActiveWork(ctx context.Context, query PageQuery) (Page[ActiveW
 	return Page[ActiveWorkItem]{Items: items, Next: next}, nil
 }
 
-func (s *Service) activeFleetStatuses(ctx context.Context, executions []Execution) (map[string]Fleet, error) {
-	ids := make([]string, 0, len(executions))
-	for _, execution := range executions {
-		if execution.Running() && isFleet(execution) {
-			ids = append(ids, execution.WorkflowID)
-		}
-	}
-	if len(ids) == 0 {
-		return map[string]Fleet{}, nil
-	}
-	trees, err := s.deps.Collections.FleetTrees(ctx, ChainQuery{
-		RequiredWorkflowIDs: ids,
-		RequiredOnly:        true,
-		Limit:               len(ids),
-	})
-	if err != nil {
-		return nil, unavailable("read the active fleets", err)
-	}
-	chains := make([]ExecutionChain, 0, len(trees))
-	treesByID := make(map[string][]Execution, len(trees))
-	for _, tree := range trees {
-		chains = append(chains, tree.Chain)
-		treesByID[tree.Chain.Latest.WorkflowID] = tree.Executions
-	}
-	live := executionMap(executions)
-	parents, err := s.resolveExecutionChains(ctx, chains, live, isFleet)
-	if err != nil {
-		return nil, err
-	}
-	plans, err := s.plansFor(ctx, parents)
-	if err != nil {
-		return nil, err
-	}
-	fleets := make(map[string]Fleet, len(parents))
-	for _, parent := range parents {
-		fleet, err := s.buildFleet(ctx, parent, treesByID[parent.WorkflowID], live, plans[parent.WorkflowID])
-		if err != nil {
-			return nil, err
-		}
-		fleets[fleet.ID] = fleet
-	}
-	return fleets, nil
-}
-
 func (s *Service) activeSchedulePage(ctx context.Context, limit int, cursor []byte) (Page[ActiveWorkItem], error) {
 	sourcePage, err := s.deps.Schedules.SchedulePage(ctx, SchedulePageQuery{Limit: limit, Cursor: cursor})
 	if err != nil {
@@ -285,8 +233,7 @@ func (s *Service) activeSchedulePage(ctx context.Context, limit int, cursor []by
 	for _, state := range sourcePage.Items {
 		items = append(items, ActiveWorkItem{
 			ID: state.ID, Type: ActiveWorkSchedule,
-			Status:  ScheduleStatus(state.Paused, state.RunningActions, state.LastOutcome),
-			Running: state.RunningActions > 0,
+			Status: ScheduleStatus(state.Paused, 0, state.LastOutcome),
 		})
 	}
 	var next []byte
@@ -311,14 +258,6 @@ func encodeActiveWorkCursor(phase byte, sourceCursor []byte) []byte {
 	cursor := make([]byte, 2, 2+len(sourceCursor))
 	cursor[0], cursor[1] = activeWorkCursorVersion, phase
 	return append(cursor, sourceCursor...)
-}
-
-func executionMap(executions []Execution) map[string]Execution {
-	indexed := make(map[string]Execution, len(executions))
-	for _, execution := range executions {
-		indexed[execution.WorkflowID] = execution
-	}
-	return indexed
 }
 
 func activeWorkType(class wfid.Class) ActiveWorkType {

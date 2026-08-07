@@ -140,16 +140,13 @@ type RecordSource interface {
 // ChainQuery selects execution-chain resources before a collection limit is
 // applied. ExcludedWorkflowIDs are dismissals that must be removed by the adapter
 // before selection. RequiredWorkflowIDs are fully aggregated in addition to the
-// normal page, so the service can merge current live state without creating a
-// partial chain from only its latest iteration.
+// normal page, so established collection reads can merge current live state
+// without creating a partial chain from only its latest iteration.
 type ChainQuery struct {
 	WorkflowID          string
 	RequiredWorkflowIDs []string
 	ExcludedWorkflowIDs []string
-	// RequiredOnly excludes the normal newest page and returns only explicitly
-	// required workflow IDs. It supports active pages selected from live state.
-	RequiredOnly bool
-	Limit        int
+	Limit               int
 }
 
 // ExecutionChain is one fully aggregated continue-as-new chain.

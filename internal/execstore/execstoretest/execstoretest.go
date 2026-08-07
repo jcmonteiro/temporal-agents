@@ -278,15 +278,6 @@ func executionChains(executions []execstore.Execution, filter execstore.ChainFil
 	}
 	chains := groupedExecutionChains(groups, 0)
 	required := stringsOf(filter.RequiredWorkflowIDs)
-	if filter.RequiredOnly {
-		selected := make([]execstore.ExecutionChain, 0, len(required))
-		for _, chain := range chains {
-			if required[chain.Latest.WorkflowID] {
-				selected = append(selected, chain)
-			}
-		}
-		return selected
-	}
 	if filter.Limit <= 0 || len(chains) <= filter.Limit {
 		return chains
 	}

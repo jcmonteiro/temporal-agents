@@ -117,38 +117,67 @@ func TestFleetsAggregatesThePlanAgainstItsNodeExecutions(t *testing.T) {
 	}
 }
 
-func TestActiveWorkUsesParentLivenessInsteadOfFleetAggregateStatus(t *testing.T) {
-	todoID := "fleet-" + uuidLike("todo")
-	failedID := "fleet-" + uuidLike("fail")
+func TestActiveWorkFleetStatusIsIndependentOfPageComposition(t *testing.T) {
+	fleetID := "fleet-" + uuidLike("page")
+	parent := agenthubtest.Fleet(fleetID, agenthub.OutcomeRunning, ago(time.Hour))
+	unrecordedChild := agenthubtest.Node(fleetID, "api", agenthub.OutcomeRunning, ago(time.Minute))
+	recorded := []agenthub.Execution{parent}
+	for i := 0; i < 500; i++ {
+		iteration := agenthubtest.Node(fleetID, "historical", agenthub.OutcomeSucceeded, ago(30*time.Minute))
+		iteration.RunID = fmt.Sprintf("historical-%03d", i)
+		recorded = append(recorded, iteration)
+	}
+	running := []agenthub.Execution{parent, unrecordedChild}
+	for i := 0; i < 300; i++ {
+		running = append(running, agenthubtest.Node(
+			fleetID, fmt.Sprintf("running-%03d", i), agenthub.OutcomeRunning, ago(time.Second)))
+	}
 	source := agenthubtest.New().
-		WithRecorded(
-			agenthubtest.Fleet(todoID, agenthub.OutcomeRunning, ago(time.Hour)),
-			agenthubtest.Fleet(failedID, agenthub.OutcomeRunning, ago(2*time.Hour)),
-			agenthubtest.Node(failedID, "broken", agenthub.OutcomeFailed, ago(90*time.Minute)),
-		).
-		WithRunning(
-			agenthubtest.Fleet(todoID, agenthub.OutcomeRunning, ago(time.Hour)),
-			agenthubtest.Fleet(failedID, agenthub.OutcomeRunning, ago(2*time.Hour)),
-		).
-		WithPlan(todoID, agenthub.Plan{Goal: "not started", Nodes: []agenthub.PlanNode{{ID: "ready"}}}).
-		WithPlan(failedID, agenthub.Plan{Goal: "partly failed", Nodes: []agenthub.PlanNode{{ID: "broken"}, {ID: "remaining"}}})
+		WithRecorded(recorded...).
+		WithRunning(running...).
+		WithPlan(fleetID, agenthub.Plan{Goal: "publish API", Nodes: []agenthub.PlanNode{{ID: "api"}}})
+	service := newService(t, source)
 
-	page, err := newService(t, source).ActiveWork(context.Background(), agenthub.PageQuery{Limit: 200})
+	small, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1})
 	if err != nil {
-		t.Fatalf("ActiveWork: %v", err)
+		t.Fatalf("ActiveWork(limit=1): %v", err)
 	}
-	if len(page.Items) != 2 {
-		t.Fatalf("got %d active fleets, want 2", len(page.Items))
+	large, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 2})
+	if err != nil {
+		t.Fatalf("ActiveWork(limit=2): %v", err)
 	}
-	statuses := map[string]agenthub.WorkStatus{}
-	for _, fleet := range page.Items {
-		if !fleet.Running || fleet.Type != agenthub.ActiveWorkFleet {
-			t.Errorf("fleet %q type/running = %q/%v, want fleet/true", fleet.ID, fleet.Type, fleet.Running)
-		}
-		statuses[fleet.ID] = fleet.Status
+
+	if len(small.Items) != 1 || len(large.Items) != 1 {
+		t.Fatalf("active-work page sizes = %d/%d, want one top-level fleet in both", len(small.Items), len(large.Items))
 	}
-	if statuses[todoID] != agenthub.StatusTodo || statuses[failedID] != agenthub.StatusFailed {
-		t.Errorf("active fleet statuses = %v, want todo and failed", statuses)
+	if small.Items[0] != large.Items[0] {
+		t.Fatalf("fleet differs by page composition: limit=1 %+v, limit=2 %+v", small.Items[0], large.Items[0])
+	}
+	if got := small.Items[0]; got.Status != agenthub.StatusInProgress || !got.Running || got.Type != agenthub.ActiveWorkFleet {
+		t.Fatalf("active fleet = %+v, want parent facts fleet/in-progress/running", got)
+	}
+}
+
+func TestActiveWorkDoesNotDeriveScheduleLivenessFromRecentActions(t *testing.T) {
+	source := agenthubtest.New().WithSchedules(agenthub.ScheduleState{
+		ID: "schedule-eventual", RunningActions: 2, LastOutcome: agenthub.OutcomeSucceeded,
+	})
+	service := newService(t, source)
+
+	first, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1})
+	if err != nil {
+		t.Fatalf("ActiveWork(executions): %v", err)
+	}
+	page, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1, Cursor: first.Next})
+	if err != nil {
+		t.Fatalf("ActiveWork(schedules): %v", err)
+	}
+
+	if len(page.Items) != 1 {
+		t.Fatalf("got %d schedules, want 1", len(page.Items))
+	}
+	if got := page.Items[0]; got.Running || got.Status != agenthub.StatusDone {
+		t.Fatalf("active schedule = %+v, want no current liveness claim and the observed completed status", got)
 	}
 }
 

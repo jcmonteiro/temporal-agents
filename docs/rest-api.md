@@ -96,8 +96,9 @@ schedule, and dismissal collections keep their original v1 envelope with `items`
 `active-work-collection.v1` envelope also has `next`. Follow that URL without
 inspecting or changing its opaque `cursor`; `next` is `null` on the final page. Each
 request reads at most one native Temporal execution page or one native schedule
-page. Continue-as-new changes the current run timestamp, but does not move the chain
-across these source-native pages. The CLI follows every page. Use `history` for the
+page. It does not load fleet trees or plan nodes. Continue-as-new changes the current
+run timestamp, but does not move the chain across these source-native pages. The CLI
+follows pages up to its published aggregate safety limits. Use `history` for the
 durable execution record.
 
 All times are RFC 3339 UTC timestamps. Missing times are JSON `null`, not the year
@@ -117,11 +118,11 @@ The detail resource reconciles the plan against child workflow IDs of the form
 status, and child execution when it started. There are no cross-fleet edges and no
 fabricated owner, estimate, or description.
 
-In the active-work projection, `running` reports whether the parent fleet execution
-is unsettled. It is separate from fleet status because status is aggregated from
-node states. A running fleet can consequently have `todo`, `failed`, or
-`waiting-input` status. The existing `fleet.v1` model is unchanged and does not add
-this field.
+In the active-work projection, `running` and `status` report only the parent fleet
+execution facts from the bounded Temporal page. A running fleet therefore has
+`in-progress` status. Node aggregation is available from the fleet collection and
+detail resources, which can load the complete fleet tree. The existing `fleet.v1`
+model is unchanged and does not add `running`.
 
 Fleet status is aggregated by the server. The first matching rule wins:
 
@@ -161,7 +162,9 @@ A schedule resource is identified by schedule ID. Its status is:
 4. `todo` when no action has completed
 
 A schedule is recurring. It has no progress, no terminal state, and cannot be
-dismissed.
+dismissed. The lightweight active-work projection always sets schedule `running` to
+`false`. Its schedule status uses configuration and the last observed completed
+action. Use the schedule resource when reconciled current action liveness is needed.
 
 ### Status vocabulary
 

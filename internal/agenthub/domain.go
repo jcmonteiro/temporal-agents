@@ -372,8 +372,9 @@ func ActiveWorkTypes() []ActiveWorkType {
 }
 
 // ActiveWorkItem is one top-level item returned by the additive active-work use
-// case. Running is separate from Status because a fleet can still run after one of
-// its nodes fails.
+// case. Execution items publish only the facts from their bounded live source
+// page. Schedule items publish configuration and the last observed outcome, but
+// make no claim about current action liveness.
 type ActiveWorkItem struct {
 	ID      string
 	Type    ActiveWorkType

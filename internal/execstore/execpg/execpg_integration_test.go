@@ -315,32 +315,6 @@ func TestPostgres_ListExecutionChainsIncludesRequiredIdentitiesOutsideThePage(t 
 	require.Equal(t, 20, chains[1].Tokens)
 }
 
-func TestPostgres_ListExecutionChainsRequiredOnlyReturnsCompleteRequestedChains(t *testing.T) {
-	store := newTestStore(t)
-	ctx := context.Background()
-	for i := 0; i < 2; i++ {
-		require.NoError(t, store.SaveExecution(ctx, execstore.Execution{
-			WorkflowID: "run-required", RunID: fmt.Sprintf("required-%d", i), Kind: execstore.KindRun,
-			StartedAt: stamp.Add(time.Duration(i) * time.Minute), Status: execstore.StatusSucceeded, Tokens: 10,
-		}))
-	}
-	require.NoError(t, store.SaveExecution(ctx, execstore.Execution{
-		WorkflowID: "run-newer", RunID: "newer-1", Kind: execstore.KindRun,
-		StartedAt: stamp.Add(time.Hour), Status: execstore.StatusSucceeded,
-	}))
-
-	chains, err := store.ListExecutionChains(ctx, execstore.ChainFilter{
-		Kinds: []execstore.Kind{execstore.KindRun}, RequiredWorkflowIDs: []string{"run-required"},
-		RequiredOnly: true, Limit: 1,
-	})
-
-	require.NoError(t, err)
-	require.Len(t, chains, 1)
-	require.Equal(t, "run-required", chains[0].Latest.WorkflowID)
-	require.Equal(t, 2, chains[0].Iterations)
-	require.Equal(t, 20, chains[0].Tokens)
-}
-
 func TestPostgres_ListExecutionTreesExcludesDismissalsBeforeTheLimit(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

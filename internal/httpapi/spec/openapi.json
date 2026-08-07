@@ -1619,11 +1619,12 @@
             "$ref": "#/components/schemas/ActiveWorkType"
           },
           "status": {
-            "$ref": "#/components/schemas/WorkStatus"
+            "$ref": "#/components/schemas/WorkStatus",
+            "description": "For an execution, the status from the bounded live page. For a schedule, the status from configuration and the last observed completed action."
           },
           "running": {
             "type": "boolean",
-            "description": "Whether the execution or a schedule action is currently unsettled."
+            "description": "Whether the top-level execution is unsettled. Schedule items are configuration and always use false."
           }
         }
       },

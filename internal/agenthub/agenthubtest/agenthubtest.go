@@ -280,10 +280,7 @@ func (s *Source) RunChains(_ context.Context, query agenthub.ChainQuery) ([]agen
 		}
 		groups[e.WorkflowID] = append(groups[e.WorkflowID], e)
 	}
-	if query.RequiredOnly {
-		return requiredChains(groups, 0, query.RequiredWorkflowIDs, true), nil
-	}
-	return requiredChains(groups, query.Limit, query.RequiredWorkflowIDs, false), nil
+	return requiredChains(groups, query.Limit, query.RequiredWorkflowIDs), nil
 }
 
 // FleetTrees implements agenthub.CollectionSource.
@@ -302,9 +299,6 @@ func (s *Source) FleetTrees(_ context.Context, query agenthub.ChainQuery) ([]age
 		groups[e.WorkflowID] = append(groups[e.WorkflowID], e)
 	}
 	chains := limitedChains(groups, query.Limit)
-	if query.RequiredOnly {
-		chains = requiredChains(groups, 0, query.RequiredWorkflowIDs, true)
-	}
 	trees := make([]agenthub.FleetTree, 0, len(chains))
 	for _, chain := range chains {
 		tree := agenthub.FleetTree{Chain: chain}
@@ -481,18 +475,9 @@ func runClass(class wfid.Class) bool {
 	}
 }
 
-func requiredChains(groups map[string][]agenthub.Execution, limit int, requiredIDs []string, onlyRequired bool) []agenthub.ExecutionChain {
+func requiredChains(groups map[string][]agenthub.Execution, limit int, requiredIDs []string) []agenthub.ExecutionChain {
 	chains := limitedChains(groups, 0)
 	required := stringSet(requiredIDs)
-	if onlyRequired {
-		selected := make([]agenthub.ExecutionChain, 0, len(requiredIDs))
-		for _, chain := range chains {
-			if required[chain.Latest.WorkflowID] {
-				selected = append(selected, chain)
-			}
-		}
-		return selected
-	}
 	if limit <= 0 || len(chains) <= limit {
 		return chains
 	}
