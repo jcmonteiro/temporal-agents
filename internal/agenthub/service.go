@@ -38,11 +38,6 @@ const (
 	// handful is enough: the newest run carries the label, and the newest settled one
 	// the outcome, even when the last few firings are still in flight.
 	scheduleActionSample = 10
-	// recordScanLimit is how many durable executions an internal reconciliation can
-	// inspect. It is larger than a collection page because one fleet can have many
-	// children and one chain can have many iterations; the durable record applies the
-	// same hard cap.
-	recordScanLimit = 1000
 	// liveLimit is how many in-flight executions one read looks at. It is
 	// independent of the caller's limit: the live listing is what decides whether a
 	// recorded execution is still running, so it must cover more than the page.
@@ -72,8 +67,6 @@ func ValidateLimit(limit int) (int, error) {
 type Dependencies struct {
 	// Live is the orchestrator's current state.
 	Live ExecutionSource
-	// Records is the durable execution record for detail reads.
-	Records RecordSource
 	// Collections selects and aggregates durable collection resources.
 	Collections CollectionSource
 	// Plans resolves fleets' approved plans in batches.
@@ -102,8 +95,6 @@ func NewService(deps Dependencies) (*Service, error) {
 	switch {
 	case deps.Live == nil:
 		return nil, errors.New("the live execution source is required")
-	case deps.Records == nil:
-		return nil, errors.New("the execution record source is required")
 	case deps.Collections == nil:
 		return nil, errors.New("the execution collection source is required")
 	case deps.Plans == nil:
@@ -478,14 +469,6 @@ func (s *Service) plansFor(ctx context.Context, parents []resolvedChain) (map[st
 // resolved is still returned — with no nodes and its own execution's status — so a
 // plan the store has lost hides the graph rather than the fleet.
 func (s *Service) buildFleet(ctx context.Context, parent resolvedChain, tree []Execution, live map[string]Execution, plan Plan) (Fleet, error) {
-	if tree == nil {
-		var err error
-		tree, err = s.deps.Records.RecordedExecutions(ctx, RecordQuery{WorkflowID: parent.WorkflowID, Limit: recordScanLimit})
-		if err != nil {
-			return Fleet{}, unavailable("read the fleet's nodes", err)
-		}
-	}
-
 	fleet := Fleet{
 		ID:        parent.WorkflowID,
 		Goal:      parent.Label,

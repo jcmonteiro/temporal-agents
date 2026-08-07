@@ -67,7 +67,6 @@ func Failing(err error) *Source {
 func (s *Source) Dependencies(now time.Time) agenthub.Dependencies {
 	return agenthub.Dependencies{
 		Live:        s,
-		Records:     s,
 		Collections: s,
 		Plans:       s,
 		Schedules:   s,

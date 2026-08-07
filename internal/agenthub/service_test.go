@@ -36,7 +36,6 @@ func TestNewServiceRequiresEveryPort(t *testing.T) {
 	full := source.Dependencies(now)
 	cases := map[string]func(*agenthub.Dependencies){
 		"live":        func(d *agenthub.Dependencies) { d.Live = nil },
-		"records":     func(d *agenthub.Dependencies) { d.Records = nil },
 		"collections": func(d *agenthub.Dependencies) { d.Collections = nil },
 		"plans":       func(d *agenthub.Dependencies) { d.Plans = nil },
 		"schedules":   func(d *agenthub.Dependencies) { d.Schedules = nil },
