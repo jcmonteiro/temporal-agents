@@ -303,6 +303,20 @@ func TestActiveWorkRejectsMalformedAndForeignCursors(t *testing.T) {
 	malformed := request(t, server, http.MethodGet, BasePath+"/active-work?cursor=not-base64!", nil)
 	requireProblem(t, malformed, http.StatusBadRequest, codeInvalidRequest)
 
+	malformedEncodingRequest := newRequest(http.MethodGet, BasePath+"/active-work", nil)
+	malformedEncodingRequest.URL.RawQuery = "cursor=%%%"
+	malformedEncoding := httptest.NewRecorder()
+	server.ServeHTTP(malformedEncoding, malformedEncodingRequest)
+	requireProblem(t, malformedEncoding, http.StatusBadRequest, codeInvalidRequest)
+
+	for _, query := range []string{
+		"cursor=YQ&cursor=Yg",
+		"limit=1&limit=2",
+	} {
+		repeated := request(t, server, http.MethodGet, BasePath+"/active-work?"+query, nil)
+		requireProblem(t, repeated, http.StatusBadRequest, codeInvalidRequest)
+	}
+
 	oldFleetCursor := base64.RawURLEncoding.EncodeToString([]byte("2026-08-06T12:00:00Z\nfleet-1"))
 	foreign := request(t, server, http.MethodGet, BasePath+"/active-work?cursor="+oldFleetCursor, nil)
 	requireProblem(t, foreign, http.StatusBadRequest, codeInvalidRequest)
