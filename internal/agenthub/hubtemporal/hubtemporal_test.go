@@ -344,9 +344,9 @@ func TestDescribeSpecRendersWhatWasConfigured(t *testing.T) {
 			"a calendar",
 			&client.ScheduleSpec{Calendars: []client.ScheduleCalendarSpec{{
 				Minute: []client.ScheduleRange{{Start: 0}},
-				Hour:   []client.ScheduleRange{{Start: 9, End: 17}},
+				Hour:   []client.ScheduleRange{{Start: 9, End: 17, Step: 2}},
 			}}},
-			"minute=0 hour=9-17",
+			"minute=0 hour=9-17/2",
 		},
 		{"an empty spec", &client.ScheduleSpec{}, ""},
 	}

@@ -307,11 +307,14 @@ func describeCalendar(calendar client.ScheduleCalendarSpec) string {
 		}
 		var values []string
 		for _, r := range field.ranges {
+			value := fmt.Sprintf("%d", r.Start)
 			if r.End > r.Start {
-				values = append(values, fmt.Sprintf("%d-%d", r.Start, r.End))
-				continue
+				value = fmt.Sprintf("%d-%d", r.Start, r.End)
 			}
-			values = append(values, fmt.Sprintf("%d", r.Start))
+			if r.Step > 1 {
+				value += fmt.Sprintf("/%d", r.Step)
+			}
+			values = append(values, value)
 		}
 		parts = append(parts, field.name+"="+strings.Join(values, "/"))
 	}
