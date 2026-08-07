@@ -472,6 +472,36 @@ func TestDescribeScheduleSpecRendersWhatWasConfigured(t *testing.T) {
 	}
 }
 
+func TestSchedulesFollowShortTemporalPagesUntilTheRequestedLimit(t *testing.T) {
+	fake := &fakeSchedules{pages: []*workflowservice.ListSchedulesResponse{
+		{
+			Schedules:     []*schedulepb.ScheduleListEntry{{ScheduleId: "schedule-1"}},
+			NextPageToken: []byte("page-2"),
+		},
+		{
+			Schedules: []*schedulepb.ScheduleListEntry{
+				{ScheduleId: "schedule-2"},
+				{ScheduleId: "schedule-3"},
+			},
+		},
+	}}
+	source, err := NewSchedules(fake, client.DefaultNamespace)
+	if err != nil {
+		t.Fatalf("NewSchedules: %v", err)
+	}
+
+	schedules, err := source.Schedules(context.Background(), 3)
+	if err != nil {
+		t.Fatalf("Schedules: %v", err)
+	}
+	if len(schedules) != 3 || schedules[2].ID != "schedule-3" {
+		t.Fatalf("schedules = %+v, want all three schedules across both source pages", schedules)
+	}
+	if fake.calls != 2 || fake.pageSizes[0] != 3 || fake.pageSizes[1] != 2 || string(fake.pageTokens[1]) != "page-2" {
+		t.Fatalf("Temporal requests = %d sizes=%v tokens=%q, want sizes 3/2 and the second-page token", fake.calls, fake.pageSizes, fake.pageTokens)
+	}
+}
+
 func TestSchedulePageReadsOneBoundedTemporalPage(t *testing.T) {
 	fake := &fakeSchedules{pages: []*workflowservice.ListSchedulesResponse{{
 		Schedules:     []*schedulepb.ScheduleListEntry{{ScheduleId: "schedule-2"}},

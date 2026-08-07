@@ -238,21 +238,42 @@ func (e *Executions) Executions(ctx context.Context, workflowIDs []string) (map[
 	return out, nil
 }
 
-// Schedules implements the capped non-paged overview read with one source call.
+// Schedules implements the capped non-paged overview read. It follows short
+// source pages because Temporal's maximum page size is not a promised page size.
 func (s *Schedules) Schedules(ctx context.Context, limit int) ([]agenthub.ScheduleState, error) {
 	if limit <= 0 {
 		limit = agenthub.MaxLimit
 	}
-	page, err := s.SchedulePage(ctx, agenthub.SchedulePageQuery{Limit: limit})
-	if err != nil {
-		return nil, err
+	items := make([]agenthub.ScheduleState, 0, limit)
+	var cursor []byte
+	seen := make(map[string]bool)
+	for range maxScheduleCollectionPages {
+		key := string(cursor)
+		if seen[key] {
+			return nil, errors.New("schedule pagination contains a cycle")
+		}
+		seen[key] = true
+
+		page, err := s.SchedulePage(ctx, agenthub.SchedulePageQuery{
+			Limit:  limit - len(items),
+			Cursor: cursor,
+		})
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, page.Items...)
+		if len(items) == limit || len(page.Next) == 0 {
+			return items, nil
+		}
+		cursor = page.Next
 	}
-	return page.Items, nil
+	return nil, errors.New("schedule pagination exceeds the page limit")
 }
 
 const (
-	scheduleRetryAttempts = 3
-	scheduleRetryDelay    = 25 * time.Millisecond
+	maxScheduleCollectionPages = 1000
+	scheduleRetryAttempts      = 3
+	scheduleRetryDelay         = 25 * time.Millisecond
 )
 
 // SchedulePage implements source-native paging with one bounded Temporal service
