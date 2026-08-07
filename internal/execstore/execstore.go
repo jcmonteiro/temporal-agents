@@ -121,6 +121,10 @@ type Execution struct {
 	// key every write upserts on so a retried activity neither duplicates a row
 	// nor corrupts an existing one.
 	RunID string
+	// FirstRunID is Temporal's first run ID for the execution chain. It stays the
+	// same across continue-as-new iterations but changes for each schedule firing,
+	// even when those firings reuse one workflow ID.
+	FirstRunID string
 	// Kind is the command type that produced the record.
 	Kind Kind
 	// Prompt is what was asked: the run's prompt, the develop instruction, or the
@@ -327,10 +331,12 @@ type ExecutionReader interface {
 }
 
 // ChainFilter selects execution-chain resources. The adapter applies Limit to
-// workflow IDs and only then loads every iteration for those IDs.
+// workflow IDs and only then loads every iteration for those IDs. It also loads
+// RequiredWorkflowIDs in full when they are outside that normal page.
 type ChainFilter struct {
 	Kinds               []Kind
 	WorkflowID          string
+	RequiredWorkflowIDs []string
 	ExcludedWorkflowIDs []string
 	Limit               int
 }

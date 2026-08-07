@@ -323,6 +323,30 @@ func TestRunsAggregateEveryIterationBeforeLimitingChains(t *testing.T) {
 	}
 }
 
+// TestRunsAggregatesALiveChainOutsideTheDurablePage pins the union boundary: a
+// running iteration can belong to an old chain whose durable aggregate falls outside
+// the requested page. Its full aggregate must be loaded before the union is sorted,
+// or the live iteration's recent start can make that old chain displace a newer item.
+func TestRunsAggregatesALiveChainOutsideTheDurablePage(t *testing.T) {
+	oldID := "run-" + uuidLike("64")
+	newerID := "run-" + uuidLike("65")
+	first := agenthubtest.Run(oldID, "long-running chain", agenthub.OutcomeSucceeded, ago(4*time.Hour))
+	first.RunID, first.Tokens = "old-iteration-1", 100
+	second := agenthubtest.Run(oldID, "long-running chain", agenthub.OutcomeSucceeded, ago(3*time.Hour))
+	second.RunID, second.Tokens = "old-iteration-2", 50
+	live := agenthubtest.Run(oldID, "", agenthub.OutcomeRunning, ago(time.Minute))
+	live.RunID = "old-iteration-3"
+	newer := agenthubtest.Run(newerID, "newer chain", agenthub.OutcomeSucceeded, ago(90*time.Minute))
+
+	runs, err := newService(t, agenthubtest.New().WithRecorded(first, second, newer).WithRunning(live)).Runs(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("Runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].ID != newerID {
+		t.Fatalf("runs = %v, want the correctly ordered newer chain %q", runIDs(runs), newerID)
+	}
+}
+
 // TestRunsCountALiveIterationBeforeItsRecordLands pins the join at the live edge: a
 // continue-as-new iteration can be visible to the orchestrator before its durable
 // start write lands, and it is still one more known iteration of the chain.

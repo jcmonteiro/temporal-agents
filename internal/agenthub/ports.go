@@ -36,6 +36,9 @@ type Execution struct {
 	// RunID identifies this single iteration, and is empty when the source does not
 	// distinguish iterations.
 	RunID string
+	// FirstRunID identifies the whole continue-as-new chain. It distinguishes
+	// separate schedule firings that reuse one workflow ID.
+	FirstRunID string
 	// Class is what the execution is (a fleet parent, a fleet node, a run, ...),
 	// classified from the workflow-ID convention.
 	Class wfid.Class
@@ -120,9 +123,12 @@ type RecordSource interface {
 
 // ChainQuery selects execution-chain resources before a collection limit is
 // applied. ExcludedWorkflowIDs are dismissals that must be removed by the adapter
-// before selection.
+// before selection. RequiredWorkflowIDs are fully aggregated in addition to the
+// normal page, so the service can merge current live state without creating a
+// partial chain from only its latest iteration.
 type ChainQuery struct {
 	WorkflowID          string
+	RequiredWorkflowIDs []string
 	ExcludedWorkflowIDs []string
 	Limit               int
 }

@@ -123,6 +123,7 @@ func TestExecutionFromTranslatesTheVisibilityInfo(t *testing.T) {
 	fleetID := "fleet-00000000-0000-4000-8000-000000000000"
 	info := &workflowpb.WorkflowExecutionInfo{
 		Execution:       &commonpb.WorkflowExecution{WorkflowId: fleetID + "-api", RunId: "run-1"},
+		FirstRunId:      "first-run-1",
 		Status:          enums.WORKFLOW_EXECUTION_STATUS_COMPLETED,
 		StartTime:       timestamppb.New(started),
 		CloseTime:       timestamppb.New(closed),
@@ -131,8 +132,8 @@ func TestExecutionFromTranslatesTheVisibilityInfo(t *testing.T) {
 
 	got := executionFrom(info)
 	switch {
-	case got.WorkflowID != fleetID+"-api" || got.RunID != "run-1":
-		t.Errorf("identity = %q/%q, want the node's", got.WorkflowID, got.RunID)
+	case got.WorkflowID != fleetID+"-api" || got.RunID != "run-1" || got.FirstRunID != "first-run-1":
+		t.Errorf("identity = %q/%q/%q, want the node's", got.WorkflowID, got.RunID, got.FirstRunID)
 	case got.Class != wfid.ClassFleetNode:
 		t.Errorf("class = %q, want fleet-node", got.Class)
 	case got.Outcome != agenthub.OutcomeSucceeded:

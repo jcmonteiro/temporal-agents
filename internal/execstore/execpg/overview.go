@@ -86,8 +86,8 @@ func (p *Postgres) ListExecutionTrees(ctx context.Context, filter execstore.Chai
 }
 
 // ListScheduleActionChains returns the newest bounded action chains for every
-// requested schedule in one database read. The limit applies to workflow IDs before
-// all continue-as-new iterations for those actions are loaded.
+// requested schedule in one database read. The limit applies to first-run chain
+// identities before all continue-as-new iterations for those actions are loaded.
 func (p *Postgres) ListScheduleActionChains(ctx context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]execstore.ExecutionChain, error) {
 	out := make(map[string][]execstore.ExecutionChain, len(scheduleIDs))
 	if len(scheduleIDs) == 0 {
@@ -95,24 +95,25 @@ func (p *Postgres) ListScheduleActionChains(ctx context.Context, scheduleIDs []s
 	}
 	limit := execstore.EffectiveLimit(perScheduleLimit, execstore.DefaultHistoryLimit)
 	query := `WITH action_starts AS (
-	SELECT schedule_id, workflow_id, MIN(started_at) AS action_started
+	SELECT schedule_id, COALESCE(first_run_id, run_id) AS action_id,
+		MIN(started_at) AS action_started
 	FROM executions
 	WHERE schedule_id = ANY($1::text[])
-	GROUP BY schedule_id, workflow_id
+	GROUP BY schedule_id, COALESCE(first_run_id, run_id)
 ), selected AS (
-	SELECT schedule_id, workflow_id, action_started,
+	SELECT schedule_id, action_id, action_started,
 		row_number() OVER (
 			PARTITION BY schedule_id
-			ORDER BY action_started DESC, workflow_id DESC
+			ORDER BY action_started DESC, action_id DESC
 		) AS action_number
 	FROM action_starts
 )
-SELECT e.run_id, e.workflow_id, e.kind, e.prompt, e.started_at, e.ended_at,
+SELECT e.run_id, e.first_run_id, e.workflow_id, e.kind, e.prompt, e.started_at, e.ended_at,
 	e.status, e.tokens, e.schedule_id, e.parent_workflow_id, e.detail
 FROM executions AS e
 JOIN selected
 	ON selected.schedule_id = e.schedule_id
-	AND selected.workflow_id = e.workflow_id
+	AND selected.action_id = COALESCE(e.first_run_id, e.run_id)
 WHERE selected.action_number <= $2
 ORDER BY selected.schedule_id, selected.action_number, e.started_at DESC, e.run_id DESC`
 	rows, err := p.pool.Query(ctx, query, scheduleIDs, limit)
@@ -127,21 +128,22 @@ ORDER BY selected.schedule_id, selected.action_number, e.started_at DESC, e.run_
 		if err != nil {
 			return nil, err
 		}
+		actionID := executionActionID(execution)
 		if groups[execution.ScheduleID] == nil {
 			groups[execution.ScheduleID] = map[string][]execstore.Execution{}
 		}
-		if _, known := groups[execution.ScheduleID][execution.WorkflowID]; !known {
-			orders[execution.ScheduleID] = append(orders[execution.ScheduleID], execution.WorkflowID)
+		if _, known := groups[execution.ScheduleID][actionID]; !known {
+			orders[execution.ScheduleID] = append(orders[execution.ScheduleID], actionID)
 		}
-		groups[execution.ScheduleID][execution.WorkflowID] = append(
-			groups[execution.ScheduleID][execution.WorkflowID], execution)
+		groups[execution.ScheduleID][actionID] = append(
+			groups[execution.ScheduleID][actionID], execution)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, readError("read schedule action chains", err)
 	}
-	for scheduleID, workflowIDs := range orders {
-		for _, workflowID := range workflowIDs {
-			out[scheduleID] = append(out[scheduleID], aggregateChain(groups[scheduleID][workflowID]))
+	for scheduleID, actionIDs := range orders {
+		for _, actionID := range actionIDs {
+			out[scheduleID] = append(out[scheduleID], aggregateChain(groups[scheduleID][actionID]))
 		}
 	}
 	return out, nil
@@ -152,9 +154,9 @@ func selectedExecutionsSQL(tree bool) string {
 	if tree {
 		join = "e.workflow_id = selected.workflow_id OR e.parent_workflow_id = selected.workflow_id"
 	}
-	const qualifiedExecutionColumns = `e.run_id, e.workflow_id, e.kind, e.prompt, e.started_at, e.ended_at,
+	const qualifiedExecutionColumns = `e.run_id, e.first_run_id, e.workflow_id, e.kind, e.prompt, e.started_at, e.ended_at,
 	e.status, e.tokens, e.schedule_id, e.parent_workflow_id, e.detail`
-	return fmt.Sprintf(`WITH selected AS (
+	return fmt.Sprintf(`WITH eligible AS (
 	SELECT workflow_id, MIN(started_at) AS chain_started
 	FROM executions
 	WHERE kind = ANY($1::text[])
@@ -163,8 +165,17 @@ func selectedExecutionsSQL(tree bool) string {
 		AND ($2 = '' OR workflow_id = $2)
 		AND NOT (workflow_id = ANY($3::text[]))
 	GROUP BY workflow_id
+), page AS (
+	SELECT workflow_id, chain_started
+	FROM eligible
 	ORDER BY chain_started DESC, workflow_id ASC
 	LIMIT $4
+), selected AS (
+	SELECT workflow_id, chain_started FROM page
+	UNION
+	SELECT workflow_id, chain_started
+	FROM eligible
+	WHERE workflow_id = ANY($5::text[])
 )
 SELECT %s
 FROM executions AS e
@@ -181,8 +192,19 @@ func chainArgs(filter execstore.ChainFilter) []any {
 	if excluded == nil {
 		excluded = []string{}
 	}
+	required := filter.RequiredWorkflowIDs
+	if required == nil {
+		required = []string{}
+	}
 	limit := execstore.EffectiveLimit(filter.Limit, execstore.DefaultHistoryLimit)
-	return []any{kinds, filter.WorkflowID, excluded, limit}
+	return []any{kinds, filter.WorkflowID, excluded, limit, required}
+}
+
+func executionActionID(execution execstore.Execution) string {
+	if execution.FirstRunID != "" {
+		return execution.FirstRunID
+	}
+	return execution.RunID
 }
 
 func aggregateChain(executions []execstore.Execution) execstore.ExecutionChain {

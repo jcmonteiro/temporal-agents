@@ -80,6 +80,7 @@ func (r *Records) RunChains(ctx context.Context, query agenthub.ChainQuery) ([]a
 			execstore.KindPilot, execstore.KindFleetPlan,
 		},
 		WorkflowID:          query.WorkflowID,
+		RequiredWorkflowIDs: query.RequiredWorkflowIDs,
 		ExcludedWorkflowIDs: query.ExcludedWorkflowIDs,
 		Limit:               query.Limit,
 	})
@@ -94,6 +95,7 @@ func (r *Records) FleetTrees(ctx context.Context, query agenthub.ChainQuery) ([]
 	trees, err := r.overview.ListExecutionTrees(ctx, execstore.ChainFilter{
 		Kinds:               []execstore.Kind{execstore.KindFleet},
 		WorkflowID:          query.WorkflowID,
+		RequiredWorkflowIDs: query.RequiredWorkflowIDs,
 		ExcludedWorkflowIDs: query.ExcludedWorkflowIDs,
 		Limit:               query.Limit,
 	})
@@ -245,6 +247,7 @@ func executionFrom(record execstore.Execution) agenthub.Execution {
 	e := agenthub.Execution{
 		WorkflowID:       record.WorkflowID,
 		RunID:            record.RunID,
+		FirstRunID:       record.FirstRunID,
 		Class:            wfid.Classify(record.WorkflowID),
 		Outcome:          outcomeFrom(record.Status),
 		Label:            record.Prompt,

@@ -238,16 +238,23 @@ func (s *Service) Runs(ctx context.Context, limit int) ([]Run, error) {
 	if err != nil {
 		return nil, err
 	}
+	live, err := s.liveByWorkflowID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	required := make([]string, 0, len(live))
+	for workflowID, execution := range live {
+		if isRunSatellite(execution) && !dismissed.has(KindRun, workflowID) {
+			required = append(required, workflowID)
+		}
+	}
 	recorded, err := s.deps.Collections.RunChains(ctx, ChainQuery{
+		RequiredWorkflowIDs: required,
 		ExcludedWorkflowIDs: dismissed.ids(KindRun),
 		Limit:               limit,
 	})
 	if err != nil {
 		return nil, unavailable("read the recorded runs", err)
-	}
-	live, err := s.liveByWorkflowID(ctx)
-	if err != nil {
-		return nil, err
 	}
 	recordedExecutions := make([]Execution, 0, len(recorded))
 	for _, chain := range recorded {
@@ -362,7 +369,7 @@ func (s *Service) Schedules(ctx context.Context, limit int) ([]Schedule, error) 
 	}
 	for scheduleID, chains := range actions {
 		for i := range chains {
-			if state, ok := current[chains[i].Latest.WorkflowID]; ok {
+			if state, ok := current[chains[i].Latest.WorkflowID]; ok && sameExecutionChain(chains[i].Latest, state) {
 				chains[i].Latest.Outcome = state.Outcome
 				chains[i].Latest.RunID = state.RunID
 				chains[i].Latest.EndedAt = state.EndedAt
@@ -383,6 +390,13 @@ func (s *Service) Schedules(ctx context.Context, limit int) ([]Schedule, error) 
 		}
 	}
 	return schedules, nil
+}
+
+func sameExecutionChain(recorded, live Execution) bool {
+	if recorded.FirstRunID != "" && live.FirstRunID != "" {
+		return recorded.FirstRunID == live.FirstRunID
+	}
+	return recorded.RunID != "" && recorded.RunID == live.RunID
 }
 
 // scheduleFrom assembles one schedule satellite from its state, the runs it fired

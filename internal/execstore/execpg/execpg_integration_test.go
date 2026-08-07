@@ -289,6 +289,32 @@ func TestPostgres_ListExecutionChainsLimitsIdentitiesAfterFullAggregation(t *tes
 	require.Equal(t, "run-other", chains[1].Latest.WorkflowID)
 }
 
+func TestPostgres_ListExecutionChainsIncludesRequiredIdentitiesOutsideThePage(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	for i := 0; i < 2; i++ {
+		require.NoError(t, store.SaveExecution(ctx, execstore.Execution{
+			WorkflowID: "run-old", RunID: fmt.Sprintf("old-%d", i), Kind: execstore.KindRun,
+			StartedAt: stamp.Add(time.Duration(i) * time.Minute), Status: execstore.StatusSucceeded, Tokens: 10,
+		}))
+	}
+	require.NoError(t, store.SaveExecution(ctx, execstore.Execution{
+		WorkflowID: "run-new", RunID: "new-1", Kind: execstore.KindRun,
+		StartedAt: stamp.Add(time.Hour), Status: execstore.StatusSucceeded,
+	}))
+
+	chains, err := store.ListExecutionChains(ctx, execstore.ChainFilter{
+		Kinds: []execstore.Kind{execstore.KindRun}, RequiredWorkflowIDs: []string{"run-old"}, Limit: 1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, chains, 2)
+	require.Equal(t, "run-new", chains[0].Latest.WorkflowID)
+	require.Equal(t, "run-old", chains[1].Latest.WorkflowID)
+	require.Equal(t, 2, chains[1].Iterations)
+	require.Equal(t, 20, chains[1].Tokens)
+}
+
 func TestPostgres_ListExecutionTreesExcludesDismissalsBeforeTheLimit(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
@@ -341,29 +367,35 @@ func TestPostgres_ListScheduleActionChainsBatchesPerScheduleLimits(t *testing.T)
 func TestPostgres_ListScheduleActionChainsLimitsActionsAfterAggregation(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
-	const scheduleID = "schedule-long"
+	const (
+		scheduleID = "schedule-long"
+		workflowID = "schedule-long-wf"
+	)
 
-	previous := execstore.Execution{
-		WorkflowID: "run-previous", RunID: "previous-1", Kind: execstore.KindRun,
-		ScheduleID: scheduleID, StartedAt: stamp, Status: execstore.StatusFailed,
-	}
-	require.NoError(t, store.SaveExecution(ctx, previous))
-	for i := 0; i < 11; i++ {
-		require.NoError(t, store.SaveExecution(ctx, execstore.Execution{
-			WorkflowID: "run-latest", RunID: fmt.Sprintf("latest-%02d", i), Kind: execstore.KindRun,
-			ScheduleID: scheduleID, StartedAt: stamp.Add(time.Hour + time.Duration(i)*time.Minute),
-			Status: execstore.StatusSucceeded, Tokens: 1,
-		}))
+	for action := 1; action <= 2; action++ {
+		firstRunID := fmt.Sprintf("action-%d-first", action)
+		iterations := 1
+		if action == 2 {
+			iterations = 11
+		}
+		for iteration := 0; iteration < iterations; iteration++ {
+			require.NoError(t, store.SaveExecution(ctx, execstore.Execution{
+				WorkflowID: workflowID, RunID: fmt.Sprintf("action-%d-%02d", action, iteration),
+				FirstRunID: firstRunID, Kind: execstore.KindRun, ScheduleID: scheduleID,
+				StartedAt: stamp.Add(time.Duration(action)*time.Hour + time.Duration(iteration)*time.Minute),
+				Status:    execstore.StatusSucceeded, Tokens: 1,
+			}))
+		}
 	}
 
 	actions, err := store.ListScheduleActionChains(ctx, []string{scheduleID}, 2)
 
 	require.NoError(t, err)
-	require.Len(t, actions[scheduleID], 2, "the long latest chain must not consume the action limit")
-	require.Equal(t, "run-latest", actions[scheduleID][0].Latest.WorkflowID)
+	require.Len(t, actions[scheduleID], 2, "the reused workflow ID must still produce one chain per firing")
+	require.Equal(t, "action-2-first", actions[scheduleID][0].Latest.FirstRunID)
 	require.Equal(t, 11, actions[scheduleID][0].Iterations)
-	require.Equal(t, "run-previous", actions[scheduleID][1].Latest.WorkflowID)
-	require.Equal(t, execstore.StatusFailed, actions[scheduleID][1].Latest.Status)
+	require.Equal(t, "action-1-first", actions[scheduleID][1].Latest.FirstRunID)
+	require.Equal(t, 1, actions[scheduleID][1].Iterations)
 }
 
 func TestPostgres_ReadBeforeAnyWorkerMigrated(t *testing.T) {

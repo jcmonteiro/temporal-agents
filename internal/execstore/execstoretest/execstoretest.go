@@ -151,8 +151,12 @@ func (s *Store) ListScheduleActionChains(_ context.Context, scheduleIDs []string
 		if groups[execution.ScheduleID] == nil {
 			groups[execution.ScheduleID] = map[string][]execstore.Execution{}
 		}
-		groups[execution.ScheduleID][execution.WorkflowID] = append(
-			groups[execution.ScheduleID][execution.WorkflowID], execution)
+		actionID := execution.FirstRunID
+		if actionID == "" {
+			actionID = execution.RunID
+		}
+		groups[execution.ScheduleID][actionID] = append(
+			groups[execution.ScheduleID][actionID], execution)
 	}
 	out := make(map[string][]execstore.ExecutionChain, len(scheduleIDs))
 	for scheduleID, actions := range groups {
@@ -272,7 +276,18 @@ func executionChains(executions []execstore.Execution, filter execstore.ChainFil
 		}
 		groups[execution.WorkflowID] = append(groups[execution.WorkflowID], execution)
 	}
-	return groupedExecutionChains(groups, filter.Limit)
+	chains := groupedExecutionChains(groups, 0)
+	if filter.Limit <= 0 || len(chains) <= filter.Limit {
+		return chains
+	}
+	selected := append([]execstore.ExecutionChain(nil), chains[:filter.Limit]...)
+	required := stringsOf(filter.RequiredWorkflowIDs)
+	for _, chain := range chains[filter.Limit:] {
+		if required[chain.Latest.WorkflowID] {
+			selected = append(selected, chain)
+		}
+	}
+	return selected
 }
 
 func groupedExecutionChains(groups map[string][]execstore.Execution, limit int) []execstore.ExecutionChain {

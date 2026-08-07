@@ -250,7 +250,7 @@ func (s *Source) RunChains(_ context.Context, query agenthub.ChainQuery) ([]agen
 		}
 		groups[e.WorkflowID] = append(groups[e.WorkflowID], e)
 	}
-	return limitedChains(groups, query.Limit), nil
+	return requiredChains(groups, query.Limit, query.RequiredWorkflowIDs), nil
 }
 
 // FleetTrees implements agenthub.CollectionSource.
@@ -298,8 +298,12 @@ func (s *Source) ScheduleActionChains(_ context.Context, scheduleIDs []string, p
 		if groups[execution.ScheduleID] == nil {
 			groups[execution.ScheduleID] = map[string][]agenthub.Execution{}
 		}
-		groups[execution.ScheduleID][execution.WorkflowID] = append(
-			groups[execution.ScheduleID][execution.WorkflowID], execution)
+		actionID := execution.FirstRunID
+		if actionID == "" {
+			actionID = execution.RunID
+		}
+		groups[execution.ScheduleID][actionID] = append(
+			groups[execution.ScheduleID][actionID], execution)
 	}
 	out := make(map[string][]agenthub.ExecutionChain, len(scheduleIDs))
 	for scheduleID, actions := range groups {
@@ -402,6 +406,26 @@ func runClass(class wfid.Class) bool {
 	}
 }
 
+func requiredChains(groups map[string][]agenthub.Execution, limit int, requiredIDs []string) []agenthub.ExecutionChain {
+	chains := limitedChains(groups, 0)
+	if limit <= 0 || len(chains) <= limit {
+		return chains
+	}
+	selected := append([]agenthub.ExecutionChain(nil), chains[:limit]...)
+	known := make(map[string]bool, len(selected))
+	for _, chain := range selected {
+		known[chain.Latest.WorkflowID] = true
+	}
+	required := stringSet(requiredIDs)
+	for _, chain := range chains[limit:] {
+		workflowID := chain.Latest.WorkflowID
+		if required[workflowID] && !known[workflowID] {
+			selected = append(selected, chain)
+		}
+	}
+	return selected
+}
+
 func limitedChains(groups map[string][]agenthub.Execution, limit int) []agenthub.ExecutionChain {
 	chains := make([]agenthub.ExecutionChain, 0, len(groups))
 	for _, executions := range groups {
@@ -437,6 +461,7 @@ func Fleet(id string, outcome agenthub.ExecutionOutcome, startedAt time.Time) ag
 	return agenthub.Execution{
 		WorkflowID: id,
 		RunID:      id + "-run",
+		FirstRunID: id + "-run",
 		Class:      wfid.ClassFleet,
 		Outcome:    outcome,
 		StartedAt:  startedAt,
@@ -449,6 +474,7 @@ func Node(fleetID, nodeID string, outcome agenthub.ExecutionOutcome, startedAt t
 	return agenthub.Execution{
 		WorkflowID:       workflowID,
 		RunID:            workflowID + "-run",
+		FirstRunID:       workflowID + "-run",
 		Class:            wfid.ClassFleetNode,
 		Outcome:          outcome,
 		StartedAt:        startedAt,
@@ -461,6 +487,7 @@ func Run(id, label string, outcome agenthub.ExecutionOutcome, startedAt time.Tim
 	return agenthub.Execution{
 		WorkflowID: id,
 		RunID:      id + "-run",
+		FirstRunID: id + "-run",
 		Class:      wfid.Classify(id),
 		Outcome:    outcome,
 		Label:      label,

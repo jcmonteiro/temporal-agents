@@ -73,10 +73,11 @@ func (p *Postgres) Close() {
 // a settled row back to running (see the WHERE clause).
 const saveExecutionSQL = `
 INSERT INTO executions (
-	run_id, workflow_id, kind, prompt, started_at, ended_at,
+	run_id, first_run_id, workflow_id, kind, prompt, started_at, ended_at,
 	status, tokens, schedule_id, parent_workflow_id, detail
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 ON CONFLICT (run_id) DO UPDATE SET
+	first_run_id       = EXCLUDED.first_run_id,
 	workflow_id        = EXCLUDED.workflow_id,
 	kind               = EXCLUDED.kind,
 	prompt             = EXCLUDED.prompt,
@@ -97,7 +98,7 @@ func (p *Postgres) SaveExecution(ctx context.Context, e execstore.Execution) err
 		return fmt.Errorf("encode execution detail: %w", err)
 	}
 	_, err = p.pool.Exec(ctx, saveExecutionSQL,
-		e.RunID, e.WorkflowID, string(e.Kind), e.Prompt, e.StartedAt,
+		e.RunID, nullString(e.FirstRunID), e.WorkflowID, string(e.Kind), e.Prompt, e.StartedAt,
 		nullTime(e.EndedAt), string(e.Status), e.Tokens,
 		nullString(e.ScheduleID), nullString(e.ParentWorkflowID), detail)
 	if err != nil {
@@ -110,7 +111,7 @@ func (p *Postgres) SaveExecution(ctx context.Context, e execstore.Execution) err
 }
 
 // executionColumns is the shared SELECT list, in the order scanExecution reads.
-const executionColumns = `run_id, workflow_id, kind, prompt, started_at, ended_at,
+const executionColumns = `run_id, first_run_id, workflow_id, kind, prompt, started_at, ended_at,
 	status, tokens, schedule_id, parent_workflow_id, detail`
 
 // ListExecutions returns the records matching f, newest first. Ties on
@@ -206,10 +207,11 @@ func scanExecution(row pgx.Row) (execstore.Execution, error) {
 		status string
 		ended  *time.Time
 		sched  *string
+		first  *string
 		parent *string
 		detail []byte
 	)
-	if err := row.Scan(&e.RunID, &e.WorkflowID, &kind, &e.Prompt, &e.StartedAt,
+	if err := row.Scan(&e.RunID, &first, &e.WorkflowID, &kind, &e.Prompt, &e.StartedAt,
 		&ended, &status, &e.Tokens, &sched, &parent, &detail); err != nil {
 		return execstore.Execution{}, fmt.Errorf("read execution row: %w", err)
 	}
@@ -217,6 +219,9 @@ func scanExecution(row pgx.Row) (execstore.Execution, error) {
 	e.Status = execstore.Status(status)
 	if ended != nil {
 		e.EndedAt = *ended
+	}
+	if first != nil {
+		e.FirstRunID = *first
 	}
 	if sched != nil {
 		e.ScheduleID = *sched

@@ -329,6 +329,7 @@ func executionFrom(info *workflowpb.WorkflowExecutionInfo) agenthub.Execution {
 	execution := agenthub.Execution{
 		WorkflowID: info.GetExecution().GetWorkflowId(),
 		RunID:      info.GetExecution().GetRunId(),
+		FirstRunID: info.GetFirstRunId(),
 		Outcome:    outcomeFrom(info.GetStatus()),
 		ScheduleID: scheduleIDFrom(info),
 	}
