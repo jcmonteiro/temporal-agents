@@ -123,8 +123,9 @@ state and never changes workflow state. Continue-as-new iterations are one run
 resource identified by workflow ID.
 
 The API binds to `127.0.0.1:8973` by default and accepts only configured HTTP Host
-names. A non-loopback `--addr` requires `AGENT_HUB_AUTH_TOKEN`; remote clients send it
-as a bearer token. Additional Host names use `--allow-host`. Each cross-origin browser
+names. A non-loopback `--addr` requires `--tls-cert`, `--tls-key`, and a strong
+`AGENT_HUB_AUTH_TOKEN`; remote clients send the token only over HTTPS. Additional Host
+names use `--allow-host`. Each cross-origin browser
 origin requires an exact `--allow-origin`; other supplied origins are rejected. The
 contract is OpenAPI 3.1; versioned standalone JSON Schemas and resolvable problem types
 are served with it. See [the REST API guide](docs/rest-api.md).

@@ -19,14 +19,23 @@ prompts. The server accepts only loopback Host names, its concrete listener host
 names supplied with `--allow-host`. This blocks DNS-rebinding requests that use a
 hostile hostname.
 
-A non-loopback bind requires bearer authentication. Set the token in the environment;
-do not put it in a command-line argument:
+A non-loopback bind requires TLS and bearer authentication. Set a random token in
+the environment; do not put a fixed token in a command-line argument. The token must
+contain at least 32 characters.
 
 ```sh
-export AGENT_HUB_AUTH_TOKEN='replace-with-a-long-random-token'
-temporal-agents serve --addr 0.0.0.0:8973 --allow-host hub.example.test
-curl -H "Authorization: Bearer $AGENT_HUB_AUTH_TOKEN" http://hub.example.test:8973/api/v1
+export AGENT_HUB_AUTH_TOKEN="$(openssl rand -base64 32)"
+temporal-agents serve --addr 0.0.0.0:8973 \
+  --tls-cert /run/secrets/hub.crt \
+  --tls-key /run/secrets/hub.key \
+  --allow-host hub.example.test
+curl -H "Authorization: Bearer $AGENT_HUB_AUTH_TOKEN" \
+  https://hub.example.test:8973/api/v1
 ```
+
+The certificate must be valid for each remote host name. A TLS reverse proxy is also
+valid when this process stays on its default loopback listener; the proxy must keep
+the upstream connection on the same host.
 
 The server explicitly allows its own configured origins for the bundled UI. Each
 additional browser origin must be listed separately:
@@ -199,8 +208,8 @@ fields and multiple JSON documents.
 
 ## Security notes
 
-- Loopback is the default bind. A non-loopback `--addr` requires
-  `AGENT_HUB_AUTH_TOKEN` and bearer authentication.
+- Loopback is the default bind. A non-loopback `--addr` requires `--tls-cert`,
+  `--tls-key`, and a strong `AGENT_HUB_AUTH_TOKEN`. Plaintext remote HTTP is refused.
 - Every request Host must match the loopback names, the concrete listener host, or an
   exact `--allow-host` entry.
 - A supplied browser Origin is rejected unless it is one of the server's own origins

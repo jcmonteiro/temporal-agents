@@ -33,9 +33,10 @@ import (
 // non-loopback address is possible only with an explicit --addr and a bearer token;
 // no environment variable can widen the bind by accident.
 const (
-	defaultServeAddress  = "127.0.0.1:8973"
-	defaultWebDirectory  = "web/dist"
-	agentHubAuthTokenEnv = "AGENT_HUB_AUTH_TOKEN"
+	defaultServeAddress   = "127.0.0.1:8973"
+	defaultWebDirectory   = "web/dist"
+	agentHubAuthTokenEnv  = "AGENT_HUB_AUTH_TOKEN"
+	minimumAuthTokenBytes = 32
 )
 
 // HTTP server budgets. The handler has its own request deadline; these additionally
@@ -55,6 +56,10 @@ type serveOptions struct {
 	// webDir is the independently-built static bundle to serve for local
 	// convenience, or empty to serve only JSON.
 	webDir string
+	// tlsCert and tlsKey are the PEM certificate chain and private key. Both are
+	// mandatory for a non-loopback listener.
+	tlsCert string
+	tlsKey  string
 	// allowedHosts are HTTP Host names accepted in addition to loopback names and
 	// the concrete listener host.
 	allowedHosts []string
@@ -87,6 +92,8 @@ func parseServeFlags(args []string) (serveOptions, error) {
 		"listener address (non-loopback is an explicit exposure opt-in)")
 	set.StringVar(&options.webDir, "web-dir", defaultWebDirectory,
 		"built static bundle to serve, or empty for JSON only")
+	set.StringVar(&options.tlsCert, "tls-cert", "", "PEM TLS certificate chain")
+	set.StringVar(&options.tlsKey, "tls-key", "", "PEM TLS private key")
 	set.Var((*stringList)(&options.allowedHosts), "allow-host",
 		"HTTP Host name accepted by the API (repeatable)")
 	set.Var((*stringList)(&options.allowedOrigins), "allow-origin",
@@ -110,21 +117,24 @@ func serveHelp(out io.Writer) {
 
 USAGE
   temporal-agents serve [--addr <host:port>] [--web-dir <path>]
+                          [--tls-cert <path> --tls-key <path>]
                           [--allow-host <host>]... [--allow-origin <origin>]...
 
 The API is served under /api/v1. Its OpenAPI contract is available at
 /api/v1/openapi.json and each versioned model schema under /api/v1/schemas.
 
 The API can expose workflow goals and prompts, so it binds to 127.0.0.1:8973 by
-default. A non-loopback --addr requires AGENT_HUB_AUTH_TOKEN. Requests must use a
-loopback Host, the concrete listener host, or a name listed with --allow-host. No
-cross-origin browser access is allowed by default; list each trusted frontend origin
-with --allow-origin.
+default. A non-loopback --addr requires TLS and a strong AGENT_HUB_AUTH_TOKEN.
+Requests must use a loopback Host, the concrete listener host, or a name listed with
+--allow-host. No cross-origin browser access is allowed by default; list each trusted
+frontend origin with --allow-origin.
 
 OPTIONS
   --addr <host:port>       Listener address (default 127.0.0.1:8973)
   --web-dir <path>         Built SPA directory for local convenience (default web/dist;
                            use --web-dir= for JSON only)
+  --tls-cert <path>        PEM TLS certificate chain (required outside loopback)
+  --tls-key <path>         PEM TLS private key (required outside loopback)
   --allow-host <host>      HTTP Host name accepted by the API (repeatable)
   --allow-origin <origin>  Browser origin allowed to call the API (repeatable)
 
@@ -132,14 +142,18 @@ ENVIRONMENT
   TEMPORAL_ADDRESS  Temporal server address (default localhost:17233)
   DATABASE_URL          Postgres connection string for execution records, plans, and
                         durable dismissals (required)
-  AGENT_HUB_AUTH_TOKEN  Bearer token (required for a non-loopback listener)
+  AGENT_HUB_AUTH_TOKEN  Bearer token of at least 32 characters (required outside
+                        loopback). Generate one with: openssl rand -base64 32
 
 EXAMPLES
   temporal-agents serve
   temporal-agents serve --web-dir=
   temporal-agents serve --allow-origin http://localhost:5173
-  AGENT_HUB_AUTH_TOKEN=secret temporal-agents serve --addr 0.0.0.0:8973 \
+  AGENT_HUB_AUTH_TOKEN="$(openssl rand -base64 32)" temporal-agents serve \
+    --addr 0.0.0.0:8973 --tls-cert hub.crt --tls-key hub.key \
     --allow-host hub.example.test
+  curl -H "Authorization: Bearer $AGENT_HUB_AUTH_TOKEN" \
+    https://hub.example.test:8973/api/v1
 `)
 }
 
@@ -158,8 +172,8 @@ func serveCmd(args []string) error {
 	return runAPIServer(options)
 }
 
-// serveSecurity derives the HTTP Host allowlist and enforces authentication when
-// the listener is not loopback.
+// serveSecurity derives the HTTP Host allowlist and enforces transport security
+// and authentication when the listener is not loopback.
 func serveSecurity(options serveOptions, configuredToken string) ([]string, string, error) {
 	host, _, err := net.SplitHostPort(options.address)
 	if err != nil {
@@ -170,8 +184,17 @@ func serveSecurity(options serveOptions, configuredToken string) ([]string, stri
 	if ip := net.ParseIP(host); ip != nil {
 		loopback = ip.IsLoopback()
 	}
+	if (options.tlsCert == "") != (options.tlsKey == "") {
+		return nil, "", errors.New("--tls-cert and --tls-key must be configured together")
+	}
+	if !loopback && (options.tlsCert == "" || options.tlsKey == "") {
+		return nil, "", errors.New("--tls-cert and --tls-key are required when --addr is not loopback")
+	}
 	if !loopback && token == "" {
 		return nil, "", fmt.Errorf("%s is required when --addr is not loopback", agentHubAuthTokenEnv)
+	}
+	if !loopback && len(token) < minimumAuthTokenBytes {
+		return nil, "", fmt.Errorf("%s must contain at least %d characters", agentHubAuthTokenEnv, minimumAuthTokenBytes)
 	}
 	hosts := append([]string(nil), options.allowedHosts...)
 	if host != "" {
@@ -184,7 +207,7 @@ func serveSecurity(options serveOptions, configuredToken string) ([]string, stri
 
 // localOrigins derives the server origins that browsers can use for the bundled
 // same-origin UI. They are explicit consequences of the listener and Host allowlist.
-func localOrigins(address string, allowedHosts []string) []string {
+func localOrigins(address string, allowedHosts []string, tls bool) []string {
 	listenerHost, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil
@@ -192,6 +215,10 @@ func localOrigins(address string, allowedHosts []string) []string {
 	hosts := append([]string(nil), allowedHosts...)
 	if ip := net.ParseIP(listenerHost); ip != nil && ip.IsLoopback() || strings.EqualFold(listenerHost, "localhost") {
 		hosts = append(hosts, "localhost", "127.0.0.1", "::1")
+	}
+	scheme := "http"
+	if tls {
+		scheme = "https"
 	}
 	seen := map[string]bool{}
 	origins := make([]string, 0, len(hosts))
@@ -203,7 +230,7 @@ func localOrigins(address string, allowedHosts []string) []string {
 		if host == "" {
 			continue
 		}
-		origin := "http://" + net.JoinHostPort(host, port)
+		origin := scheme + "://" + net.JoinHostPort(host, port)
 		if !seen[origin] {
 			seen[origin] = true
 			origins = append(origins, origin)
@@ -273,7 +300,7 @@ func runAPIServer(options serveOptions) error {
 		return err
 	}
 
-	allowedOrigins := append(localOrigins(options.address, allowedHosts), options.allowedOrigins...)
+	allowedOrigins := append(localOrigins(options.address, allowedHosts, options.tlsCert != ""), options.allowedOrigins...)
 	api, err := httpapi.New(service, httpapi.Options{
 		Logger:         slog.Default(),
 		AllowedHosts:   allowedHosts,
@@ -337,9 +364,14 @@ func runAPIServer(options serveOptions) error {
 
 	slog.Info("serving the Agent Hub API",
 		"address", options.address,
+		"tls", options.tlsCert != "",
 		"basePath", httpapi.BasePath,
 		"webDir", options.webDir)
-	err = server.ListenAndServe()
+	if options.tlsCert != "" {
+		err = server.ListenAndServeTLS(options.tlsCert, options.tlsKey)
+	} else {
+		err = server.ListenAndServe()
+	}
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve the Agent Hub API: %w", err)
 	}

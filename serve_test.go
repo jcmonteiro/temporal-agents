@@ -34,6 +34,8 @@ func TestParseServeFlagsMakesExposureExplicit(t *testing.T) {
 	got, err := parseServeFlags([]string{
 		"--addr", "0.0.0.0:9000",
 		"--web-dir=",
+		"--tls-cert", "/run/secrets/hub.crt",
+		"--tls-key", "/run/secrets/hub.key",
 		"--allow-host", "hub.example.test",
 		"--allow-origin", "http://localhost:5173",
 		"--allow-origin=https://hub.example.test",
@@ -46,6 +48,9 @@ func TestParseServeFlagsMakesExposureExplicit(t *testing.T) {
 	}
 	if got.webDir != "" {
 		t.Errorf("web directory = %q, want JSON-only", got.webDir)
+	}
+	if got.tlsCert != "/run/secrets/hub.crt" || got.tlsKey != "/run/secrets/hub.key" {
+		t.Errorf("TLS files = %q/%q, want the configured certificate and key", got.tlsCert, got.tlsKey)
 	}
 	if len(got.allowedHosts) != 1 || got.allowedHosts[0] != "hub.example.test" {
 		t.Errorf("allowed hosts = %v, want hub.example.test", got.allowedHosts)
@@ -80,24 +85,49 @@ func TestParseServeFlagsRefusesAmbiguousInput(t *testing.T) {
 	}
 }
 
-// TestServeSecurityRequiresAuthenticationOutsideLoopback pins the composition
-// rule: widening the listener without a bearer token is a startup error.
-func TestServeSecurityRequiresAuthenticationOutsideLoopback(t *testing.T) {
+// TestServeSecurityRequiresTLSAndStrongAuthenticationOutsideLoopback pins the
+// composition rule: widening the listener without transport encryption and a
+// strong bearer token is a startup error.
+func TestServeSecurityRequiresTLSAndStrongAuthenticationOutsideLoopback(t *testing.T) {
 	if _, _, err := serveSecurity(serveOptions{address: defaultServeAddress}, ""); err != nil {
 		t.Fatalf("loopback without a token: %v", err)
 	}
-	if _, _, err := serveSecurity(serveOptions{address: "0.0.0.0:8973"}, ""); err == nil {
-		t.Fatal("non-loopback without a token = nil error, want a refusal")
+	strongToken := "4f6ca3caa8c794b3b4ad03f88c7bd31df905090339e39b80"
+	cases := map[string]struct {
+		options serveOptions
+		token   string
+	}{
+		"missing token": {
+			options: serveOptions{address: "0.0.0.0:8973", tlsCert: "hub.crt", tlsKey: "hub.key"},
+		},
+		"weak token": {
+			options: serveOptions{address: "0.0.0.0:8973", tlsCert: "hub.crt", tlsKey: "hub.key"}, token: "secret",
+		},
+		"missing certificate": {
+			options: serveOptions{address: "0.0.0.0:8973", tlsKey: "hub.key"}, token: strongToken,
+		},
+		"missing private key": {
+			options: serveOptions{address: "0.0.0.0:8973", tlsCert: "hub.crt"}, token: strongToken,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := serveSecurity(tc.options, tc.token); err == nil {
+				t.Fatal("serveSecurity = nil error, want a refusal")
+			}
+		})
 	}
 
 	hosts, token, err := serveSecurity(serveOptions{
 		address:      "192.0.2.10:8973",
+		tlsCert:      "hub.crt",
+		tlsKey:       "hub.key",
 		allowedHosts: []string{"hub.example.test"},
-	}, " secret ")
+	}, " "+strongToken+" ")
 	if err != nil {
-		t.Fatalf("authenticated non-loopback: %v", err)
+		t.Fatalf("authenticated TLS non-loopback: %v", err)
 	}
-	if token != "secret" {
+	if token != strongToken {
 		t.Errorf("token = %q, want trimmed configured token", token)
 	}
 	want := map[string]bool{"192.0.2.10": true, "hub.example.test": true}
@@ -109,10 +139,25 @@ func TestServeSecurityRequiresAuthenticationOutsideLoopback(t *testing.T) {
 	}
 }
 
+// TestServeSecurityRequiresACompleteOptionalTLSPair pins that loopback TLS is
+// allowed, but an accidental half-configuration is not silently served as HTTP.
+func TestServeSecurityRequiresACompleteOptionalTLSPair(t *testing.T) {
+	for name, options := range map[string]serveOptions{
+		"certificate only": {address: defaultServeAddress, tlsCert: "hub.crt"},
+		"key only":         {address: defaultServeAddress, tlsKey: "hub.key"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := serveSecurity(options, ""); err == nil {
+				t.Fatal("serveSecurity = nil error, want a refusal")
+			}
+		})
+	}
+}
+
 // TestLocalOriginsAllowsTheBundledUIOnLoopback pins that strict Origin rejection
 // does not block a dismissal submitted by the same server's static UI.
 func TestLocalOriginsAllowsTheBundledUIOnLoopback(t *testing.T) {
-	origins := localOrigins(defaultServeAddress, []string{"hub.example.test"})
+	origins := localOrigins(defaultServeAddress, []string{"hub.example.test"}, false)
 	want := map[string]bool{
 		"http://127.0.0.1:8973":        true,
 		"http://localhost:8973":        true,
@@ -124,6 +169,17 @@ func TestLocalOriginsAllowsTheBundledUIOnLoopback(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Errorf("local origins = %v, missing %v", origins, want)
+	}
+}
+
+// TestLocalOriginsUseHTTPSWhenTLSIsConfigured pins that the bundled UI is never
+// told to call the encrypted listener through a plaintext origin.
+func TestLocalOriginsUseHTTPSWhenTLSIsConfigured(t *testing.T) {
+	origins := localOrigins(defaultServeAddress, nil, true)
+	for _, origin := range origins {
+		if !strings.HasPrefix(origin, "https://") {
+			t.Errorf("TLS origin = %q, want https", origin)
+		}
 	}
 }
 
@@ -140,8 +196,12 @@ func TestServeHelpExplainsTheSecurityBoundary(t *testing.T) {
 		"TEMPORAL_ADDRESS",
 		"--allow-origin",
 		"--allow-host",
+		"--tls-cert",
+		"--tls-key",
 		agentHubAuthTokenEnv,
 		"non-loopback --addr requires",
+		"openssl rand",
+		"https://hub.example.test",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("help does not contain %q:\n%s", want, out.String())
