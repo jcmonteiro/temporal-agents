@@ -93,6 +93,7 @@ func TestPromptWorkflow_Complete_RecordsStartAndTerminalState(t *testing.T) {
 	require.Equal(t, "schedule-7", start.ScheduleID)
 	require.NotEmpty(t, start.WorkflowID)
 	require.NotEmpty(t, start.RunID)
+	require.NotEmpty(t, start.FirstRunID)
 	require.False(t, start.StartedAt.IsZero())
 	require.True(t, start.EndedAt.IsZero())
 	require.Zero(t, start.Tokens)

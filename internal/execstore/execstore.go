@@ -121,6 +121,10 @@ type Execution struct {
 	// key every write upserts on so a retried activity neither duplicates a row
 	// nor corrupts an existing one.
 	RunID string
+	// FirstRunID is Temporal's first run ID for the execution chain. It stays the
+	// same across continue-as-new iterations but changes for each schedule firing,
+	// even when those firings reuse one workflow ID.
+	FirstRunID string
 	// Kind is the command type that produced the record.
 	Kind Kind
 	// Prompt is what was asked: the run's prompt, the develop instruction, or the
@@ -326,20 +330,59 @@ type ExecutionReader interface {
 	ListExecutions(ctx context.Context, f Filter) ([]Execution, error)
 }
 
-// PlanStore is the port for the fleet plan store. Like execution recording it is
-// authoritative rather than best-effort: a failed read or write is reported and
-// aborts the operation, never silently swallowed, because the store is the only
-// source of truth for a plan.
-//
-// SavePlan must be idempotent on Plan.ID for the same reason SaveExecution is: it
-// is driven from an activity Temporal may retry.
-type PlanStore interface {
-	// SavePlan inserts or updates the plan under p.ID.
-	SavePlan(ctx context.Context, p Plan) error
+// ChainFilter selects execution-chain resources. The adapter applies Limit to
+// workflow IDs and only then loads every iteration for those IDs. It also loads
+// RequiredWorkflowIDs in full when they are outside that normal page.
+type ChainFilter struct {
+	Kinds               []Kind
+	WorkflowID          string
+	RequiredWorkflowIDs []string
+	ExcludedWorkflowIDs []string
+	Limit               int
+}
+
+// ExecutionChain is one fully aggregated continue-as-new chain.
+type ExecutionChain struct {
+	Latest     Execution
+	StartedAt  time.Time
+	Iterations int
+	Tokens     int
+}
+
+// ExecutionTree is one selected root chain and its direct child records.
+type ExecutionTree struct {
+	Chain      ExecutionChain
+	Executions []Execution
+}
+
+// OverviewReader is the purpose-built read port for resource collections. It
+// prevents a limit on execution rows from being mistaken for a limit on chains.
+type OverviewReader interface {
+	ListExecutionChains(ctx context.Context, filter ChainFilter) ([]ExecutionChain, error)
+	ListExecutionTrees(ctx context.Context, filter ChainFilter) ([]ExecutionTree, error)
+	ListScheduleActionChains(ctx context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]ExecutionChain, error)
+}
+
+// PlanReader is the read-only half of the authoritative fleet plan store.
+type PlanReader interface {
 	// Plan resolves a plan by its handle, returning ErrNoSuchPlan when there is
 	// none.
 	Plan(ctx context.Context, id string) (Plan, error)
-	// ListPlans returns the stored plans, newest first, capped at limit (a
-	// non-positive limit falls back to DefaultPlanLimit).
+	// Plans resolves all existing handles in one read, keyed by handle.
+	Plans(ctx context.Context, ids []string) (map[string]Plan, error)
+	// ListPlans returns the stored plans, newest first, capped at limit.
 	ListPlans(ctx context.Context, limit int) ([]Plan, error)
+}
+
+// PlanWriter is the write-only half used by workflow activities.
+type PlanWriter interface {
+	// SavePlan inserts or updates the plan under p.ID. It must be idempotent because
+	// Temporal can retry the activity after a successful write.
+	SavePlan(ctx context.Context, p Plan) error
+}
+
+// PlanStore combines plan reads and writes for callers that own both operations.
+type PlanStore interface {
+	PlanReader
+	PlanWriter
 }

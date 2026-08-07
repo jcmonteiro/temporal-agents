@@ -1,0 +1,384 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"temporal-agents/internal/agenthub"
+	"temporal-agents/internal/agenthub/hubpg"
+	"temporal-agents/internal/agenthub/hubrecords"
+	"temporal-agents/internal/agenthub/hubtemporal"
+	"temporal-agents/internal/httpapi"
+)
+
+// The serve command is the composition root for the Agent Hub API. The core and
+// every adapter stay unaware of each other until here: the orchestration client is
+// put behind the live ports, the execution store behind the record and plan ports,
+// Postgres behind the dismissal port, and the application service behind the HTTP
+// driving port. That is the only dependency direction a hexagonal application
+// permits — adapters point inward, never the core outward.
+
+// serveDefaults are safe for an API that contains workflow goals and prompts. A
+// non-loopback address is possible only with an explicit --addr and a bearer token;
+// no environment variable can widen the bind by accident.
+const (
+	defaultServeAddress   = "127.0.0.1:8973"
+	defaultWebDirectory   = "web/dist"
+	agentHubAuthTokenEnv  = "AGENT_HUB_AUTH_TOKEN"
+	minimumAuthTokenBytes = 32
+)
+
+// HTTP server budgets. The handler has its own request deadline; these additionally
+// protect the protocol edges before and after a handler runs.
+const (
+	serveReadHeaderTimeout = 5 * time.Second
+	serveReadTimeout       = 35 * time.Second
+	serveWriteTimeout      = 35 * time.Second
+	serveIdleTimeout       = 2 * time.Minute
+	serveShutdownTimeout   = 10 * time.Second
+)
+
+// serveOptions are the parsed command options.
+type serveOptions struct {
+	// address is the listener address. It defaults to loopback.
+	address string
+	// webDir is the independently-built static bundle to serve for local
+	// convenience, or empty to serve only JSON.
+	webDir string
+	// tlsCert and tlsKey are the PEM certificate chain and private key. Both are
+	// mandatory for a non-loopback listener.
+	tlsCert string
+	tlsKey  string
+	// allowedHosts are HTTP Host names accepted in addition to loopback names and
+	// the concrete listener host.
+	allowedHosts []string
+	// allowedOrigins are the browser origins explicitly allowed to read the API.
+	allowedOrigins []string
+}
+
+// stringList is a repeatable flag value, used for --allow-origin. Repetition is
+// clearer than a comma-separated value because an origin itself has punctuation.
+type stringList []string
+
+func (s *stringList) String() string { return strings.Join(*s, ",") }
+
+func (s *stringList) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return errors.New("the value must not be empty")
+	}
+	*s = append(*s, value)
+	return nil
+}
+
+// parseServeFlags parses the additive serve command without touching process-global
+// flags, so the whole CLI contract is reachable from a unit test.
+func parseServeFlags(args []string) (serveOptions, error) {
+	var options serveOptions
+	set := flag.NewFlagSet("serve", flag.ContinueOnError)
+	set.SetOutput(io.Discard)
+	set.StringVar(&options.address, "addr", defaultServeAddress,
+		"listener address (non-loopback is an explicit exposure opt-in)")
+	set.StringVar(&options.webDir, "web-dir", defaultWebDirectory,
+		"built static bundle to serve, or empty for JSON only")
+	set.StringVar(&options.tlsCert, "tls-cert", "", "PEM TLS certificate chain")
+	set.StringVar(&options.tlsKey, "tls-key", "", "PEM TLS private key")
+	set.Var((*stringList)(&options.allowedHosts), "allow-host",
+		"HTTP Host name accepted by the API (repeatable)")
+	set.Var((*stringList)(&options.allowedOrigins), "allow-origin",
+		"browser origin allowed to call the API (repeatable; no wildcard)")
+	if err := set.Parse(args); err != nil {
+		return serveOptions{}, err
+	}
+	if set.NArg() != 0 {
+		return serveOptions{}, fmt.Errorf("serve accepts no positional arguments: %q", set.Arg(0))
+	}
+	if strings.TrimSpace(options.address) == "" {
+		return serveOptions{}, errors.New("--addr must not be empty")
+	}
+	return options, nil
+}
+
+// serveHelp writes the command's usage without exiting, so help is testable and the
+// caller decides the process outcome.
+func serveHelp(out io.Writer) {
+	fmt.Fprint(out, `temporal-agents serve — serve the Agent Hub REST API
+
+USAGE
+  temporal-agents serve [--addr <host:port>] [--web-dir <path>]
+                          [--tls-cert <path> --tls-key <path>]
+                          [--allow-host <host>]... [--allow-origin <origin>]...
+
+The API is served under /api/v1. Its OpenAPI contract is available at
+/api/v1/openapi.json and each versioned model schema under /api/v1/schemas.
+
+The API can expose workflow goals and prompts, so it binds to 127.0.0.1:8973 by
+default. A non-loopback --addr requires TLS and a strong AGENT_HUB_AUTH_TOKEN.
+Requests must use a loopback Host, the concrete listener host, or a name listed with
+--allow-host. No cross-origin browser access is allowed by default; list each trusted
+frontend origin with --allow-origin.
+
+OPTIONS
+  --addr <host:port>       Listener address (default 127.0.0.1:8973)
+  --web-dir <path>         Built SPA directory for local convenience (default web/dist;
+                           use --web-dir= for JSON only)
+  --tls-cert <path>        PEM TLS certificate chain (required outside loopback)
+  --tls-key <path>         PEM TLS private key (required outside loopback)
+  --allow-host <host>      HTTP Host name accepted by the API (repeatable)
+  --allow-origin <origin>  Browser origin allowed to call the API (repeatable)
+
+ENVIRONMENT
+  TEMPORAL_ADDRESS  Temporal server address (default localhost:17233)
+  DATABASE_URL          Postgres connection string for execution records, plans, and
+                        durable dismissals (required)
+  AGENT_HUB_AUTH_TOKEN  Bearer token of at least 32 characters (required outside
+                        loopback). Generate one with: openssl rand -base64 32
+
+EXAMPLES
+  temporal-agents serve
+  temporal-agents serve --web-dir=
+  temporal-agents serve --allow-origin http://localhost:5173
+  AGENT_HUB_AUTH_TOKEN="$(openssl rand -base64 32)" temporal-agents serve \
+    --addr 0.0.0.0:8973 --tls-cert hub.crt --tls-key hub.key \
+    --allow-host hub.example.test
+  curl -H "Authorization: Bearer $AGENT_HUB_AUTH_TOKEN" \
+    https://hub.example.test:8973/api/v1
+`)
+}
+
+// serveCmd runs the API until the process is interrupted. It returns setup and
+// shutdown failures instead of exiting, so main owns the process boundary and tests
+// can reach the parsing separately.
+func serveCmd(args []string) error {
+	if wantsHelp(args) {
+		serveHelp(os.Stdout)
+		return nil
+	}
+	options, err := parseServeFlags(args)
+	if err != nil {
+		return err
+	}
+	return runAPIServer(options)
+}
+
+// serveSecurity derives the HTTP Host allowlist and enforces transport security
+// and authentication when the listener is not loopback.
+func serveSecurity(options serveOptions, configuredToken string) ([]string, string, error) {
+	host, _, err := net.SplitHostPort(options.address)
+	if err != nil {
+		return nil, "", fmt.Errorf("parse --addr: %w", err)
+	}
+	token := strings.TrimSpace(configuredToken)
+	loopback := strings.EqualFold(host, "localhost")
+	if ip := net.ParseIP(host); ip != nil {
+		loopback = ip.IsLoopback()
+	}
+	if (options.tlsCert == "") != (options.tlsKey == "") {
+		return nil, "", errors.New("--tls-cert and --tls-key must be configured together")
+	}
+	if !loopback && (options.tlsCert == "" || options.tlsKey == "") {
+		return nil, "", errors.New("--tls-cert and --tls-key are required when --addr is not loopback")
+	}
+	if !loopback && token == "" {
+		return nil, "", fmt.Errorf("%s is required when --addr is not loopback", agentHubAuthTokenEnv)
+	}
+	if !loopback && len(token) < minimumAuthTokenBytes {
+		return nil, "", fmt.Errorf("%s must contain at least %d characters", agentHubAuthTokenEnv, minimumAuthTokenBytes)
+	}
+	hosts := append([]string(nil), options.allowedHosts...)
+	if host != "" {
+		if ip := net.ParseIP(host); ip == nil || !ip.IsUnspecified() {
+			hosts = append(hosts, host)
+		}
+	}
+	return hosts, token, nil
+}
+
+// localOrigins derives the server origins that browsers can use for the bundled
+// same-origin UI. They are explicit consequences of the listener and Host allowlist.
+func localOrigins(address string, allowedHosts []string, tls bool) []string {
+	listenerHost, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil
+	}
+	hosts := append([]string(nil), allowedHosts...)
+	if ip := net.ParseIP(listenerHost); ip != nil && ip.IsLoopback() || strings.EqualFold(listenerHost, "localhost") {
+		hosts = append(hosts, "localhost", "127.0.0.1", "::1")
+	}
+	scheme := "http"
+	if tls {
+		scheme = "https"
+	}
+	seen := map[string]bool{}
+	origins := make([]string, 0, len(hosts))
+	for _, host := range hosts {
+		if parsedHost, _, splitErr := net.SplitHostPort(host); splitErr == nil {
+			host = parsedHost
+		}
+		host = strings.Trim(strings.TrimSpace(host), "[]")
+		if host == "" {
+			continue
+		}
+		origin := scheme + "://" + net.JoinHostPort(host, port)
+		if !seen[origin] {
+			seen[origin] = true
+			origins = append(origins, origin)
+		}
+	}
+	return origins
+}
+
+// runAPIServer wires every port and runs the HTTP server.
+func runAPIServer(options serveOptions) error {
+	allowedHosts, authToken, err := serveSecurity(options, os.Getenv(agentHubAuthTokenEnv))
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+
+	// Open the execution record as read-only. Its schema remains worker-owned: if no
+	// worker has applied it yet, health and resource reads report the dependency as
+	// unavailable rather than the API silently creating workflow-owned tables.
+	recordStore, err := openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer recordStore.Close()
+
+	// Dismissals are API-owned, so this process applies their schema at startup.
+	dsn, err := databaseURL()
+	if err != nil {
+		return err
+	}
+	dismissals, err := hubpg.Open(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("could not reach the dismissal store: %w", err)
+	}
+	defer dismissals.Close()
+	migrateCtx, cancelMigrate := context.WithTimeout(ctx, storeMigrateTimeout)
+	defer cancelMigrate()
+	if err := dismissals.Migrate(migrateCtx); err != nil {
+		return fmt.Errorf("could not apply the dismissal store schema: %w", err)
+	}
+
+	orchestrator, err := connectTemporal()
+	if err != nil {
+		return err
+	}
+	defer orchestrator.Close()
+	live, err := hubtemporal.NewExecutions(orchestrator)
+	if err != nil {
+		return err
+	}
+	schedules, err := hubtemporal.NewSchedules(orchestrator.ScheduleClient())
+	if err != nil {
+		return err
+	}
+	records, err := hubrecords.New(recordStore, recordStore)
+	if err != nil {
+		return err
+	}
+	service, err := agenthub.NewService(agenthub.Dependencies{
+		Live:        live,
+		Collections: records,
+		Plans:       records,
+		Schedules:   schedules,
+		Dismissals:  dismissals,
+	})
+	if err != nil {
+		return err
+	}
+
+	allowedOrigins := append(localOrigins(options.address, allowedHosts, options.tlsCert != ""), options.allowedOrigins...)
+	api, err := httpapi.New(service, httpapi.Options{
+		Logger:         slog.Default(),
+		AllowedHosts:   allowedHosts,
+		AllowedOrigins: allowedOrigins,
+		AuthToken:      authToken,
+		WebDir:         options.webDir,
+		HealthChecks: []httpapi.HealthCheck{
+			{
+				Name: "temporal",
+				Check: func(ctx context.Context) error {
+					if _, err := live.RunningExecutions(ctx, 1); err != nil {
+						return err
+					}
+					_, err := schedules.Schedules(ctx, 1)
+					return err
+				},
+			},
+			{
+				Name: "execution-store",
+				Check: func(ctx context.Context) error {
+					if _, err := records.RecordedExecutions(ctx, agenthub.RecordQuery{Limit: 1}); err != nil {
+						return err
+					}
+					_, err := recordStore.ListPlans(ctx, 1)
+					return err
+				},
+			},
+			{
+				Name: "dismissal-store",
+				Check: func(ctx context.Context) error {
+					_, err := dismissals.Dismissals(ctx)
+					return err
+				},
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	server := &http.Server{
+		Addr:              options.address,
+		Handler:           api,
+		ReadHeaderTimeout: serveReadHeaderTimeout,
+		ReadTimeout:       serveReadTimeout,
+		WriteTimeout:      serveWriteTimeout,
+		IdleTimeout:       serveIdleTimeout,
+	}
+
+	// A signal cancels the serve context and starts a bounded graceful shutdown, so
+	// an in-flight read finishes but the process can never wait forever.
+	signalCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	shutdownDone := make(chan error, 1)
+	go func() {
+		<-signalCtx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), serveShutdownTimeout)
+		defer cancel()
+		shutdownDone <- server.Shutdown(shutdownCtx)
+	}()
+
+	slog.Info("serving the Agent Hub API",
+		"address", options.address,
+		"tls", options.tlsCert != "",
+		"basePath", httpapi.BasePath,
+		"webDir", options.webDir)
+	if options.tlsCert != "" {
+		err = server.ListenAndServeTLS(options.tlsCert, options.tlsKey)
+	} else {
+		err = server.ListenAndServe()
+	}
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("serve the Agent Hub API: %w", err)
+	}
+	if signalCtx.Err() != nil {
+		if shutdownErr := <-shutdownDone; shutdownErr != nil {
+			return fmt.Errorf("shut down the Agent Hub API: %w", shutdownErr)
+		}
+	}
+	return nil
+}

@@ -57,6 +57,7 @@ func PromptWorkflow(ctx workflow.Context, req PromptRequest) (out string, err er
 	rec := RunState{
 		WorkflowID:       id.WorkflowID,
 		RunID:            id.RunID,
+		FirstRunID:       id.FirstRunID,
 		ParentWorkflowID: id.ParentWorkflowID,
 		Prompt:           req.Prompt,
 		ScheduleID:       req.ScheduleID,

@@ -67,6 +67,30 @@ func (p *Postgres) Plan(ctx context.Context, id string) (execstore.Plan, error) 
 	return plan, nil
 }
 
+// Plans resolves all existing handles in one read, keyed by handle.
+func (p *Postgres) Plans(ctx context.Context, ids []string) (map[string]execstore.Plan, error) {
+	out := make(map[string]execstore.Plan, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := p.pool.Query(ctx, "SELECT "+planColumns+" FROM plans WHERE id = ANY($1::text[])", ids)
+	if err != nil {
+		return nil, readError("read fleet plans", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		plan, err := scanPlan(rows)
+		if err != nil {
+			return nil, readError("read fleet plans", err)
+		}
+		out[plan.ID] = plan
+	}
+	if err := rows.Err(); err != nil {
+		return nil, readError("read fleet plans", err)
+	}
+	return out, nil
+}
+
 // ListPlans returns the stored plans, newest first.
 func (p *Postgres) ListPlans(ctx context.Context, limit int) ([]execstore.Plan, error) {
 	// The port's own limit rule (default and cap alike), so the protection does not

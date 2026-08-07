@@ -57,6 +57,9 @@ type Identity struct {
 	// RunID is unique per continue-as-new iteration and is the key each write
 	// upserts on.
 	RunID string
+	// FirstRunID identifies the whole continue-as-new chain. Unlike WorkflowID, it
+	// changes when a schedule starts a new firing with the same workflow ID.
+	FirstRunID string
 	// ParentWorkflowID is the workflow that started this one as a child, or empty
 	// for a top-level execution.
 	ParentWorkflowID string
@@ -71,6 +74,12 @@ func Of(ctx workflow.Context) Identity {
 	id := Identity{
 		WorkflowID: info.WorkflowExecution.ID,
 		RunID:      info.WorkflowExecution.RunID,
+		FirstRunID: info.FirstRunID,
+	}
+	if id.FirstRunID == "" {
+		// Older test environments and legacy histories can omit this field. A single
+		// run is still a valid one-iteration chain, so its own ID is the safe identity.
+		id.FirstRunID = id.RunID
 	}
 	// ParentWorkflowExecution is nil for a top-level execution, which is the normal
 	// case for every standalone command.

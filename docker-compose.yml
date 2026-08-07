@@ -25,7 +25,8 @@ services:
     volumes:
       - temporal-storage:/data
 
-  # Durable execution history and fleet plan store (see internal/execstore).
+  # Durable execution history, fleet plans, and Agent Hub dismissals (see
+  # internal/execstore and internal/agenthub/hubpg).
   # It is deliberately separate from Temporal's own datastore: Temporal ages out
   # completed executions, so the recorded history must outlive it (and survive a
   # Temporal-scoped state wipe). Non-default host port 15432 avoids colliding

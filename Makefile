@@ -1,6 +1,6 @@
 BINARY := temporal-agents
 
-.PHONY: build install uninstall setup fmt test
+.PHONY: build install uninstall setup fmt lint test
 
 # Build the binary into the current directory.
 build:
@@ -32,6 +32,15 @@ setup:
 fmt:
 	gofmt -w .
 
+# Check formatting and run the Go static analyzer without changing files.
+lint:
+	@test -z "$$(gofmt -l .)" || { \
+		echo "The following files are not gofmt-formatted:"; \
+		gofmt -l .; \
+		exit 1; \
+	}
+	go vet ./...
+
 # Run every test, integration suites included. The execstore adapter suite starts
 # its own throwaway Postgres with testcontainers-go, so it needs a running Docker
 # daemon but no setup, no environment variable and no compose service — and it
@@ -39,6 +48,8 @@ fmt:
 #
 # The flags are the ones CI uses, so a green run locally means what a green run in
 # CI means: -race catches the data races a workflow's concurrent activities can
-# introduce, and -shuffle=on catches tests that depend on their order.
+# introduce, and -shuffle=on catches tests that depend on their order. The
+# execstore and Agent Hub dismissal adapters each start their own throwaway
+# Postgres with testcontainers-go.
 test:
 	go test -race -shuffle=on ./...

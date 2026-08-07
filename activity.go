@@ -37,6 +37,9 @@ type RunState struct {
 	// brings its own run ID, which is the key the write upserts on.
 	WorkflowID string
 	RunID      string
+	// FirstRunID identifies one complete execution chain and distinguishes schedule
+	// firings that reuse the same workflow ID.
+	FirstRunID string
 	// ParentWorkflowID is set when this run was started as a child workflow, and
 	// empty for the usual top-level run.
 	ParentWorkflowID string
@@ -77,6 +80,7 @@ func (a *Activities) PersistRunWorkflowState(ctx context.Context, in RunState) e
 	return a.Store.SaveExecution(ctx, execstore.Execution{
 		WorkflowID:       in.WorkflowID,
 		RunID:            in.RunID,
+		FirstRunID:       in.FirstRunID,
 		Kind:             execstore.KindRun,
 		Prompt:           wfrecord.Sanitize(in.Prompt),
 		StartedAt:        in.StartedAt,

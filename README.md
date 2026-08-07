@@ -48,6 +48,14 @@ make setup          # optional: enable git hooks (gofmt on commit)
    temporal-agents history
    ```
 
+5. Optionally serve the Agent Hub REST API and a built `web/dist` bundle:
+
+   ```sh
+   temporal-agents serve
+   # API entry point: http://127.0.0.1:8973/api/v1
+   # OpenAPI:        http://127.0.0.1:8973/api/v1/openapi.json
+   ```
+
 The CLI connects to `localhost:17233` by default. Override with `TEMPORAL_ADDRESS`.
 
 ### Durable execution history
@@ -93,10 +101,34 @@ cannot record its *outcome* keeps its result and reports the bookkeeping failure
 | `watch <workflow-id>` | Stream a workflow's live Pi progress, then its result. |
 | `list` | List running workflows and schedules (fleet parents and per-node children included). |
 | `history [--kind <k>] [--limit <n>] [--workflow-id <id>] [--schedule-id <id>]` | List durably recorded executions, newest first. |
+| `serve [--addr <host:port>] [--web-dir <path>] [--allow-host <host>]... [--allow-origin <origin>]...` | Serve the versioned Agent Hub REST API and, optionally, an independently built SPA. |
 
 Common flags: `--save <name>` stores the invocation as a reusable template; `--chain` re-triggers `run`/`schedule` on each success (`code pilot` chains by default, disable with `--no-chain`); `--summary` (code subcommands only) sends a Pi-generated summary as the webhook body, and on `fleet execute` propagates that behavior to each node's develop workflow.
 
 Run any command with `--help` for details, e.g. `temporal-agents code develop --help`.
+
+### Agent Hub REST API
+
+`serve` adds a local API without changing worker or CLI command behavior. It exposes
+portable resources under `/api/v1`:
+
+- `GET /api/v1/fleets` and `GET /api/v1/fleets/{id}`
+- `GET /api/v1/runs` and `GET /api/v1/runs/{id}`
+- `GET /api/v1/schedules`
+- `GET|POST /api/v1/dismissals` and `DELETE /api/v1/dismissals/{id}`
+
+The server joins live Temporal state with the durable execution and plan record.
+Finished items remain visible until dismissed. A dismissal is Postgres-backed view
+state and never changes workflow state. Continue-as-new iterations are one run
+resource identified by workflow ID.
+
+The API binds to `127.0.0.1:8973` by default and accepts only configured HTTP Host
+names. A non-loopback `--addr` requires `--tls-cert`, `--tls-key`, and a strong
+`AGENT_HUB_AUTH_TOKEN`; remote clients send the token only over HTTPS. Additional Host
+names use `--allow-host`. Each cross-origin browser
+origin requires an exact `--allow-origin`; other supplied origins are rejected. The
+contract is OpenAPI 3.1; versioned standalone JSON Schemas and resolvable problem types
+are served with it. See [the REST API guide](docs/rest-api.md).
 
 ### Fleet fan-out
 
@@ -144,9 +176,10 @@ every node it depends on has been both developed and reviewed.
 make test   # every test, integration suites included
 ```
 
-The `execstore` adapter is tested against a real Postgres, since the database and
-its schema are the out-of-process dependency under test. That suite starts its own
-throwaway Postgres with [testcontainers-go](https://golang.testcontainers.org/),
+The `execstore` and Agent Hub dismissal adapters are tested against a real
+Postgres, since the database and its schema are the out-of-process dependency under
+test. Those suites start throwaway Postgres instances with
+[testcontainers-go](https://golang.testcontainers.org/),
 so it needs a running Docker daemon but no setup and no environment variable — and
 it never touches the `temporal_agents` database you work in. Each test gets a fresh
 database inside the container, so no test can see another's rows.
@@ -168,8 +201,8 @@ dev values, and the store holds prompts, agent output, PR links and verbatim
 failure text, so the loopback binding is what keeps it off the network.
 
 Avoid `docker compose down -v`: it removes **every** named volume, so it wipes
-the recorded execution history and stored fleet plans along with Temporal's
-state. To reset Temporal only, recreate that one service:
+the recorded execution history, stored fleet plans, and Agent Hub dismissals along
+with Temporal's state. To reset Temporal only, recreate that one service:
 
 ```sh
 docker compose rm -sv temporal    # wipe Temporal state, keep the Postgres volume
