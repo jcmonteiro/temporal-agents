@@ -85,7 +85,7 @@ func (v *viewStub) ActiveWork(_ context.Context, query agenthub.PageQuery) (agen
 		}
 	}
 	for _, schedule := range v.schedules {
-		all = append(all, agenthub.ActiveWorkItem{ID: schedule.ID, Type: agenthub.ActiveWorkSchedule, Status: schedule.Status, Running: schedule.RunningActions > 0})
+		all = append(all, agenthub.ActiveWorkItem{ID: schedule.ID, Type: agenthub.ActiveWorkSchedule, Status: schedule.Status})
 	}
 	offset := 0
 	if len(query.Cursor) > 0 {
@@ -268,7 +268,7 @@ func TestActiveWorkPublishesAnAdditivePagedResource(t *testing.T) {
 	view := &viewStub{
 		fleets: []agenthub.Fleet{
 			{ID: "fleet-finished", Status: agenthub.StatusDone},
-			{ID: "fleet-running", Running: true, Status: agenthub.StatusFailed},
+			{ID: "fleet-running", Running: true, Status: agenthub.StatusInProgress},
 		},
 		runs: []agenthub.Run{{
 			ID: "review-running", Type: agenthub.RunTypeReview,
@@ -283,8 +283,8 @@ func TestActiveWorkPublishesAnAdditivePagedResource(t *testing.T) {
 	}
 	var first activeWorkCollection
 	decodeResponse(t, response, &first)
-	if len(first.Items) != 1 || first.Items[0].ID != "fleet-running" || !first.Items[0].Running || first.Next == nil {
-		t.Fatalf("first active-work page = %+v, want the running failed fleet and a next link", first)
+	if len(first.Items) != 1 || first.Items[0].ID != "fleet-running" || first.Items[0].Status != agenthub.StatusInProgress || !first.Items[0].Running || first.Next == nil {
+		t.Fatalf("first active-work page = %+v, want the in-progress fleet and a next link", first)
 	}
 
 	response = request(t, server, http.MethodGet, *first.Next, nil)

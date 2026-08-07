@@ -37,7 +37,7 @@ func TestClientOverviewReadsEveryActiveWorkPage(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		pages.Add(1)
 		if r.URL.Query().Get("cursor") == "" {
-			_, _ = fmt.Fprint(w, `{"items":[{"id":"fleet-1","type":"fleet","status":"failed","running":true}],"count":1,"limit":200,"next":"/api/v1/active-work?cursor=page-2&limit=200"}`)
+			_, _ = fmt.Fprint(w, `{"items":[{"id":"fleet-1","type":"fleet","status":"in-progress","running":true}],"count":1,"limit":200,"next":"/api/v1/active-work?cursor=page-2&limit=200"}`)
 			return
 		}
 		_, _ = fmt.Fprint(w, `{"items":[{"id":"schedule-1","type":"schedule","status":"todo","running":false}],"count":1,"limit":200,"next":null}`)
@@ -52,7 +52,7 @@ func TestClientOverviewReadsEveryActiveWorkPage(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(2), pages.Load())
 	require.Equal(t, []workoverview.Item{
-		{ID: "fleet-1", Kind: workoverview.KindFleet, Status: workoverview.StatusFailed, Running: true},
+		{ID: "fleet-1", Kind: workoverview.KindFleet, Status: workoverview.StatusInProgress, Running: true},
 		{ID: "schedule-1", Kind: workoverview.KindSchedule, Status: workoverview.StatusTodo},
 	}, items)
 }
@@ -150,6 +150,7 @@ func TestClientOverviewRejectsMalformedSuccessfulDocuments(t *testing.T) {
 		"incomplete item":     `{"items":[{"id":"fleet-1","type":"fleet"}],"count":1,"limit":200,"next":null}`,
 		"unknown item type":   `{"items":[{"id":"fleet-1","type":"job","status":"todo","running":true}],"count":1,"limit":200,"next":null}`,
 		"settled execution":   `{"items":[{"id":"fleet-1","type":"fleet","status":"done","running":false}],"count":1,"limit":200,"next":null}`,
+		"failed execution":    `{"items":[{"id":"fleet-1","type":"fleet","status":"failed","running":true}],"count":1,"limit":200,"next":null}`,
 		"newline in item ID":  `{"items":[{"id":"fleet-1\nforged","type":"fleet","status":"todo","running":true}],"count":1,"limit":200,"next":null}`,
 		"escape in item ID":   `{"items":[{"id":"fleet-1\u001b[2J","type":"fleet","status":"todo","running":true}],"count":1,"limit":200,"next":null}`,
 		"over-length item ID": fmt.Sprintf(`{"items":[{"id":"%s","type":"fleet","status":"todo","running":true}],"count":1,"limit":200,"next":null}`, strings.Repeat("x", 256)),

@@ -28,6 +28,7 @@ func TestValidateItemEnforcesTheActiveWorkContract(t *testing.T) {
 		{ID: "run-1\nforged", Kind: KindRun, Status: StatusInProgress, Running: true},
 		{ID: "run-1", Kind: Kind("job"), Status: StatusInProgress, Running: true},
 		{ID: "run-1", Kind: KindRun, Status: Status("unknown"), Running: true},
+		{ID: "run-1", Kind: KindRun, Status: StatusFailed, Running: true},
 		{ID: "run-1", Kind: KindRun, Status: StatusDone},
 		{ID: "schedule-1", Kind: KindSchedule, Status: StatusDone, Running: true},
 	}

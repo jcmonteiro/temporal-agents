@@ -85,7 +85,8 @@ type Item struct {
 // configuration and do not claim current action liveness.
 func ValidateItem(item Item) error {
 	if ValidateID(item.ID) != nil || !ValidKind(item.Kind) || !ValidStatus(item.Status) ||
-		(item.Kind == KindSchedule && item.Running) || (item.Kind != KindSchedule && !item.Running) {
+		(item.Kind == KindSchedule && item.Running) ||
+		(item.Kind != KindSchedule && (!item.Running || item.Status != StatusInProgress)) {
 		return errors.New("invalid work item")
 	}
 	return nil

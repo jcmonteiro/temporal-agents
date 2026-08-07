@@ -1626,7 +1626,39 @@
             "type": "boolean",
             "description": "Whether the top-level execution is unsettled. Schedule items are configuration and always use false."
           }
-        }
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "type": {
+                "const": "schedule"
+              },
+              "running": {
+                "const": false
+              }
+            }
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "fleet",
+                  "run",
+                  "develop",
+                  "review",
+                  "pilot",
+                  "fleet-plan"
+                ]
+              },
+              "status": {
+                "const": "in-progress"
+              },
+              "running": {
+                "const": true
+              }
+            }
+          }
+        ]
       },
       "ActiveWorkCollection": {
         "type": "object",
