@@ -16,7 +16,12 @@
       "description": "Default loopback server"
     }
   ],
-  "security": [],
+  "security": [
+    {},
+    {
+      "bearerAuth": []
+    }
+  ],
   "tags": [
     {
       "name": "Discovery",
@@ -58,6 +63,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
           },
@@ -91,6 +99,9 @@
           "304": {
             "$ref": "#/components/responses/NotModified"
           },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
           },
@@ -117,6 +128,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
@@ -153,6 +167,9 @@
           "304": {
             "$ref": "#/components/responses/NotModified"
           },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
           "404": {
             "$ref": "#/components/responses/NotFound"
           },
@@ -182,6 +199,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
@@ -215,6 +235,9 @@
               }
             }
           },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
           "404": {
             "$ref": "#/components/responses/NotFound"
           },
@@ -244,6 +267,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
@@ -302,6 +328,9 @@
           "400": {
             "$ref": "#/components/responses/InvalidRequest"
           },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
           },
@@ -351,6 +380,9 @@
           },
           "304": {
             "$ref": "#/components/responses/NotModified"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
@@ -408,6 +440,9 @@
           "400": {
             "$ref": "#/components/responses/InvalidRequest"
           },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
           },
@@ -456,6 +491,9 @@
           },
           "304": {
             "$ref": "#/components/responses/NotModified"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
@@ -513,6 +551,9 @@
           "400": {
             "$ref": "#/components/responses/InvalidRequest"
           },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
           },
@@ -556,6 +597,9 @@
           },
           "304": {
             "$ref": "#/components/responses/NotModified"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
           },
           "429": {
             "$ref": "#/components/responses/TooManyRequests"
@@ -609,6 +653,9 @@
           },
           "400": {
             "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
@@ -665,6 +712,9 @@
           },
           "400": {
             "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
@@ -842,6 +892,24 @@
       },
       "InternalError": {
         "description": "The server failed to handle the request.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "AuthenticationRequired": {
+        "description": "The deployment requires a valid bearer token.",
+        "headers": {
+          "WWW-Authenticate": {
+            "description": "Bearer authentication challenge.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
         "content": {
           "application/problem+json": {
             "schema": {
@@ -1456,6 +1524,14 @@
             "type": "object"
           }
         }
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque token",
+        "description": "Optional on a loopback-only deployment. Required on every request when the API is reachable from another host."
       }
     }
   }

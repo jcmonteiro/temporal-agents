@@ -34,8 +34,10 @@ curl -H "Authorization: Bearer $AGENT_HUB_AUTH_TOKEN" \
 ```
 
 The certificate must be valid for each remote host name. A TLS reverse proxy is also
-valid when this process stays on its default loopback listener; the proxy must keep
-the upstream connection on the same host.
+valid when this process stays on its default loopback listener. If that proxy is
+reachable from another host, `AGENT_HUB_AUTH_TOKEN` is required even though the
+process itself still listens on loopback. The proxy must keep the upstream connection
+on the same host and must preserve the client's `Authorization` header unchanged.
 
 The server explicitly allows its own configured origins for the bundled UI. Each
 additional browser origin must be listed separately:

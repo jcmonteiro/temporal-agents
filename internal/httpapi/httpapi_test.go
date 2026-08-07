@@ -512,6 +512,13 @@ func TestBearerAuthenticationProtectsResources(t *testing.T) {
 			req.Header.Set("Authorization", want.authorization)
 			response := httptest.NewRecorder()
 			server.ServeHTTP(response, req)
+			if want.status == http.StatusUnauthorized {
+				requireProblem(t, response, http.StatusUnauthorized, codeAuthenticationRequired)
+				if response.Header().Get("WWW-Authenticate") == "" {
+					t.Fatal("WWW-Authenticate is empty")
+				}
+				return
+			}
 			if response.Code != want.status {
 				t.Fatalf("status = %d, want %d", response.Code, want.status)
 			}
@@ -612,6 +619,34 @@ func TestEveryServedRouteIsSpecified(t *testing.T) {
 	for path := range paths {
 		if served[path] == nil {
 			t.Errorf("specified path %s is not served", path)
+		}
+	}
+}
+
+// TestTheSpecificationModelsDeploymentDependentBearerAuthentication pins that
+// generated clients know how to authenticate when the same API is remotely exposed.
+func TestTheSpecificationModelsDeploymentDependentBearerAuthentication(t *testing.T) {
+	server := newTestServer(t, &viewStub{})
+	components := server.spec.document["components"].(map[string]any)
+	securitySchemes := components["securitySchemes"].(map[string]any)
+	bearer := securitySchemes["bearerAuth"].(map[string]any)
+	if bearer["type"] != "http" || bearer["scheme"] != "bearer" {
+		t.Fatalf("bearerAuth = %+v, want an HTTP bearer scheme", bearer)
+	}
+	security := server.spec.document["security"].([]any)
+	if len(security) != 2 {
+		t.Fatalf("security = %+v, want anonymous loopback or bearer authentication", security)
+	}
+	paths := server.spec.document["paths"].(map[string]any)
+	for path, rawPath := range paths {
+		for method, rawOperation := range rawPath.(map[string]any) {
+			if method == "parameters" {
+				continue
+			}
+			responses := rawOperation.(map[string]any)["responses"].(map[string]any)
+			if _, ok := responses["401"]; !ok {
+				t.Errorf("%s %s has no 401 response", strings.ToUpper(method), path)
+			}
 		}
 	}
 }

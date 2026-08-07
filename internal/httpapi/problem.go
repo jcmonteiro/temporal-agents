@@ -40,6 +40,8 @@ const (
 	codeRequestTooLarge problemCode = "request-too-large"
 	// codeNotDismissible is a dismissal asked for work that has not finished.
 	codeNotDismissible problemCode = "not-dismissible"
+	// codeAuthenticationRequired is a request without the configured bearer token.
+	codeAuthenticationRequired problemCode = "authentication-required"
 	// codeTooManyRequests is a caller going faster than the server accepts.
 	codeTooManyRequests problemCode = "too-many-requests"
 	// codeDependencyUnavailable is a dependency of the read path being unreachable:
@@ -108,6 +110,12 @@ var problemTypes = map[problemCode]problemType{
 		Description: "Dismissing is view state over finished work: only an item that has finished " +
 			"(done or failed) can be hidden, and a schedule never can because it has no finished " +
 			"state. Wait for the work to settle, or leave it visible.",
+	},
+	codeAuthenticationRequired: {
+		Title:  "Authentication is required",
+		Status: http.StatusUnauthorized,
+		Description: "This deployment requires an HTTP bearer token. Send the configured token " +
+			"in the Authorization header. A missing or incorrect token receives the same response.",
 	},
 	codeTooManyRequests: {
 		Title:  "Too many requests",

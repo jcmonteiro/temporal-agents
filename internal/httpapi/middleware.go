@@ -157,7 +157,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		got := sha256.Sum256([]byte(r.Header.Get("Authorization")))
 		if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="agent-hub"`)
-			http.Error(w, "authentication required", http.StatusUnauthorized)
+			s.writeProblem(w, r, codeAuthenticationRequired, "provide the configured bearer token")
 			return
 		}
 		next.ServeHTTP(w, r)
