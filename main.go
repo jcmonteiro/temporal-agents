@@ -28,6 +28,7 @@ import (
 	"temporal-agents/internal/notification"
 	"temporal-agents/internal/notify"
 	"temporal-agents/internal/piagent"
+	"temporal-agents/internal/wfid"
 )
 
 func main() {
@@ -77,6 +78,10 @@ func main() {
 		if err := historyCmd(os.Args[2:], os.Stdout, openExecutionReader); err != nil {
 			fatalf("%v", err)
 		}
+	case "serve":
+		if err := serveCmd(os.Args[2:]); err != nil {
+			fatalf("%v", err)
+		}
 	default:
 		usage()
 	}
@@ -102,6 +107,7 @@ COMMANDS
   watch <workflow-id>                    Stream a workflow's live Pi progress
   list                                   List running workflows and schedules
   history [--kind <kind>] [--limit <n>]  List durably recorded executions
+  serve [--addr <host:port>]             Serve the Agent Hub REST API
 
 EXAMPLES
   temporal-agents worker
@@ -115,13 +121,15 @@ EXAMPLES
   temporal-agents fleet plan list
   temporal-agents fleet execute --plan-id <handle>
   temporal-agents history
+  temporal-agents serve
   temporal-agents cleanup
 
 FLAGS
   --save <name>  Save the invocation as a reusable template (see 'template')
   --chain        Re-trigger the same workflow on each successful completion
 
-See "temporal-agents schedule --help" and "temporal-agents template --help".
+See "temporal-agents schedule --help", "temporal-agents template --help", and
+"temporal-agents serve --help".
 `)
 	os.Exit(2)
 }
@@ -366,15 +374,27 @@ HISTORY
 const DefaultHostPort = "localhost:17233"
 
 func dial() client.Client {
+	c, err := connectTemporal()
+	if err != nil {
+		fatalf("%v", err)
+	}
+	return c
+}
+
+// connectTemporal opens the orchestration client without owning the process
+// boundary. Commands that return errors (notably the long-running HTTP server) use
+// it directly, while the older one-shot commands keep their existing dial helper
+// and fatal behavior.
+func connectTemporal() (client.Client, error) {
 	hostPort := os.Getenv("TEMPORAL_ADDRESS")
 	if hostPort == "" {
 		hostPort = DefaultHostPort
 	}
 	c, err := client.Dial(client.Options{HostPort: hostPort, Logger: quietLogger{}})
 	if err != nil {
-		fatalf("Could not connect to Temporal at %s: %v", hostPort, err)
+		return nil, fmt.Errorf("could not connect to Temporal at %s: %w", hostPort, err)
 	}
-	return c
+	return c, nil
 }
 
 func cwd() string {
@@ -661,33 +681,12 @@ func listRunning() {
 	fmt.Printf("\n%d active\n", len(rows))
 }
 
-// classifyWorkflow labels a workflow row by its ID prefix so `list` surfaces
-// what each running workflow is. Fleet parents ("fleet-<uuid>") and their
-// per-node develop children ("fleet-<uuid>-<nodeid>") share the "fleet-" prefix,
-// so the two are told apart by whether the text after the prefix is a bare
-// UUID (the parent) or a UUID with a "-<nodeid>" suffix (a child node).
+// classifyWorkflow labels a workflow row by its ID so `list` surfaces what each
+// running workflow is. The convention itself lives in the wfid package, because
+// the HTTP read API reconstructs a fleet's node tree from the very same rule: the
+// CLI label and the API's classification cannot be allowed to drift apart.
 func classifyWorkflow(id string) string {
-	switch {
-	case strings.HasPrefix(id, "fleet-plan-"):
-		return "fleet-plan"
-	case strings.HasPrefix(id, "fleet-"):
-		if _, err := uuid.Parse(strings.TrimPrefix(id, "fleet-")); err == nil {
-			return "fleet"
-		}
-		return "fleet-node"
-	case strings.HasPrefix(id, "develop-"):
-		return "develop"
-	case strings.HasPrefix(id, "review-"):
-		return "review"
-	case strings.HasPrefix(id, "pilot-"):
-		return "pilot"
-	case strings.HasPrefix(id, "open-pr-"):
-		return "open-pr"
-	case strings.HasPrefix(id, "schedule-"):
-		return "schedule"
-	default:
-		return "run"
-	}
+	return string(wfid.Classify(id))
 }
 
 // watchRun polls the workflow and prints Pi's live progress (from activity
