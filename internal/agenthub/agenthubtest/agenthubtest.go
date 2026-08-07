@@ -221,20 +221,19 @@ func (s *Source) Dismissals(context.Context) ([]agenthub.Dismissal, error) {
 
 // Dismiss implements agenthub.DismissalStore, idempotently on the dismissal's
 // identity exactly as the durable adapter must.
-func (s *Source) Dismiss(_ context.Context, d agenthub.Dismissal) error {
+func (s *Source) Dismiss(_ context.Context, d agenthub.Dismissal) (agenthub.Dismissal, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
-		return s.err
+		return agenthub.Dismissal{}, s.err
 	}
 	if existing, ok := s.dismissals[d.ID()]; ok {
-		// Keep the original time: the item was already hidden, and a retry must not
-		// rewrite when that happened.
-		s.dismissals[d.ID()] = existing
-		return nil
+		// Keep and return the original time: the item was already hidden, and a retry
+		// must describe the resource that remains stored.
+		return existing, nil
 	}
 	s.dismissals[d.ID()] = d
-	return nil
+	return d, nil
 }
 
 // Undismiss implements agenthub.DismissalStore.

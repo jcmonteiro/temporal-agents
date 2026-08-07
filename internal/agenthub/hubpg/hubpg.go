@@ -118,15 +118,22 @@ func (d *Dismissals) Dismissals(ctx context.Context) ([]agenthub.Dismissal, erro
 const dismissSQL = `
 INSERT INTO dismissals (kind, item_id, dismissed_at)
 VALUES ($1, $2, $3)
-ON CONFLICT (kind, item_id) DO NOTHING`
+ON CONFLICT (kind, item_id)
+DO UPDATE SET dismissed_at = dismissals.dismissed_at
+RETURNING kind, item_id, dismissed_at`
 
 // Dismiss implements agenthub.DismissalStore.
-func (d *Dismissals) Dismiss(ctx context.Context, dismissal agenthub.Dismissal) error {
-	_, err := d.pool.Exec(ctx, dismissSQL, string(dismissal.Kind), dismissal.ItemID, dismissal.DismissedAt)
+func (d *Dismissals) Dismiss(ctx context.Context, dismissal agenthub.Dismissal) (agenthub.Dismissal, error) {
+	var kind string
+	stored := agenthub.Dismissal{}
+	err := d.pool.QueryRow(ctx, dismissSQL,
+		string(dismissal.Kind), dismissal.ItemID, dismissal.DismissedAt,
+	).Scan(&kind, &stored.ItemID, &stored.DismissedAt)
 	if err != nil {
-		return fmt.Errorf("record the dismissal: %w", err)
+		return agenthub.Dismissal{}, fmt.Errorf("record the dismissal: %w", err)
 	}
-	return nil
+	stored.Kind = agenthub.ItemKind(kind)
+	return stored, nil
 }
 
 // undismissSQL removes one dismissal.

@@ -408,10 +408,11 @@ func (s *Service) Dismiss(ctx context.Context, kind ItemKind, itemID string) (Di
 		return Dismissal{}, ErrNotDismissible
 	}
 	dismissal := Dismissal{Kind: kind, ItemID: itemID, DismissedAt: s.deps.Now().UTC()}
-	if err := s.deps.Dismissals.Dismiss(ctx, dismissal); err != nil {
+	stored, err := s.deps.Dismissals.Dismiss(ctx, dismissal)
+	if err != nil {
 		return Dismissal{}, unavailable("record the dismissal", err)
 	}
-	return dismissal, nil
+	return stored, nil
 }
 
 // Undismiss brings a dismissed item back, and reports ErrNotFound when it was not

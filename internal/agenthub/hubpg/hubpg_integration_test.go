@@ -35,12 +35,12 @@ func TestDismissalsRoundTripNewestFirst(t *testing.T) {
 	older := time.Date(2026, 8, 6, 9, 0, 0, 0, time.UTC)
 	newer := older.Add(time.Hour)
 
-	require.NoError(t, store.Dismiss(ctx, agenthub.Dismissal{
+	dismiss(t, store, ctx, agenthub.Dismissal{
 		Kind: agenthub.KindRun, ItemID: "run-1", DismissedAt: older,
-	}))
-	require.NoError(t, store.Dismiss(ctx, agenthub.Dismissal{
+	})
+	dismiss(t, store, ctx, agenthub.Dismissal{
 		Kind: agenthub.KindFleet, ItemID: "fleet-1", DismissedAt: newer,
-	}))
+	})
 
 	got, err := store.Dismissals(ctx)
 	require.NoError(t, err)
@@ -58,12 +58,13 @@ func TestDismissIsIdempotentAndKeepsTheOriginalTime(t *testing.T) {
 	ctx := context.Background()
 	first := time.Date(2026, 8, 6, 9, 0, 0, 0, time.UTC)
 
-	require.NoError(t, store.Dismiss(ctx, agenthub.Dismissal{
+	storedFirst := dismiss(t, store, ctx, agenthub.Dismissal{
 		Kind: agenthub.KindRun, ItemID: "run-1", DismissedAt: first,
-	}))
-	require.NoError(t, store.Dismiss(ctx, agenthub.Dismissal{
+	})
+	storedSecond := dismiss(t, store, ctx, agenthub.Dismissal{
 		Kind: agenthub.KindRun, ItemID: "run-1", DismissedAt: first.Add(time.Hour),
-	}))
+	})
+	require.Equal(t, storedFirst, storedSecond)
 
 	got, err := store.Dismissals(ctx)
 	require.NoError(t, err)
@@ -79,8 +80,8 @@ func TestTheSameIDUnderTwoKindsAreTwoDismissals(t *testing.T) {
 	ctx := context.Background()
 	at := time.Now().UTC()
 
-	require.NoError(t, store.Dismiss(ctx, agenthub.Dismissal{Kind: agenthub.KindRun, ItemID: "x", DismissedAt: at}))
-	require.NoError(t, store.Dismiss(ctx, agenthub.Dismissal{Kind: agenthub.KindFleet, ItemID: "x", DismissedAt: at}))
+	dismiss(t, store, ctx, agenthub.Dismissal{Kind: agenthub.KindRun, ItemID: "x", DismissedAt: at})
+	dismiss(t, store, ctx, agenthub.Dismissal{Kind: agenthub.KindFleet, ItemID: "x", DismissedAt: at})
 
 	got, err := store.Dismissals(ctx)
 	require.NoError(t, err)
@@ -96,9 +97,9 @@ func TestUndismissReportsWhetherItRemovedAnything(t *testing.T) {
 
 	require.ErrorIs(t, store.Undismiss(ctx, agenthub.KindRun, "run-1"), agenthub.ErrNotFound)
 
-	require.NoError(t, store.Dismiss(ctx, agenthub.Dismissal{
+	dismiss(t, store, ctx, agenthub.Dismissal{
 		Kind: agenthub.KindRun, ItemID: "run-1", DismissedAt: time.Now().UTC(),
-	}))
+	})
 	require.NoError(t, store.Undismiss(ctx, agenthub.KindRun, "run-1"))
 
 	got, err := store.Dismissals(ctx)
@@ -117,10 +118,19 @@ func TestTwoServersShareOneSchema(t *testing.T) {
 	second := openTestStore(t, dsn)
 	require.NoError(t, second.Migrate(ctx))
 
-	require.NoError(t, first.Dismiss(ctx, agenthub.Dismissal{
+	dismiss(t, first, ctx, agenthub.Dismissal{
 		Kind: agenthub.KindRun, ItemID: "run-1", DismissedAt: time.Now().UTC(),
-	}))
+	})
 	got, err := second.Dismissals(ctx)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
+}
+
+// dismiss records one dismissal and fails the test when the adapter cannot return
+// the stored resource.
+func dismiss(t *testing.T, store *Dismissals, ctx context.Context, d agenthub.Dismissal) agenthub.Dismissal {
+	t.Helper()
+	stored, err := store.Dismiss(ctx, d)
+	require.NoError(t, err)
+	return stored
 }

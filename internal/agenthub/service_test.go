@@ -408,7 +408,13 @@ func TestDismissIsIdempotentAndUndoable(t *testing.T) {
 	id := "run-" + uuidLike("12")
 	source := agenthubtest.New().
 		WithRecorded(agenthubtest.Run(id, "finished", agenthub.OutcomeSucceeded, ago(time.Hour)))
-	service := newService(t, source)
+	clock := now
+	deps := source.Dependencies(now)
+	deps.Now = func() time.Time { return clock }
+	service, err := agenthub.NewService(deps)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
 	ctx := context.Background()
 
 	first, err := service.Dismiss(ctx, agenthub.KindRun, id)
@@ -418,8 +424,13 @@ func TestDismissIsIdempotentAndUndoable(t *testing.T) {
 	if !first.DismissedAt.Equal(now) {
 		t.Errorf("dismissedAt = %v, want the injected clock %v", first.DismissedAt, now)
 	}
-	if _, err := service.Dismiss(ctx, agenthub.KindRun, id); err != nil {
+	clock = now.Add(time.Hour)
+	second, err := service.Dismiss(ctx, agenthub.KindRun, id)
+	if err != nil {
 		t.Fatalf("a repeated Dismiss must succeed: %v", err)
+	}
+	if !second.DismissedAt.Equal(first.DismissedAt) {
+		t.Errorf("repeated dismissal time = %v, want original %v", second.DismissedAt, first.DismissedAt)
 	}
 	dismissals, err := service.Dismissals(ctx)
 	if err != nil {

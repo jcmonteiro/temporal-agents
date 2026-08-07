@@ -162,10 +162,10 @@ type ScheduleSource interface {
 type DismissalStore interface {
 	// Dismissals returns every dismissal currently in force.
 	Dismissals(ctx context.Context) ([]Dismissal, error)
-	// Dismiss records d. It must be idempotent on the dismissal's identity (kind
-	// plus item), so a client that retries a lost response neither creates a second
-	// dismissal nor fails.
-	Dismiss(ctx context.Context, d Dismissal) error
+	// Dismiss records d and returns the stored dismissal. It must be idempotent on
+	// the dismissal's identity (kind plus item), so a retry returns the original
+	// timestamp rather than creating or reporting a different resource.
+	Dismiss(ctx context.Context, d Dismissal) (Dismissal, error)
 	// Undismiss removes the dismissal of one item, and reports ErrNotFound when
 	// there was none, so the transport can tell a no-op apart from a deletion.
 	Undismiss(ctx context.Context, kind ItemKind, itemID string) error
