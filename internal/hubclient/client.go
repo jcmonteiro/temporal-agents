@@ -69,39 +69,17 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// Overview reads every page of active fleets, active standalone run chains, and
-// schedules in the order used by the CLI.
+// Overview reads every page of the additive active-work resource.
 func (c *Client) Overview(ctx context.Context) ([]workoverview.Item, error) {
-	fleets, err := c.collection(ctx, "fleets", true)
+	resources, err := c.collection(ctx)
 	if err != nil {
 		return nil, err
 	}
-	runs, err := c.collection(ctx, "runs", true)
-	if err != nil {
-		return nil, err
-	}
-	schedules, err := c.collection(ctx, "schedules", false)
-	if err != nil {
-		return nil, err
-	}
-
-	items := make([]workoverview.Item, 0, len(fleets)+len(runs)+len(schedules))
-	for _, item := range fleets {
-		items = append(items, workoverview.Item{
-			ID: item.ID, Kind: workoverview.KindFleet,
-			Status: workoverview.Status(item.Status), Running: *item.Running,
-		})
-	}
-	for _, item := range runs {
+	items := make([]workoverview.Item, 0, len(resources))
+	for _, item := range resources {
 		items = append(items, workoverview.Item{
 			ID: item.ID, Kind: workoverview.Kind(item.Type),
 			Status: workoverview.Status(item.Status), Running: *item.Running,
-		})
-	}
-	for _, item := range schedules {
-		items = append(items, workoverview.Item{
-			ID: item.ID, Kind: workoverview.KindSchedule,
-			Status: workoverview.Status(item.Status),
 		})
 	}
 	return items, nil
@@ -109,7 +87,6 @@ func (c *Client) Overview(ctx context.Context) ([]workoverview.Item, error) {
 
 type resource struct {
 	ID      string `json:"id"`
-	Kind    string `json:"kind"`
 	Type    string `json:"type"`
 	Status  string `json:"status"`
 	Running *bool  `json:"running"`
@@ -146,14 +123,12 @@ type problem struct {
 	Detail string `json:"detail"`
 }
 
-func (c *Client) collection(ctx context.Context, name string, active bool) ([]resource, error) {
+func (c *Client) collection(ctx context.Context) ([]resource, error) {
+	const name = "active-work"
 	endpoint := *c.baseURL
 	endpoint.Path += "/" + name
 	query := endpoint.Query()
 	query.Set("limit", fmt.Sprint(collectionLimit))
-	if active {
-		query.Set("active", "true")
-	}
 	endpoint.RawQuery = query.Encode()
 
 	var items []resource
@@ -230,29 +205,18 @@ func validateCollection(name string, document collection) error {
 		return fmt.Errorf("Agent Hub %s response has an invalid next link", name)
 	}
 	for i, item := range document.Items {
-		if item.ID == "" || item.Kind == "" || item.Status == "" {
-			return fmt.Errorf("Agent Hub %s item %d is incomplete", name, i)
+		if workoverview.ValidateID(item.ID) != nil || item.Type == "" || item.Status == "" || item.Running == nil {
+			return fmt.Errorf("Agent Hub %s item %d is incomplete or invalid", name, i)
 		}
 		if !workoverview.ValidStatus(workoverview.Status(item.Status)) {
 			return fmt.Errorf("Agent Hub %s item %d has unknown status %q", name, i, item.Status)
 		}
-		switch name {
-		case "fleets":
-			if item.Kind != "fleet" || item.Running == nil || !*item.Running {
-				return fmt.Errorf("Agent Hub %s item %d violates the fleet contract", name, i)
-			}
-		case "runs":
-			kind := workoverview.Kind(item.Type)
-			if item.Kind != "run" || item.Running == nil || !*item.Running || kind == workoverview.KindFleet ||
-				kind == workoverview.KindSchedule || !workoverview.ValidKind(kind) {
-				return fmt.Errorf("Agent Hub %s item %d violates the run contract", name, i)
-			}
-		case "schedules":
-			if item.Kind != "schedule" {
-				return fmt.Errorf("Agent Hub %s item %d violates the schedule contract", name, i)
-			}
-		default:
-			return fmt.Errorf("unknown Agent Hub collection %q", name)
+		kind := workoverview.Kind(item.Type)
+		if !workoverview.ValidKind(kind) {
+			return fmt.Errorf("Agent Hub %s item %d has unknown type %q", name, i, item.Type)
+		}
+		if kind != workoverview.KindSchedule && !*item.Running {
+			return fmt.Errorf("Agent Hub %s item %d is not active", name, i)
 		}
 	}
 	return nil
@@ -269,9 +233,7 @@ func (c *Client) nextPageURL(name string, current *url.URL, reference string) (*
 		return nil, fmt.Errorf("Agent Hub %s response has an unsafe next link", name)
 	}
 	query := next.Query()
-	if query.Get("limit") != fmt.Sprint(collectionLimit) || strings.TrimSpace(query.Get("cursor")) == "" ||
-		(name == "fleets" || name == "runs") && query.Get("active") != "true" ||
-		name == "schedules" && query.Get("active") != "" {
+	if query.Get("limit") != fmt.Sprint(collectionLimit) || strings.TrimSpace(query.Get("cursor")) == "" {
 		return nil, fmt.Errorf("Agent Hub %s response has an invalid next link", name)
 	}
 	return next, nil

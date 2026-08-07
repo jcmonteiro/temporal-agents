@@ -8,11 +8,14 @@ import (
 
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/enums/v1"
+	schedulepb "go.temporal.io/api/schedule/v1"
 	"go.temporal.io/api/serviceerror"
 	workflowpb "go.temporal.io/api/workflow/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"temporal-agents/internal/agenthub"
@@ -28,11 +31,13 @@ import (
 // fakeWorkflows is a stand-in for the orchestration client: it hands out prepared
 // pages and records the queries it was asked.
 type fakeWorkflows struct {
-	pages    []*workflowservice.ListWorkflowExecutionsResponse
-	calls    int
-	queries  []string
-	describe *workflowpb.WorkflowExecutionInfo
-	err      error
+	pages      []*workflowservice.ListWorkflowExecutionsResponse
+	calls      int
+	queries    []string
+	pageSizes  []int32
+	pageTokens [][]byte
+	describe   *workflowpb.WorkflowExecutionInfo
+	err        error
 }
 
 func (f *fakeWorkflows) ListWorkflow(_ context.Context, request *workflowservice.ListWorkflowExecutionsRequest) (*workflowservice.ListWorkflowExecutionsResponse, error) {
@@ -40,6 +45,8 @@ func (f *fakeWorkflows) ListWorkflow(_ context.Context, request *workflowservice
 		return nil, f.err
 	}
 	f.queries = append(f.queries, request.GetQuery())
+	f.pageSizes = append(f.pageSizes, request.GetPageSize())
+	f.pageTokens = append(f.pageTokens, append([]byte(nil), request.GetNextPageToken()...))
 	page := f.pages[f.calls]
 	f.calls++
 	return page, nil
@@ -55,31 +62,26 @@ func (f *fakeWorkflows) DescribeWorkflowExecution(_ context.Context, workflowID,
 	return &workflowservice.DescribeWorkflowExecutionResponse{WorkflowExecutionInfo: f.describe}, nil
 }
 
-// fakeSchedules is a stand-in for the schedule client.
+// fakeSchedules is a stand-in for Temporal's raw schedule service.
 type fakeSchedules struct {
-	entries []*client.ScheduleListEntry
-	err     error
+	pages      []*workflowservice.ListSchedulesResponse
+	calls      int
+	pageSizes  []int32
+	pageTokens [][]byte
+	namespaces []string
+	err        error
 }
 
-func (f *fakeSchedules) List(context.Context, client.ScheduleListOptions) (client.ScheduleListIterator, error) {
+func (f *fakeSchedules) ListSchedules(_ context.Context, request *workflowservice.ListSchedulesRequest, _ ...grpc.CallOption) (*workflowservice.ListSchedulesResponse, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &fakeIterator{entries: f.entries}, nil
-}
-
-// fakeIterator walks the prepared schedule entries.
-type fakeIterator struct {
-	entries []*client.ScheduleListEntry
-	at      int
-}
-
-func (f *fakeIterator) HasNext() bool { return f.at < len(f.entries) }
-
-func (f *fakeIterator) Next() (*client.ScheduleListEntry, error) {
-	entry := f.entries[f.at]
-	f.at++
-	return entry, nil
+	f.pageSizes = append(f.pageSizes, request.GetMaximumPageSize())
+	f.pageTokens = append(f.pageTokens, append([]byte(nil), request.GetNextPageToken()...))
+	f.namespaces = append(f.namespaces, request.GetNamespace())
+	page := f.pages[f.calls]
+	f.calls++
+	return page, nil
 }
 
 // TestConstructorsRequireAClient pins the fail-fast wiring.
@@ -87,7 +89,7 @@ func TestConstructorsRequireAClient(t *testing.T) {
 	if _, err := NewExecutions(nil); err == nil {
 		t.Error("NewExecutions(nil) = nil, want an error")
 	}
-	if _, err := NewSchedules(nil); err == nil {
+	if _, err := NewSchedules(nil, client.DefaultNamespace); err == nil {
 		t.Error("NewSchedules(nil) = nil, want an error")
 	}
 }
@@ -197,6 +199,35 @@ func TestExecutionsReturnsKnownStatesAndOmitsUnknownOnes(t *testing.T) {
 	}
 }
 
+func TestRunningPageReadsOneBoundedTemporalPage(t *testing.T) {
+	response := &workflowservice.ListWorkflowExecutionsResponse{
+		Executions: []*workflowpb.WorkflowExecutionInfo{{
+			Execution: &commonpb.WorkflowExecution{WorkflowId: "run-1"},
+			Status:    enums.WORKFLOW_EXECUTION_STATUS_RUNNING,
+		}},
+		NextPageToken: []byte("next-native-token"),
+	}
+	fake := &fakeWorkflows{pages: []*workflowservice.ListWorkflowExecutionsResponse{response}}
+	source, err := NewExecutions(fake)
+	if err != nil {
+		t.Fatalf("NewExecutions: %v", err)
+	}
+
+	page, err := source.RunningPage(context.Background(), agenthub.ExecutionPageQuery{
+		Limit: 1, Cursor: []byte("current-native-token"),
+	})
+	if err != nil {
+		t.Fatalf("RunningPage: %v", err)
+	}
+	if fake.calls != 1 || fake.pageSizes[0] != 1 || string(fake.pageTokens[0]) != "current-native-token" {
+		t.Fatalf("Temporal requests = %d size=%v token=%q, want one size-1 request with the source token",
+			fake.calls, fake.pageSizes, fake.pageTokens[0])
+	}
+	if len(page.Items) != 1 || page.Items[0].WorkflowID != "run-1" || string(page.Next) != "next-native-token" {
+		t.Fatalf("page = %+v, want run-1 and the native next token", page)
+	}
+}
+
 // TestRunningExecutionsPagesUntilTheCap pins that the listing is bounded: it follows
 // the orchestrator's page tokens but stops at the limit, so one request cannot turn
 // into an unbounded scan of a busy server.
@@ -239,6 +270,29 @@ func TestRunningExecutionsPagesUntilTheCap(t *testing.T) {
 	}
 	if len(capped) != 3 {
 		t.Fatalf("got %d executions, want the cap of 3", len(capped))
+	}
+}
+
+// TestSourcePagesClassifyRejectedNativeTokensAsInvalid pins that a bad opaque
+// source token is a caller error rather than a dependency outage.
+func TestSourcePagesClassifyRejectedNativeTokensAsInvalid(t *testing.T) {
+	invalid := serviceerror.NewInvalidArgument("bad page token")
+	executions, err := NewExecutions(&fakeWorkflows{err: invalid})
+	if err != nil {
+		t.Fatalf("NewExecutions: %v", err)
+	}
+	_, err = executions.RunningPage(context.Background(), agenthub.ExecutionPageQuery{Limit: 1, Cursor: []byte("bad")})
+	if !errors.Is(err, agenthub.ErrInvalid) {
+		t.Fatalf("RunningPage error = %v, want ErrInvalid", err)
+	}
+
+	schedules, err := NewSchedules(&fakeSchedules{err: invalid}, client.DefaultNamespace)
+	if err != nil {
+		t.Fatalf("NewSchedules: %v", err)
+	}
+	_, err = schedules.SchedulePage(context.Background(), agenthub.SchedulePageQuery{Limit: 1, Cursor: []byte("bad")})
+	if !errors.Is(err, agenthub.ErrInvalid) {
+		t.Fatalf("SchedulePage error = %v, want ErrInvalid", err)
 	}
 }
 
@@ -292,17 +346,22 @@ func TestExecutionOfAKnownWorkflow(t *testing.T) {
 // next, so no per-schedule round trip is needed to answer the overview.
 func TestSchedulesTranslateAListEntry(t *testing.T) {
 	lastFired := time.Date(2026, 8, 6, 9, 0, 0, 0, time.UTC)
+	unknownFired := lastFired.Add(time.Hour)
 	next := lastFired.Add(24 * time.Hour)
-	source, err := NewSchedules(&fakeSchedules{entries: []*client.ScheduleListEntry{{
-		ID:     "schedule-1",
-		Paused: true,
-		Spec:   &client.ScheduleSpec{CronExpressions: []string{"0 9 * * *"}},
-		RecentActions: []client.ScheduleActionResult{
-			{ScheduleTime: lastFired.Add(-24 * time.Hour), ActualTime: lastFired.Add(-24 * time.Hour)},
-			{ScheduleTime: lastFired, ActualTime: lastFired},
+	entry := &schedulepb.ScheduleListEntry{
+		ScheduleId: "schedule-1",
+		Info: &schedulepb.ScheduleListInfo{
+			Paused: true,
+			Spec:   &schedulepb.ScheduleSpec{CronString: []string{"0 9 * * *"}},
+			RecentActions: []*schedulepb.ScheduleActionResult{
+				{ScheduleTime: timestamppb.New(lastFired.Add(-24 * time.Hour)), ActualTime: timestamppb.New(lastFired.Add(-24 * time.Hour)), StartWorkflowStatus: enums.WORKFLOW_EXECUTION_STATUS_RUNNING},
+				{ScheduleTime: timestamppb.New(lastFired), ActualTime: timestamppb.New(lastFired), StartWorkflowStatus: enums.WORKFLOW_EXECUTION_STATUS_COMPLETED},
+				{ScheduleTime: timestamppb.New(unknownFired), ActualTime: timestamppb.New(unknownFired), StartWorkflowStatus: enums.WORKFLOW_EXECUTION_STATUS_UNSPECIFIED},
+			},
+			FutureActionTimes: []*timestamppb.Timestamp{timestamppb.New(next.Add(48 * time.Hour)), timestamppb.New(next)},
 		},
-		NextActionTimes: []time.Time{next.Add(48 * time.Hour), next},
-	}}})
+	}
+	source, err := NewSchedules(&fakeSchedules{pages: []*workflowservice.ListSchedulesResponse{{Schedules: []*schedulepb.ScheduleListEntry{entry}}}}, client.DefaultNamespace)
 	if err != nil {
 		t.Fatalf("NewSchedules: %v", err)
 	}
@@ -320,59 +379,66 @@ func TestSchedulesTranslateAListEntry(t *testing.T) {
 		t.Errorf("schedule = %q paused=%v, want schedule-1 paused", state.ID, state.Paused)
 	case state.Spec != "0 9 * * *":
 		t.Errorf("spec = %q, want the cron expression", state.Spec)
-	case !state.LastRunAt.Equal(lastFired):
-		t.Errorf("lastRunAt = %v, want the most recent action %v", state.LastRunAt, lastFired)
+	case !state.LastRunAt.Equal(unknownFired):
+		t.Errorf("lastRunAt = %v, want the most recent action %v", state.LastRunAt, unknownFired)
 	case !state.NextRunAt.Equal(next):
 		t.Errorf("nextRunAt = %v, want the earliest upcoming action %v", state.NextRunAt, next)
-	case state.RunningActions != 0:
-		t.Errorf("runningActions = %d, want 0: the reader counts them from the live executions", state.RunningActions)
+	case state.RunningActions != 1 || state.LastOutcome != agenthub.OutcomeSucceeded:
+		t.Errorf("action state = running %d, outcome %q; want 1/succeeded", state.RunningActions, state.LastOutcome)
 	}
 }
 
-// TestDescribeSpecRendersWhatWasConfigured pins the spec rendering for the two
-// forms the CLI creates (a cron expression and an interval), a calendar spec, and
-// the "nothing to say" case, which must stay empty rather than invent a claim.
-func TestDescribeSpecRendersWhatWasConfigured(t *testing.T) {
+// TestDescribeScheduleSpecRendersWhatWasConfigured pins raw schedule spec
+// translation for cron, interval, structured calendar, and empty forms.
+func TestDescribeScheduleSpecRendersWhatWasConfigured(t *testing.T) {
 	cases := []struct {
 		name string
-		in   *client.ScheduleSpec
+		in   *schedulepb.ScheduleSpec
 		want string
 	}{
 		{"nothing at all", nil, ""},
-		{"a cron expression", &client.ScheduleSpec{CronExpressions: []string{"0 9 * * *"}}, "0 9 * * *"},
-		{"an interval", &client.ScheduleSpec{Intervals: []client.ScheduleIntervalSpec{{Every: 90 * time.Minute}}}, "every 1h30m0s"},
+		{"a cron expression", &schedulepb.ScheduleSpec{CronString: []string{"0 9 * * *"}}, "0 9 * * *"},
+		{"an interval", &schedulepb.ScheduleSpec{Interval: []*schedulepb.IntervalSpec{{Interval: durationpb.New(90 * time.Minute)}}}, "every 1h30m0s"},
 		{
 			"a calendar",
-			&client.ScheduleSpec{Calendars: []client.ScheduleCalendarSpec{{
-				Minute: []client.ScheduleRange{{Start: 0}},
-				Hour:   []client.ScheduleRange{{Start: 9, End: 17, Step: 2}},
+			&schedulepb.ScheduleSpec{StructuredCalendar: []*schedulepb.StructuredCalendarSpec{{
+				Minute: []*schedulepb.Range{{Start: 0}},
+				Hour:   []*schedulepb.Range{{Start: 9, End: 17, Step: 2}},
 			}}},
 			"minute=0 hour=9-17/2",
 		},
-		{"an empty spec", &client.ScheduleSpec{}, ""},
+		{"an empty spec", &schedulepb.ScheduleSpec{}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := describeSpec(tc.in); got != tc.want {
-				t.Fatalf("describeSpec = %q, want %q", got, tc.want)
+			if got := describeScheduleSpec(tc.in); got != tc.want {
+				t.Fatalf("describeScheduleSpec = %q, want %q", got, tc.want)
 			}
 		})
 	}
 }
 
-// TestSchedulesRespectTheCap pins that the schedule listing is bounded too.
-func TestSchedulesRespectTheCap(t *testing.T) {
-	source, err := NewSchedules(&fakeSchedules{entries: []*client.ScheduleListEntry{
-		{ID: "schedule-1"}, {ID: "schedule-2"}, {ID: "schedule-3"},
-	}})
+func TestSchedulePageReadsOneBoundedTemporalPage(t *testing.T) {
+	fake := &fakeSchedules{pages: []*workflowservice.ListSchedulesResponse{{
+		Schedules:     []*schedulepb.ScheduleListEntry{{ScheduleId: "schedule-2"}},
+		NextPageToken: []byte("next-native-token"),
+	}}}
+	source, err := NewSchedules(fake, "team-namespace")
 	if err != nil {
 		t.Fatalf("NewSchedules: %v", err)
 	}
-	got, err := source.Schedules(context.Background(), 2)
+
+	page, err := source.SchedulePage(context.Background(), agenthub.SchedulePageQuery{
+		Limit: 1, Cursor: []byte("current-native-token"),
+	})
 	if err != nil {
-		t.Fatalf("Schedules: %v", err)
+		t.Fatalf("SchedulePage: %v", err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("got %d schedules, want the cap of 2", len(got))
+	if fake.calls != 1 || fake.pageSizes[0] != 1 || string(fake.pageTokens[0]) != "current-native-token" || fake.namespaces[0] != "team-namespace" {
+		t.Fatalf("Temporal requests = %d size=%v token=%q namespace=%q, want one bounded native-token request",
+			fake.calls, fake.pageSizes, fake.pageTokens[0], fake.namespaces[0])
+	}
+	if len(page.Items) != 1 || page.Items[0].ID != "schedule-2" || string(page.Next) != "next-native-token" {
+		t.Fatalf("page = %+v, want schedule-2 and the native next token", page)
 	}
 }

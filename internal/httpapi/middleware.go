@@ -393,80 +393,31 @@ func (s *Server) limitParam(w http.ResponseWriter, r *http.Request) (int, bool) 
 	return limit, true
 }
 
-func (s *Server) collectionQuery(w http.ResponseWriter, r *http.Request, allowActive bool) (agenthub.PageQuery, bool, bool) {
+const maxCursorBytes = 4 << 10
+
+func (s *Server) activeWorkQuery(w http.ResponseWriter, r *http.Request) (agenthub.PageQuery, bool) {
 	limit, ok := s.limitParam(w, r)
 	if !ok {
-		return agenthub.PageQuery{}, false, false
+		return agenthub.PageQuery{}, false
 	}
-	active := false
-	if raw := strings.TrimSpace(r.URL.Query().Get("active")); raw != "" {
-		if !allowActive || raw != "true" {
-			s.writeProblem(w, r, codeInvalidRequest, "active must be true on a collection that supports it")
-			return agenthub.PageQuery{}, false, false
-		}
-		active = true
+	raw := strings.TrimSpace(r.URL.Query().Get("cursor"))
+	if raw == "" {
+		return agenthub.PageQuery{Limit: limit}, true
 	}
-	cursor, err := decodePageCursor(r.URL.Query().Get("cursor"))
-	if err != nil {
-		s.writeProblem(w, r, codeInvalidRequest, err.Error())
-		return agenthub.PageQuery{}, false, false
+	cursor, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil || len(cursor) == 0 || len(cursor) > maxCursorBytes {
+		s.writeProblem(w, r, codeInvalidRequest, "cursor is invalid")
+		return agenthub.PageQuery{}, false
 	}
-	if cursor.ID != "" {
-		switch {
-		case allowActive && !active:
-			s.writeProblem(w, r, codeInvalidRequest, "cursor requires active=true")
-			return agenthub.PageQuery{}, false, false
-		case allowActive && cursor.StartedAt.IsZero():
-			s.writeProblem(w, r, codeInvalidRequest, "cursor is invalid for an active collection")
-			return agenthub.PageQuery{}, false, false
-		case !allowActive && !cursor.StartedAt.IsZero():
-			s.writeProblem(w, r, codeInvalidRequest, "cursor is invalid for a schedule collection")
-			return agenthub.PageQuery{}, false, false
-		}
-	}
-	return agenthub.PageQuery{Limit: limit, After: cursor}, active, true
+	return agenthub.PageQuery{Limit: limit, Cursor: cursor}, true
 }
 
-func decodePageCursor(raw string) (agenthub.PageCursor, error) {
-	if strings.TrimSpace(raw) == "" {
-		return agenthub.PageCursor{}, nil
-	}
-	decoded, err := base64.RawURLEncoding.DecodeString(raw)
-	if err != nil {
-		return agenthub.PageCursor{}, errors.New("cursor is invalid")
-	}
-	started, id, found := strings.Cut(string(decoded), "\n")
-	if !found || agenthub.ValidateItemID(id) != nil {
-		return agenthub.PageCursor{}, errors.New("cursor is invalid")
-	}
-	cursor := agenthub.PageCursor{ID: id}
-	if started != "" {
-		cursor.StartedAt, err = time.Parse(time.RFC3339Nano, started)
-		if err != nil {
-			return agenthub.PageCursor{}, errors.New("cursor is invalid")
-		}
-	}
-	return cursor, nil
-}
-
-func encodePageCursor(cursor agenthub.PageCursor) string {
-	if cursor.ID == "" {
-		return ""
-	}
-	started := ""
-	if !cursor.StartedAt.IsZero() {
-		started = cursor.StartedAt.UTC().Format(time.RFC3339Nano)
-	}
-	return base64.RawURLEncoding.EncodeToString([]byte(started + "\n" + cursor.ID))
-}
-
-func (s *Server) nextPage(r *http.Request, cursor agenthub.PageCursor) string {
-	encoded := encodePageCursor(cursor)
-	if encoded == "" {
+func (s *Server) nextPage(r *http.Request, cursor []byte) string {
+	if len(cursor) == 0 {
 		return ""
 	}
 	query := r.URL.Query()
-	query.Set("cursor", encoded)
+	query.Set("cursor", base64.RawURLEncoding.EncodeToString(cursor))
 	return r.URL.Path + "?" + query.Encode()
 }
 

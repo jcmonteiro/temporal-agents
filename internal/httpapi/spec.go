@@ -39,35 +39,37 @@ const schemaMediaType = "application/schema+json"
 // model can be served next to this one within the same API version instead of forcing
 // every consumer onto a new API.
 const (
-	modelFleet               = "fleet.v1"
-	modelFleetCollection     = "fleet-collection.v1"
-	modelRun                 = "run.v1"
-	modelRunCollection       = "run-collection.v1"
-	modelSchedule            = "schedule.v1"
-	modelScheduleCollection  = "schedule-collection.v1"
-	modelDismissal           = "dismissal.v1"
-	modelDismissalCollection = "dismissal-collection.v1"
-	modelDismissalRequest    = "dismissal-request.v1"
-	modelProblem             = "problem.v1"
-	modelServiceDescription  = "service-description.v1"
-	modelHealth              = "health.v1"
+	modelActiveWorkCollection = "active-work-collection.v1"
+	modelFleet                = "fleet.v1"
+	modelFleetCollection      = "fleet-collection.v1"
+	modelRun                  = "run.v1"
+	modelRunCollection        = "run-collection.v1"
+	modelSchedule             = "schedule.v1"
+	modelScheduleCollection   = "schedule-collection.v1"
+	modelDismissal            = "dismissal.v1"
+	modelDismissalCollection  = "dismissal-collection.v1"
+	modelDismissalRequest     = "dismissal-request.v1"
+	modelProblem              = "problem.v1"
+	modelServiceDescription   = "service-description.v1"
+	modelHealth               = "health.v1"
 )
 
 // modelSchemas maps each published model name onto the schema in the specification
 // that defines it. It is the single place the two vocabularies meet.
 var modelSchemas = map[string]string{
-	modelFleet:               "Fleet",
-	modelFleetCollection:     "FleetCollection",
-	modelRun:                 "Run",
-	modelRunCollection:       "RunCollection",
-	modelSchedule:            "Schedule",
-	modelScheduleCollection:  "ScheduleCollection",
-	modelDismissal:           "Dismissal",
-	modelDismissalCollection: "DismissalCollection",
-	modelDismissalRequest:    "DismissalRequest",
-	modelProblem:             "Problem",
-	modelServiceDescription:  "ServiceDescription",
-	modelHealth:              "Health",
+	modelActiveWorkCollection: "ActiveWorkCollection",
+	modelFleet:                "Fleet",
+	modelFleetCollection:      "FleetCollection",
+	modelRun:                  "Run",
+	modelRunCollection:        "RunCollection",
+	modelSchedule:             "Schedule",
+	modelScheduleCollection:   "ScheduleCollection",
+	modelDismissal:            "Dismissal",
+	modelDismissalCollection:  "DismissalCollection",
+	modelDismissalRequest:     "DismissalRequest",
+	modelProblem:              "Problem",
+	modelServiceDescription:   "ServiceDescription",
+	modelHealth:               "Health",
 }
 
 // modelNames lists the published models in a stable order.
@@ -306,6 +308,7 @@ func (s *Server) handleServiceDescription(w http.ResponseWriter, r *http.Request
 		"problems": s.basePath + "/problems",
 		"health":   s.basePath + "/health",
 		"resources": []resourceEntry{
+			{Name: "active-work", Href: s.basePath + "/active-work", Methods: []string{"GET"}, Schema: s.schemaURI(modelActiveWorkCollection)},
 			{Name: "fleets", Href: s.basePath + "/fleets", Methods: []string{"GET"}, Schema: s.schemaURI(modelFleetCollection)},
 			{Name: "runs", Href: s.basePath + "/runs", Methods: []string{"GET"}, Schema: s.schemaURI(modelRunCollection)},
 			{Name: "schedules", Href: s.basePath + "/schedules", Methods: []string{"GET"}, Schema: s.schemaURI(modelScheduleCollection)},

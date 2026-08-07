@@ -78,6 +78,7 @@ move to it deliberately.
 
 | Method and path | Meaning |
 |---|---|
+| `GET /api/v1/active-work` | Paged active top-level fleets, runs, and schedules |
 | `GET /api/v1/fleets` | Running fleets and non-dismissed terminal fleets |
 | `GET /api/v1/fleets/{id}` | One fleet and its plan node graph |
 | `GET /api/v1/runs` | Running standalone chains and non-dismissed terminal chains |
@@ -87,16 +88,17 @@ move to it deliberately.
 | `POST /api/v1/dismissals` | Hide one finished fleet or run |
 | `DELETE /api/v1/dismissals/{id}` | Make the item visible again |
 
-Collections accept `limit` from 1 to 200 and default to 25. Active fleet and run
-reads and all schedule reads support cursor pagination. These responses have a
-`next` URL when another page exists and `next: null` on the final page. Pass the
-opaque `cursor` only by following that URL. Other collection reads are bounded
-overviews and have `next: null`. Use `history` for the durable execution record.
+Collections accept `limit` from 1 to 200 and default to 25. Existing fleet, run,
+schedule, and dismissal collections keep their original v1 envelope with `items`,
+`count`, and `limit`.
 
-Fleet and run collections accept `active=true`. This filter selects unsettled parent
-executions before the page limit is applied. The CLI follows every active fleet and
-run page and every schedule page, so older active work is not hidden by newer
-finished work.
+`/active-work` is an additive resource for complete active-work reads. Its
+`active-work-collection.v1` envelope also has `next`. Follow that URL without
+inspecting or changing its opaque `cursor`; `next` is `null` on the final page. Each
+request reads at most one native Temporal execution page or one native schedule
+page. Continue-as-new changes the current run timestamp, but does not move the chain
+across these source-native pages. The CLI follows every page. Use `history` for the
+durable execution record.
 
 All times are RFC 3339 UTC timestamps. Missing times are JSON `null`, not the year
 1. Successful GET responses carry a strong `ETag` and support `If-None-Match`.
@@ -115,9 +117,11 @@ The detail resource reconciles the plan against child workflow IDs of the form
 status, and child execution when it started. There are no cross-fleet edges and no
 fabricated owner, estimate, or description.
 
-The `running` field reports whether the parent fleet execution is unsettled. It is
-separate from fleet status because status is aggregated from node states. A running
-fleet can consequently have `todo`, `failed`, or `waiting-input` status.
+In the active-work projection, `running` reports whether the parent fleet execution
+is unsettled. It is separate from fleet status because status is aggregated from
+node states. A running fleet can consequently have `todo`, `failed`, or
+`waiting-input` status. The existing `fleet.v1` model is unchanged and does not add
+this field.
 
 Fleet status is aggregated by the server. The first matching rule wins:
 
@@ -137,10 +141,11 @@ and never enter the numerator.
 ### Run model
 
 A run resource is a standalone execution **chain**. Its identity is the workflow ID,
-which is stable over continue-as-new. The `running` field reports whether the latest
-iteration is unsettled. The latest iteration supplies status, the
-first known iteration supplies start time, and token usage is summed from each
-iteration's incremental count. A chain is never returned as one item per run ID.
+which is stable over continue-as-new. The active-work projection reports current
+liveness in `running`; the existing `run.v1` model is unchanged. The latest iteration
+supplies status, the first known iteration supplies start time, and token usage is
+summed from each iteration's incremental count. A chain is never returned as one
+item per run ID.
 
 Schedule-fired runs are represented by their schedule. Child workflows are
 represented by their parent. They are excluded from `/runs` to avoid showing the

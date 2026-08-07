@@ -169,23 +169,83 @@ func (s *Service) Fleets(ctx context.Context, limit int) ([]Fleet, error) {
 	return fleets, nil
 }
 
-// ActiveFleets returns one cursor page selected from unsettled parent fleet
-// executions before the page limit is applied.
-func (s *Service) ActiveFleets(ctx context.Context, query PageQuery) (Page[Fleet], error) {
+const (
+	activeWorkCursorVersion   byte = 1
+	activeWorkExecutionsPhase byte = 'e'
+	activeWorkSchedulesPhase  byte = 's'
+)
+
+// ActiveWork returns one bounded source-native page of top-level active work.
+// Running executions are read before schedules. A page can be empty when one
+// Temporal page contains only child or schedule-fired executions; Next still lets
+// the caller continue without this request scanning another source page.
+func (s *Service) ActiveWork(ctx context.Context, query PageQuery) (Page[ActiveWorkItem], error) {
 	limit := resolveLimit(query.Limit)
-	live, err := s.allLiveByWorkflowID(ctx)
+	phase, sourceCursor, err := decodeActiveWorkCursor(query.Cursor)
 	if err != nil {
-		return Page[Fleet]{}, err
+		return Page[ActiveWorkItem]{}, err
 	}
-	selected, next := activeExecutionPage(live, query.After, limit, isFleet)
-	ids := executionIDs(selected)
+	if phase == activeWorkSchedulesPhase {
+		return s.activeSchedulePage(ctx, limit, sourceCursor)
+	}
+
+	sourcePage, err := s.deps.Live.RunningPage(ctx, ExecutionPageQuery{Limit: limit, Cursor: sourceCursor})
+	if err != nil {
+		if errors.Is(err, ErrInvalid) {
+			return Page[ActiveWorkItem]{}, err
+		}
+		return Page[ActiveWorkItem]{}, unavailable("list a page of running executions", err)
+	}
+	fleetStatuses, err := s.activeFleetStatuses(ctx, sourcePage.Items)
+	if err != nil {
+		return Page[ActiveWorkItem]{}, err
+	}
+	items := make([]ActiveWorkItem, 0, len(sourcePage.Items))
+	for _, execution := range sourcePage.Items {
+		if !execution.Running() {
+			continue
+		}
+		switch {
+		case isFleet(execution):
+			status := execution.Outcome.WorkStatus()
+			if fleet, ok := fleetStatuses[execution.WorkflowID]; ok {
+				status = fleet.Status
+			}
+			items = append(items, ActiveWorkItem{
+				ID: execution.WorkflowID, Type: ActiveWorkFleet,
+				Status: status, Running: true,
+			})
+		case isRunSatellite(execution):
+			items = append(items, ActiveWorkItem{
+				ID: execution.WorkflowID, Type: activeWorkType(execution.Class),
+				Status: execution.Outcome.WorkStatus(), Running: true,
+			})
+		}
+	}
+	next := encodeActiveWorkCursor(activeWorkSchedulesPhase, nil)
+	if len(sourcePage.Next) > 0 {
+		next = encodeActiveWorkCursor(activeWorkExecutionsPhase, sourcePage.Next)
+	}
+	return Page[ActiveWorkItem]{Items: items, Next: next}, nil
+}
+
+func (s *Service) activeFleetStatuses(ctx context.Context, executions []Execution) (map[string]Fleet, error) {
+	ids := make([]string, 0, len(executions))
+	for _, execution := range executions {
+		if execution.Running() && isFleet(execution) {
+			ids = append(ids, execution.WorkflowID)
+		}
+	}
+	if len(ids) == 0 {
+		return map[string]Fleet{}, nil
+	}
 	trees, err := s.deps.Collections.FleetTrees(ctx, ChainQuery{
 		RequiredWorkflowIDs: ids,
 		RequiredOnly:        true,
-		Limit:               limit,
+		Limit:               len(ids),
 	})
 	if err != nil {
-		return Page[Fleet]{}, unavailable("read the recorded fleets", err)
+		return nil, unavailable("read the active fleets", err)
 	}
 	chains := make([]ExecutionChain, 0, len(trees))
 	treesByID := make(map[string][]Execution, len(trees))
@@ -193,24 +253,87 @@ func (s *Service) ActiveFleets(ctx context.Context, query PageQuery) (Page[Fleet
 		chains = append(chains, tree.Chain)
 		treesByID[tree.Chain.Latest.WorkflowID] = tree.Executions
 	}
-	selectedLive := executionMap(selected)
-	parents, err := s.resolveExecutionChains(ctx, chains, selectedLive, isFleet)
+	live := executionMap(executions)
+	parents, err := s.resolveExecutionChains(ctx, chains, live, isFleet)
 	if err != nil {
-		return Page[Fleet]{}, err
+		return nil, err
 	}
 	plans, err := s.plansFor(ctx, parents)
 	if err != nil {
-		return Page[Fleet]{}, err
+		return nil, err
 	}
-	items := make([]Fleet, 0, len(parents))
+	fleets := make(map[string]Fleet, len(parents))
 	for _, parent := range parents {
 		fleet, err := s.buildFleet(ctx, parent, treesByID[parent.WorkflowID], live, plans[parent.WorkflowID])
 		if err != nil {
-			return Page[Fleet]{}, err
+			return nil, err
 		}
-		items = append(items, fleet)
+		fleets[fleet.ID] = fleet
 	}
-	return Page[Fleet]{Items: items, Next: next}, nil
+	return fleets, nil
+}
+
+func (s *Service) activeSchedulePage(ctx context.Context, limit int, cursor []byte) (Page[ActiveWorkItem], error) {
+	sourcePage, err := s.deps.Schedules.SchedulePage(ctx, SchedulePageQuery{Limit: limit, Cursor: cursor})
+	if err != nil {
+		if errors.Is(err, ErrInvalid) {
+			return Page[ActiveWorkItem]{}, err
+		}
+		return Page[ActiveWorkItem]{}, unavailable("list a page of schedules", err)
+	}
+	items := make([]ActiveWorkItem, 0, len(sourcePage.Items))
+	for _, state := range sourcePage.Items {
+		items = append(items, ActiveWorkItem{
+			ID: state.ID, Type: ActiveWorkSchedule,
+			Status:  ScheduleStatus(state.Paused, state.RunningActions, state.LastOutcome),
+			Running: state.RunningActions > 0,
+		})
+	}
+	var next []byte
+	if len(sourcePage.Next) > 0 {
+		next = encodeActiveWorkCursor(activeWorkSchedulesPhase, sourcePage.Next)
+	}
+	return Page[ActiveWorkItem]{Items: items, Next: next}, nil
+}
+
+func decodeActiveWorkCursor(cursor []byte) (byte, []byte, error) {
+	if len(cursor) == 0 {
+		return activeWorkExecutionsPhase, nil, nil
+	}
+	if len(cursor) < 2 || cursor[0] != activeWorkCursorVersion ||
+		(cursor[1] != activeWorkExecutionsPhase && cursor[1] != activeWorkSchedulesPhase) {
+		return 0, nil, fmt.Errorf("%w: cursor is invalid", ErrInvalid)
+	}
+	return cursor[1], append([]byte(nil), cursor[2:]...), nil
+}
+
+func encodeActiveWorkCursor(phase byte, sourceCursor []byte) []byte {
+	cursor := make([]byte, 2, 2+len(sourceCursor))
+	cursor[0], cursor[1] = activeWorkCursorVersion, phase
+	return append(cursor, sourceCursor...)
+}
+
+func executionMap(executions []Execution) map[string]Execution {
+	indexed := make(map[string]Execution, len(executions))
+	for _, execution := range executions {
+		indexed[execution.WorkflowID] = execution
+	}
+	return indexed
+}
+
+func activeWorkType(class wfid.Class) ActiveWorkType {
+	switch class {
+	case wfid.ClassDevelop:
+		return ActiveWorkDevelop
+	case wfid.ClassReview:
+		return ActiveWorkReview
+	case wfid.ClassPilot:
+		return ActiveWorkPilot
+	case wfid.ClassFleetPlan:
+		return ActiveWorkFleetPlan
+	default:
+		return ActiveWorkRun
+	}
 }
 
 // Fleet returns one fleet with its whole node graph, or ErrNotFound. It is the
@@ -325,35 +448,6 @@ func (s *Service) Runs(ctx context.Context, limit int) ([]Run, error) {
 	return runs, nil
 }
 
-// ActiveRuns returns one cursor page selected from unsettled standalone run
-// executions before the page limit is applied.
-func (s *Service) ActiveRuns(ctx context.Context, query PageQuery) (Page[Run], error) {
-	limit := resolveLimit(query.Limit)
-	live, err := s.allLiveByWorkflowID(ctx)
-	if err != nil {
-		return Page[Run]{}, err
-	}
-	selected, next := activeExecutionPage(live, query.After, limit, isRunSatellite)
-	ids := executionIDs(selected)
-	recorded, err := s.deps.Collections.RunChains(ctx, ChainQuery{
-		RequiredWorkflowIDs: ids,
-		RequiredOnly:        true,
-		Limit:               limit,
-	})
-	if err != nil {
-		return Page[Run]{}, unavailable("read the recorded runs", err)
-	}
-	chains, err := s.resolveExecutionChains(ctx, recorded, executionMap(selected), isRunSatellite)
-	if err != nil {
-		return Page[Run]{}, err
-	}
-	items := make([]Run, 0, len(chains))
-	for _, chain := range chains {
-		items = append(items, runFrom(chain))
-	}
-	return Page[Run]{Items: items, Next: next}, nil
-}
-
 // Run returns one run chain, or ErrNotFound.
 func (s *Service) Run(ctx context.Context, id string) (Run, error) {
 	if err := ValidateItemID(id); err != nil {
@@ -411,48 +505,11 @@ func (s *Service) Schedules(ctx context.Context, limit int) ([]Schedule, error) 
 	if err != nil {
 		return nil, unavailable("list the schedules", err)
 	}
-	return s.schedulesFromStates(ctx, states, false)
+	return s.schedulesFromStates(ctx, states)
 }
 
-// SchedulePage returns every configured schedule through stable ID cursor pages.
-func (s *Service) SchedulePage(ctx context.Context, query PageQuery) (Page[Schedule], error) {
-	limit := resolveLimit(query.Limit)
-	states, err := s.deps.Schedules.Schedules(ctx, 0)
-	if err != nil {
-		return Page[Schedule]{}, unavailable("list the schedules", err)
-	}
-	sort.SliceStable(states, func(i, j int) bool { return states[i].ID < states[j].ID })
-	pageStates := make([]ScheduleState, 0, limit)
-	more := false
-	for _, state := range states {
-		if query.After.ID != "" && state.ID <= query.After.ID {
-			continue
-		}
-		if len(pageStates) == limit {
-			more = true
-			break
-		}
-		pageStates = append(pageStates, state)
-	}
-	items, err := s.schedulesFromStates(ctx, pageStates, true)
-	if err != nil {
-		return Page[Schedule]{}, err
-	}
-	var next PageCursor
-	if more {
-		next.ID = pageStates[len(pageStates)-1].ID
-	}
-	return Page[Schedule]{Items: items, Next: next}, nil
-}
-
-func (s *Service) schedulesFromStates(ctx context.Context, states []ScheduleState, allLive bool) ([]Schedule, error) {
-	var live map[string]Execution
-	var err error
-	if allLive {
-		live, err = s.allLiveByWorkflowID(ctx)
-	} else {
-		live, err = s.liveByWorkflowID(ctx)
-	}
+func (s *Service) schedulesFromStates(ctx context.Context, states []ScheduleState) ([]Schedule, error) {
+	live, err := s.liveByWorkflowID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1025,61 +1082,10 @@ func isRunSatellite(e Execution) bool {
 // isFleet reports whether an execution is a fleet parent.
 func isFleet(e Execution) bool { return e.Class == wfid.ClassFleet }
 
-func activeExecutionPage(live map[string]Execution, after PageCursor, limit int, keep func(Execution) bool) ([]Execution, PageCursor) {
-	items := make([]Execution, 0, len(live))
-	for _, execution := range live {
-		if keep(execution) && execution.Running() && afterExecutionCursor(execution, after) {
-			items = append(items, execution)
-		}
-	}
-	sort.SliceStable(items, func(i, j int) bool {
-		if !items[i].StartedAt.Equal(items[j].StartedAt) {
-			return items[i].StartedAt.After(items[j].StartedAt)
-		}
-		return items[i].WorkflowID < items[j].WorkflowID
-	})
-	if len(items) <= limit {
-		return items, PageCursor{}
-	}
-	items = items[:limit]
-	last := items[len(items)-1]
-	return items, PageCursor{StartedAt: last.StartedAt, ID: last.WorkflowID}
-}
-
-func afterExecutionCursor(execution Execution, after PageCursor) bool {
-	if after.ID == "" {
-		return true
-	}
-	return execution.StartedAt.Before(after.StartedAt) ||
-		execution.StartedAt.Equal(after.StartedAt) && execution.WorkflowID > after.ID
-}
-
-func executionIDs(executions []Execution) []string {
-	ids := make([]string, 0, len(executions))
-	for _, execution := range executions {
-		ids = append(ids, execution.WorkflowID)
-	}
-	return ids
-}
-
-func executionMap(executions []Execution) map[string]Execution {
-	indexed := make(map[string]Execution, len(executions))
-	for _, execution := range executions {
-		indexed[execution.WorkflowID] = execution
-	}
-	return indexed
-}
-
 // liveByWorkflowID indexes the in-flight executions by workflow ID, which is how
 // every read finds out whether a recorded execution is still running.
 func (s *Service) liveByWorkflowID(ctx context.Context) (map[string]Execution, error) {
 	return s.liveByWorkflowIDWithLimit(ctx, liveLimit)
-}
-
-// allLiveByWorkflowID reads every orchestrator page. It is used only by paged
-// active collections, where a cap would make old unsettled work disappear.
-func (s *Service) allLiveByWorkflowID(ctx context.Context) (map[string]Execution, error) {
-	return s.liveByWorkflowIDWithLimit(ctx, 0)
 }
 
 func (s *Service) liveByWorkflowIDWithLimit(ctx context.Context, limit int) (map[string]Execution, error) {

@@ -98,12 +98,28 @@ type RecordQuery struct {
 	Limit int
 }
 
+// ExecutionPageQuery selects one bounded source-native page of running
+// executions. Cursor is opaque to the application core.
+type ExecutionPageQuery struct {
+	Limit  int
+	Cursor []byte
+}
+
+// ExecutionPage is one source-native page of running executions.
+type ExecutionPage struct {
+	Items []Execution
+	Next  []byte
+}
+
 // ExecutionSource is the driven port for the live orchestration state: what is
 // running right now. It exists so the core never depends on an orchestration SDK,
 // and so the same core can be driven by a purpose-built projection later.
 type ExecutionSource interface {
 	// RunningExecutions returns the executions that are in flight, capped at limit.
 	RunningExecutions(ctx context.Context, limit int) ([]Execution, error)
+	// RunningPage returns exactly one bounded source page. It does not materialize
+	// all running executions before it applies the limit.
+	RunningPage(ctx context.Context, query ExecutionPageQuery) (ExecutionPage, error)
 	// Execution returns the current state of one execution chain's latest
 	// iteration, or ErrNoExecution when the orchestrator does not know it.
 	Execution(ctx context.Context, workflowID string) (Execution, error)
@@ -196,12 +212,26 @@ type ScheduleState struct {
 	LastOutcome ExecutionOutcome
 }
 
+// SchedulePageQuery selects one bounded source-native schedule page.
+type SchedulePageQuery struct {
+	Limit  int
+	Cursor []byte
+}
+
+// ScheduleStatePage is one source-native page of schedule states.
+type ScheduleStatePage struct {
+	Items []ScheduleState
+	Next  []byte
+}
+
 // ScheduleSource is the driven port for the schedules. It is separate from
 // ExecutionSource because a schedule is not an execution: it has no outcome of its
 // own, and it exists while nothing at all is running.
 type ScheduleSource interface {
 	// Schedules returns the configured schedules, capped at limit.
 	Schedules(ctx context.Context, limit int) ([]ScheduleState, error)
+	// SchedulePage returns exactly one bounded source page.
+	SchedulePage(ctx context.Context, query SchedulePageQuery) (ScheduleStatePage, error)
 }
 
 // DismissalStore is the driven port for the operator's dismissals: the only

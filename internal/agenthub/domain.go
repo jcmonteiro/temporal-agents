@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // ErrInvalid marks a failure caused by what was asked rather than by the state of
@@ -348,23 +349,49 @@ type Schedule struct {
 // schedule has no terminal state, so hiding it would hide live configuration.
 func (s Schedule) Dismissible() bool { return false }
 
-// PageCursor identifies the last item in a stable collection page.
-type PageCursor struct {
-	StartedAt time.Time
-	ID        string
+// ActiveWorkType identifies how one active-work item is shown. Fleet and schedule
+// are top-level resource types. The other values are standalone run types.
+type ActiveWorkType string
+
+const (
+	ActiveWorkFleet     ActiveWorkType = "fleet"
+	ActiveWorkRun       ActiveWorkType = "run"
+	ActiveWorkDevelop   ActiveWorkType = "develop"
+	ActiveWorkReview    ActiveWorkType = "review"
+	ActiveWorkPilot     ActiveWorkType = "pilot"
+	ActiveWorkFleetPlan ActiveWorkType = "fleet-plan"
+	ActiveWorkSchedule  ActiveWorkType = "schedule"
+)
+
+// ActiveWorkTypes lists the closed active-work type vocabulary.
+func ActiveWorkTypes() []ActiveWorkType {
+	return []ActiveWorkType{
+		ActiveWorkFleet, ActiveWorkRun, ActiveWorkDevelop, ActiveWorkReview,
+		ActiveWorkPilot, ActiveWorkFleetPlan, ActiveWorkSchedule,
+	}
 }
 
-// PageQuery selects one bounded page after a cursor.
+// ActiveWorkItem is one top-level item returned by the additive active-work use
+// case. Running is separate from Status because a fleet can still run after one of
+// its nodes fails.
+type ActiveWorkItem struct {
+	ID      string
+	Type    ActiveWorkType
+	Status  WorkStatus
+	Running bool
+}
+
+// PageQuery selects one bounded page. Cursor is an opaque value returned by the
+// previous page and is empty for the first page.
 type PageQuery struct {
-	Limit int
-	After PageCursor
+	Limit  int
+	Cursor []byte
 }
 
-// Page is one collection page and the cursor for the next page. Next is zero on
-// the final page.
+// Page is one collection page. Next is empty on the final page.
 type Page[T any] struct {
 	Items []T
-	Next  PageCursor
+	Next  []byte
 }
 
 // Dismissal records that the operator has dismissed a finished item from the
@@ -417,7 +444,7 @@ func ValidateItemID(itemID string) error {
 	if len(itemID) > maxItemIDLength {
 		return fmt.Errorf("%w: the item id must be at most %d characters", ErrInvalid, maxItemIDLength)
 	}
-	if strings.ContainsAny(itemID, "/?#% \t\n\r") {
+	if strings.ContainsAny(itemID, "/?#% \t\n\r") || strings.IndexFunc(itemID, unicode.IsControl) >= 0 {
 		return fmt.Errorf("%w: the item id %q contains characters that cannot appear in an identifier", ErrInvalid, itemID)
 	}
 	return nil

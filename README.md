@@ -118,6 +118,7 @@ Run any command with `--help` for details, e.g. `temporal-agents code develop --
 `serve` adds a local API that is also the read boundary for the CLI's `list`
 command. It exposes portable resources under `/api/v1`:
 
+- `GET /api/v1/active-work` (bounded cursor pages used by `list`)
 - `GET /api/v1/fleets` and `GET /api/v1/fleets/{id}`
 - `GET /api/v1/runs` and `GET /api/v1/runs/{id}`
 - `GET /api/v1/schedules`

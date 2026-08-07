@@ -1,7 +1,24 @@
 // Package workoverview defines the application port used to read active work.
 package workoverview
 
-import "context"
+import (
+	"context"
+	"errors"
+	"strings"
+	"unicode"
+)
+
+const maxIDLength = 255
+
+// ValidateID checks the application contract before an adapter writes an item ID
+// to a terminal or uses it as one URL path segment.
+func ValidateID(id string) error {
+	if id == "" || len(id) > maxIDLength || strings.ContainsAny(id, "/?#% \t\r\n") ||
+		strings.IndexFunc(id, unicode.IsControl) >= 0 {
+		return errors.New("invalid work item ID")
+	}
+	return nil
+}
 
 // Kind is the display type of one top-level work item.
 type Kind string

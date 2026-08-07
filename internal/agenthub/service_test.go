@@ -117,7 +117,7 @@ func TestFleetsAggregatesThePlanAgainstItsNodeExecutions(t *testing.T) {
 	}
 }
 
-func TestActiveFleetsUseParentLivenessInsteadOfAggregateStatus(t *testing.T) {
+func TestActiveWorkUsesParentLivenessInsteadOfFleetAggregateStatus(t *testing.T) {
 	todoID := "fleet-" + uuidLike("todo")
 	failedID := "fleet-" + uuidLike("fail")
 	source := agenthubtest.New().
@@ -133,17 +133,17 @@ func TestActiveFleetsUseParentLivenessInsteadOfAggregateStatus(t *testing.T) {
 		WithPlan(todoID, agenthub.Plan{Goal: "not started", Nodes: []agenthub.PlanNode{{ID: "ready"}}}).
 		WithPlan(failedID, agenthub.Plan{Goal: "partly failed", Nodes: []agenthub.PlanNode{{ID: "broken"}, {ID: "remaining"}}})
 
-	page, err := newService(t, source).ActiveFleets(context.Background(), agenthub.PageQuery{Limit: 200})
+	page, err := newService(t, source).ActiveWork(context.Background(), agenthub.PageQuery{Limit: 200})
 	if err != nil {
-		t.Fatalf("ActiveFleets: %v", err)
+		t.Fatalf("ActiveWork: %v", err)
 	}
 	if len(page.Items) != 2 {
 		t.Fatalf("got %d active fleets, want 2", len(page.Items))
 	}
 	statuses := map[string]agenthub.WorkStatus{}
 	for _, fleet := range page.Items {
-		if !fleet.Running {
-			t.Errorf("fleet %q has a settled liveness flag", fleet.ID)
+		if !fleet.Running || fleet.Type != agenthub.ActiveWorkFleet {
+			t.Errorf("fleet %q type/running = %q/%v, want fleet/true", fleet.ID, fleet.Type, fleet.Running)
 		}
 		statuses[fleet.ID] = fleet.Status
 	}
@@ -152,26 +152,64 @@ func TestActiveFleetsUseParentLivenessInsteadOfAggregateStatus(t *testing.T) {
 	}
 }
 
-func TestActiveRunsProvideAStableCursorPage(t *testing.T) {
+func TestActiveWorkKeepsAContinueAsNewChainWhenItsTimestampChangesBetweenPages(t *testing.T) {
+	newer := agenthubtest.Run("run-new", "new", agenthub.OutcomeRunning, ago(time.Minute))
+	looping := agenthubtest.Run("run-looping", "looping", agenthub.OutcomeRunning, ago(time.Hour))
+	source := agenthubtest.New().WithRunning(newer, looping)
+	service := newService(t, source)
+
+	first, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1})
+	if err != nil {
+		t.Fatalf("first ActiveWork: %v", err)
+	}
+	if len(first.Items) != 1 || first.Items[0].ID != newer.WorkflowID || len(first.Next) == 0 {
+		t.Fatalf("first page = %+v, want run-new and a source cursor", first)
+	}
+
+	// A continue-as-new iteration changes Temporal's current-run start time. The
+	// chain must remain after the native cursor instead of moving around a timestamp
+	// cursor owned by this service.
+	looping.StartedAt = now.Add(time.Minute)
+	source.ReplaceRunning(newer, looping)
+	second, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1, Cursor: first.Next})
+	if err != nil {
+		t.Fatalf("second ActiveWork: %v", err)
+	}
+	if len(second.Items) != 1 || second.Items[0].ID != looping.WorkflowID {
+		t.Fatalf("second page = %+v, want the still-active looping chain", second)
+	}
+}
+
+func TestActiveWorkContinuesAfterASourcePageWithOnlyNestedWork(t *testing.T) {
+	fleetID := "fleet-" + uuidLike("nested")
 	source := agenthubtest.New().WithRunning(
-		agenthubtest.Run("run-new", "new", agenthub.OutcomeRunning, ago(time.Minute)),
-		agenthubtest.Run("run-old", "old", agenthub.OutcomeRunning, ago(time.Hour)),
+		agenthubtest.Node(fleetID, "node", agenthub.OutcomeRunning, ago(time.Minute)),
+		agenthubtest.Run("run-visible", "visible", agenthub.OutcomeRunning, ago(time.Hour)),
 	)
 	service := newService(t, source)
 
-	first, err := service.ActiveRuns(context.Background(), agenthub.PageQuery{Limit: 1})
+	first, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1})
 	if err != nil {
-		t.Fatalf("first ActiveRuns: %v", err)
+		t.Fatalf("first ActiveWork: %v", err)
 	}
-	if len(first.Items) != 1 || first.Items[0].ID != "run-new" || first.Next.ID != "run-new" {
-		t.Fatalf("first page = %+v, want run-new and its cursor", first)
+	if len(first.Items) != 0 || len(first.Next) == 0 {
+		t.Fatalf("first page = %+v, want an empty filtered page with a continuation", first)
 	}
-	second, err := service.ActiveRuns(context.Background(), agenthub.PageQuery{Limit: 1, After: first.Next})
+	second, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1, Cursor: first.Next})
 	if err != nil {
-		t.Fatalf("second ActiveRuns: %v", err)
+		t.Fatalf("second ActiveWork: %v", err)
 	}
-	if len(second.Items) != 1 || second.Items[0].ID != "run-old" || second.Next.ID != "" {
-		t.Fatalf("second page = %+v, want final run-old page", second)
+	if len(second.Items) != 1 || second.Items[0].ID != "run-visible" {
+		t.Fatalf("second page = %+v, want the top-level run", second)
+	}
+}
+
+func TestActiveWorkRejectsAForeignCursor(t *testing.T) {
+	_, err := newService(t, agenthubtest.New()).ActiveWork(context.Background(), agenthub.PageQuery{
+		Limit: 1, Cursor: []byte("fleet cursor"),
+	})
+	if !errors.Is(err, agenthub.ErrInvalid) {
+		t.Fatalf("ActiveWork error = %v, want ErrInvalid", err)
 	}
 }
 
@@ -679,10 +717,14 @@ func TestAnUnavailableDependencyIsReportedAsRetryable(t *testing.T) {
 	ctx := context.Background()
 
 	reads := map[string]func() error{
-		"fleets":     func() error { _, err := service.Fleets(ctx, 0); return err },
-		"fleet":      func() error { _, err := service.Fleet(ctx, "fleet-1"); return err },
-		"runs":       func() error { _, err := service.Runs(ctx, 0); return err },
-		"schedules":  func() error { _, err := service.Schedules(ctx, 0); return err },
+		"fleets":    func() error { _, err := service.Fleets(ctx, 0); return err },
+		"fleet":     func() error { _, err := service.Fleet(ctx, "fleet-1"); return err },
+		"runs":      func() error { _, err := service.Runs(ctx, 0); return err },
+		"schedules": func() error { _, err := service.Schedules(ctx, 0); return err },
+		"active work": func() error {
+			_, err := service.ActiveWork(ctx, agenthub.PageQuery{Limit: 1})
+			return err
+		},
 		"dismissals": func() error { _, err := service.Dismissals(ctx); return err },
 	}
 	for name, read := range reads {

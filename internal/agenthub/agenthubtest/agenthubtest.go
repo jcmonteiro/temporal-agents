@@ -11,6 +11,8 @@ package agenthubtest
 
 import (
 	"context"
+	"encoding/binary"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -92,6 +94,15 @@ func (s *Source) WithRunning(execs ...agenthub.Execution) *Source {
 	return s
 }
 
+// ReplaceRunning replaces the live listing without changing its source paging
+// identity. It lets a test represent current-run facts changing between requests.
+func (s *Source) ReplaceRunning(execs ...agenthub.Execution) *Source {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.running = append([]agenthub.Execution(nil), execs...)
+	return s
+}
+
 // WithExecutionState configures the latest state returned by a describe operation.
 // The state need not be in the running listing, which represents an execution that
 // settled between list and describe.
@@ -158,6 +169,25 @@ func (s *Source) RunningExecutions(_ context.Context, limit int) ([]agenthub.Exe
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// RunningPage implements the source-native paging half of ExecutionSource.
+func (s *Source) RunningPage(_ context.Context, query agenthub.ExecutionPageQuery) (agenthub.ExecutionPage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return agenthub.ExecutionPage{}, s.err
+	}
+	offset, err := pageOffset(query.Cursor, len(s.running))
+	if err != nil {
+		return agenthub.ExecutionPage{}, err
+	}
+	end := min(offset+query.Limit, len(s.running))
+	page := agenthub.ExecutionPage{Items: append([]agenthub.Execution(nil), s.running[offset:end]...)}
+	if end < len(s.running) {
+		page.Next = pageToken(end)
+	}
+	return page, nil
 }
 
 // Execution implements agenthub.ExecutionSource. An explicit describe state wins;
@@ -288,6 +318,25 @@ func (s *Source) FleetTrees(_ context.Context, query agenthub.ChainQuery) ([]age
 	return trees, nil
 }
 
+// SchedulePage implements source-native schedule paging.
+func (s *Source) SchedulePage(_ context.Context, query agenthub.SchedulePageQuery) (agenthub.ScheduleStatePage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return agenthub.ScheduleStatePage{}, s.err
+	}
+	offset, err := pageOffset(query.Cursor, len(s.schedules))
+	if err != nil {
+		return agenthub.ScheduleStatePage{}, err
+	}
+	end := min(offset+query.Limit, len(s.schedules))
+	page := agenthub.ScheduleStatePage{Items: append([]agenthub.ScheduleState(nil), s.schedules[offset:end]...)}
+	if end < len(s.schedules) {
+		page.Next = pageToken(end)
+	}
+	return page, nil
+}
+
 // ScheduleActionChains implements agenthub.CollectionSource.
 func (s *Source) ScheduleActionChains(_ context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]agenthub.ExecutionChain, error) {
 	s.mu.Lock()
@@ -393,6 +442,26 @@ func (s *Source) Undismiss(_ context.Context, kind agenthub.ItemKind, itemID str
 	}
 	delete(s.dismissals, id)
 	return nil
+}
+
+func pageOffset(cursor []byte, size int) (int, error) {
+	if len(cursor) == 0 {
+		return 0, nil
+	}
+	if len(cursor) != 8 {
+		return 0, fmt.Errorf("%w: invalid source cursor", agenthub.ErrInvalid)
+	}
+	offset := int(binary.BigEndian.Uint64(cursor))
+	if offset < 0 || offset > size {
+		return 0, fmt.Errorf("%w: invalid source cursor", agenthub.ErrInvalid)
+	}
+	return offset, nil
+}
+
+func pageToken(offset int) []byte {
+	token := make([]byte, 8)
+	binary.BigEndian.PutUint64(token, uint64(offset))
+	return token
 }
 
 func stringSet(values []string) map[string]bool {

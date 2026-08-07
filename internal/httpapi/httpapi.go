@@ -66,20 +66,16 @@ const (
 type WorkView interface {
 	// Fleets returns the fleet satellites, newest first.
 	Fleets(ctx context.Context, limit int) ([]agenthub.Fleet, error)
-	// ActiveFleets returns a page of unsettled fleet parents.
-	ActiveFleets(ctx context.Context, query agenthub.PageQuery) (agenthub.Page[agenthub.Fleet], error)
 	// Fleet returns one fleet with its node graph.
 	Fleet(ctx context.Context, id string) (agenthub.Fleet, error)
 	// Runs returns the standalone run satellites, newest first.
 	Runs(ctx context.Context, limit int) ([]agenthub.Run, error)
-	// ActiveRuns returns a page of unsettled standalone run chains.
-	ActiveRuns(ctx context.Context, query agenthub.PageQuery) (agenthub.Page[agenthub.Run], error)
 	// Run returns one run chain.
 	Run(ctx context.Context, id string) (agenthub.Run, error)
 	// Schedules returns the schedule satellites.
 	Schedules(ctx context.Context, limit int) ([]agenthub.Schedule, error)
-	// SchedulePage returns a page of every configured schedule.
-	SchedulePage(ctx context.Context, query agenthub.PageQuery) (agenthub.Page[agenthub.Schedule], error)
+	// ActiveWork returns one bounded page of active top-level work.
+	ActiveWork(ctx context.Context, query agenthub.PageQuery) (agenthub.Page[agenthub.ActiveWorkItem], error)
 	// Dismissals returns the dismissals in force.
 	Dismissals(ctx context.Context) ([]agenthub.Dismissal, error)
 	// Dismiss hides a finished item from the overview.
@@ -254,6 +250,7 @@ func (s *Server) resources() []resource {
 		{pattern: s.basePath + "/problems", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleProblemIndex}},
 		{pattern: s.basePath + "/problems/{code}", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleProblemType}},
 		{pattern: s.basePath + "/health", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleHealth}},
+		{pattern: s.basePath + "/active-work", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleActiveWork}},
 		{pattern: s.basePath + "/fleets", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleFleets}},
 		{pattern: s.basePath + "/fleets/{id}", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleFleet}},
 		{pattern: s.basePath + "/runs", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleRuns}},
@@ -339,27 +336,34 @@ func (s *Server) dispatch(res resource) http.Handler {
 	})
 }
 
-// handleFleets answers the fleet collection.
-func (s *Server) handleFleets(w http.ResponseWriter, r *http.Request) {
-	query, active, ok := s.collectionQuery(w, r, true)
+// handleActiveWork answers the additive paged resource used by the CLI.
+func (s *Server) handleActiveWork(w http.ResponseWriter, r *http.Request) {
+	query, ok := s.activeWorkQuery(w, r)
 	if !ok {
 		return
 	}
-	if active {
-		page, err := s.view.ActiveFleets(r.Context(), query)
-		if err != nil {
-			s.writeServiceProblem(w, r, err)
-			return
-		}
-		items := make([]fleetResource, 0, len(page.Items))
-		for _, fleet := range page.Items {
-			items = append(items, fleetFrom(fleet, false))
-		}
-		s.writeJSON(w, r, http.StatusOK, modelFleetCollection,
-			newCollection(items, query.Limit, s.nextPage(r, page.Next)))
+	page, err := s.view.ActiveWork(r.Context(), query)
+	if err != nil {
+		s.writeServiceProblem(w, r, err)
 		return
 	}
-	fleets, err := s.view.Fleets(r.Context(), query.Limit)
+	items := make([]activeWorkResource, 0, len(page.Items))
+	for _, item := range page.Items {
+		items = append(items, activeWorkResource{
+			ID: item.ID, Type: item.Type, Status: item.Status, Running: item.Running,
+		})
+	}
+	s.writeJSON(w, r, http.StatusOK, modelActiveWorkCollection,
+		newActiveWorkCollection(items, query.Limit, s.nextPage(r, page.Next)))
+}
+
+// handleFleets answers the fleet collection.
+func (s *Server) handleFleets(w http.ResponseWriter, r *http.Request) {
+	limit, ok := s.limitParam(w, r)
+	if !ok {
+		return
+	}
+	fleets, err := s.view.Fleets(r.Context(), limit)
 	if err != nil {
 		s.writeServiceProblem(w, r, err)
 		return
@@ -368,7 +372,7 @@ func (s *Server) handleFleets(w http.ResponseWriter, r *http.Request) {
 	for _, fleet := range fleets {
 		items = append(items, fleetFrom(fleet, false))
 	}
-	s.writeJSON(w, r, http.StatusOK, modelFleetCollection, newCollection(items, query.Limit))
+	s.writeJSON(w, r, http.StatusOK, modelFleetCollection, newCollection(items, limit))
 }
 
 // handleFleet answers one fleet, with its plan's graph.
@@ -383,25 +387,11 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 
 // handleRuns answers the run collection.
 func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
-	query, active, ok := s.collectionQuery(w, r, true)
+	limit, ok := s.limitParam(w, r)
 	if !ok {
 		return
 	}
-	if active {
-		page, err := s.view.ActiveRuns(r.Context(), query)
-		if err != nil {
-			s.writeServiceProblem(w, r, err)
-			return
-		}
-		items := make([]runResource, 0, len(page.Items))
-		for _, run := range page.Items {
-			items = append(items, runFrom(run))
-		}
-		s.writeJSON(w, r, http.StatusOK, modelRunCollection,
-			newCollection(items, query.Limit, s.nextPage(r, page.Next)))
-		return
-	}
-	runs, err := s.view.Runs(r.Context(), query.Limit)
+	runs, err := s.view.Runs(r.Context(), limit)
 	if err != nil {
 		s.writeServiceProblem(w, r, err)
 		return
@@ -410,7 +400,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	for _, run := range runs {
 		items = append(items, runFrom(run))
 	}
-	s.writeJSON(w, r, http.StatusOK, modelRunCollection, newCollection(items, query.Limit))
+	s.writeJSON(w, r, http.StatusOK, modelRunCollection, newCollection(items, limit))
 }
 
 // handleRun answers one run chain.
@@ -425,21 +415,20 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 // handleSchedules answers the schedule collection.
 func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
-	query, _, ok := s.collectionQuery(w, r, false)
+	limit, ok := s.limitParam(w, r)
 	if !ok {
 		return
 	}
-	page, err := s.view.SchedulePage(r.Context(), query)
+	schedules, err := s.view.Schedules(r.Context(), limit)
 	if err != nil {
 		s.writeServiceProblem(w, r, err)
 		return
 	}
-	items := make([]scheduleResource, 0, len(page.Items))
-	for _, schedule := range page.Items {
+	items := make([]scheduleResource, 0, len(schedules))
+	for _, schedule := range schedules {
 		items = append(items, scheduleFrom(schedule))
 	}
-	s.writeJSON(w, r, http.StatusOK, modelScheduleCollection,
-		newCollection(items, query.Limit, s.nextPage(r, page.Next)))
+	s.writeJSON(w, r, http.StatusOK, modelScheduleCollection, newCollection(items, limit))
 }
 
 // handleDismissals answers the dismissal collection: what the operator has hidden.

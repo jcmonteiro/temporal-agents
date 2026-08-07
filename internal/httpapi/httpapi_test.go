@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -37,12 +39,6 @@ func (v *viewStub) Fleets(context.Context, int) ([]agenthub.Fleet, error) {
 	return v.fleets, v.err
 }
 
-func (v *viewStub) ActiveFleets(_ context.Context, query agenthub.PageQuery) (agenthub.Page[agenthub.Fleet], error) {
-	return pageByExecutionCursor(v.fleets, query, func(fleet agenthub.Fleet) (string, time.Time, bool) {
-		return fleet.ID, fleet.StartedAt, fleet.Running
-	}), v.err
-}
-
 func (v *viewStub) Fleet(_ context.Context, id string) (agenthub.Fleet, error) {
 	if v.err != nil {
 		return agenthub.Fleet{}, v.err
@@ -56,12 +52,6 @@ func (v *viewStub) Fleet(_ context.Context, id string) (agenthub.Fleet, error) {
 }
 
 func (v *viewStub) Runs(context.Context, int) ([]agenthub.Run, error) { return v.runs, v.err }
-
-func (v *viewStub) ActiveRuns(_ context.Context, query agenthub.PageQuery) (agenthub.Page[agenthub.Run], error) {
-	return pageByExecutionCursor(v.runs, query, func(run agenthub.Run) (string, time.Time, bool) {
-		return run.ID, run.StartedAt, run.Running
-	}), v.err
-}
 
 func (v *viewStub) Run(_ context.Context, id string) (agenthub.Run, error) {
 	if v.err != nil {
@@ -79,37 +69,53 @@ func (v *viewStub) Schedules(context.Context, int) ([]agenthub.Schedule, error) 
 	return v.schedules, v.err
 }
 
-func (v *viewStub) SchedulePage(_ context.Context, query agenthub.PageQuery) (agenthub.Page[agenthub.Schedule], error) {
-	page := agenthub.Page[agenthub.Schedule]{}
-	for _, schedule := range v.schedules {
-		if query.After.ID != "" && schedule.ID <= query.After.ID {
-			continue
-		}
-		if len(page.Items) == query.Limit {
-			last := page.Items[len(page.Items)-1]
-			page.Next = agenthub.PageCursor{ID: last.ID}
-			break
-		}
-		page.Items = append(page.Items, schedule)
+func (v *viewStub) ActiveWork(_ context.Context, query agenthub.PageQuery) (agenthub.Page[agenthub.ActiveWorkItem], error) {
+	if v.err != nil {
+		return agenthub.Page[agenthub.ActiveWorkItem]{}, v.err
 	}
-	return page, v.err
+	var all []agenthub.ActiveWorkItem
+	for _, fleet := range v.fleets {
+		if fleet.Running {
+			all = append(all, agenthub.ActiveWorkItem{ID: fleet.ID, Type: agenthub.ActiveWorkFleet, Status: fleet.Status, Running: true})
+		}
+	}
+	for _, run := range v.runs {
+		if run.Running {
+			all = append(all, agenthub.ActiveWorkItem{ID: run.ID, Type: activeTypeFromRun(run.Type), Status: run.Status, Running: true})
+		}
+	}
+	for _, schedule := range v.schedules {
+		all = append(all, agenthub.ActiveWorkItem{ID: schedule.ID, Type: agenthub.ActiveWorkSchedule, Status: schedule.Status, Running: schedule.RunningActions > 0})
+	}
+	offset := 0
+	if len(query.Cursor) > 0 {
+		parsed, err := strconv.Atoi(string(query.Cursor))
+		if err != nil || parsed < 0 || parsed > len(all) {
+			return agenthub.Page[agenthub.ActiveWorkItem]{}, agenthub.ErrInvalid
+		}
+		offset = parsed
+	}
+	end := min(offset+query.Limit, len(all))
+	page := agenthub.Page[agenthub.ActiveWorkItem]{Items: append([]agenthub.ActiveWorkItem(nil), all[offset:end]...)}
+	if end < len(all) {
+		page.Next = []byte(strconv.Itoa(end))
+	}
+	return page, nil
 }
 
-func pageByExecutionCursor[T any](items []T, query agenthub.PageQuery, facts func(T) (string, time.Time, bool)) agenthub.Page[T] {
-	page := agenthub.Page[T]{}
-	for _, item := range items {
-		id, startedAt, running := facts(item)
-		if !running || query.After.ID != "" && !(startedAt.Before(query.After.StartedAt) || startedAt.Equal(query.After.StartedAt) && id > query.After.ID) {
-			continue
-		}
-		if len(page.Items) == query.Limit {
-			lastID, lastStartedAt, _ := facts(page.Items[len(page.Items)-1])
-			page.Next = agenthub.PageCursor{ID: lastID, StartedAt: lastStartedAt}
-			break
-		}
-		page.Items = append(page.Items, item)
+func activeTypeFromRun(runType agenthub.RunType) agenthub.ActiveWorkType {
+	switch runType {
+	case agenthub.RunTypeDevelop:
+		return agenthub.ActiveWorkDevelop
+	case agenthub.RunTypeReview:
+		return agenthub.ActiveWorkReview
+	case agenthub.RunTypePilot:
+		return agenthub.ActiveWorkPilot
+	case agenthub.RunTypeFleetPlan:
+		return agenthub.ActiveWorkFleetPlan
+	default:
+		return agenthub.ActiveWorkRun
 	}
-	return page
 }
 
 func (v *viewStub) Dismissals(context.Context) ([]agenthub.Dismissal, error) {
@@ -258,33 +264,67 @@ func TestFleetCollectionPublishesAPortableContract(t *testing.T) {
 	}
 }
 
-func TestActiveFleetCollectionFiltersBeforePagingAndPublishesLiveness(t *testing.T) {
-	view := &viewStub{fleets: []agenthub.Fleet{
-		{ID: "fleet-finished", Status: agenthub.StatusDone, StartedAt: fixedNow},
-		{ID: "fleet-running-new", Running: true, Status: agenthub.StatusTodo, StartedAt: fixedNow.Add(-time.Hour)},
-		{ID: "fleet-running-old", Running: true, Status: agenthub.StatusFailed, StartedAt: fixedNow.Add(-2 * time.Hour)},
-	}}
+func TestActiveWorkPublishesAnAdditivePagedResource(t *testing.T) {
+	view := &viewStub{
+		fleets: []agenthub.Fleet{
+			{ID: "fleet-finished", Status: agenthub.StatusDone},
+			{ID: "fleet-running", Running: true, Status: agenthub.StatusFailed},
+		},
+		runs: []agenthub.Run{{
+			ID: "review-running", Type: agenthub.RunTypeReview,
+			Running: true, Status: agenthub.StatusInProgress,
+		}},
+	}
 	server := newTestServer(t, view)
 
-	response := request(t, server, http.MethodGet, BasePath+"/fleets?active=true&limit=1", nil)
-
+	response := request(t, server, http.MethodGet, BasePath+"/active-work?limit=1", nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
 	}
-	var first collection[fleetResource]
+	var first activeWorkCollection
 	decodeResponse(t, response, &first)
-	if len(first.Items) != 1 || first.Items[0].ID != "fleet-running-new" || !first.Items[0].Running || first.Next == nil {
-		t.Fatalf("first active fleet page = %+v, want the running todo fleet and a next link", first)
+	if len(first.Items) != 1 || first.Items[0].ID != "fleet-running" || !first.Items[0].Running || first.Next == nil {
+		t.Fatalf("first active-work page = %+v, want the running failed fleet and a next link", first)
 	}
 
 	response = request(t, server, http.MethodGet, *first.Next, nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("next status = %d: %s", response.Code, response.Body.String())
 	}
-	var second collection[fleetResource]
+	var second activeWorkCollection
 	decodeResponse(t, response, &second)
-	if len(second.Items) != 1 || second.Items[0].ID != "fleet-running-old" || second.Next != nil {
-		t.Fatalf("second active fleet page = %+v, want the final running failed fleet", second)
+	if len(second.Items) != 1 || second.Items[0].ID != "review-running" || second.Items[0].Type != agenthub.ActiveWorkReview || second.Next != nil {
+		t.Fatalf("second active-work page = %+v, want the final review run", second)
+	}
+}
+
+func TestActiveWorkRejectsMalformedAndForeignCursors(t *testing.T) {
+	server := newTestServer(t, &viewStub{})
+	malformed := request(t, server, http.MethodGet, BasePath+"/active-work?cursor=not-base64!", nil)
+	requireProblem(t, malformed, http.StatusBadRequest, codeInvalidRequest)
+
+	oldFleetCursor := base64.RawURLEncoding.EncodeToString([]byte("2026-08-06T12:00:00Z\nfleet-1"))
+	foreign := request(t, server, http.MethodGet, BasePath+"/active-work?cursor="+oldFleetCursor, nil)
+	requireProblem(t, foreign, http.StatusBadRequest, codeInvalidRequest)
+}
+
+func TestExistingV1FleetCollectionDoesNotGainActiveWorkFields(t *testing.T) {
+	view := &viewStub{fleets: []agenthub.Fleet{{
+		ID: "fleet-running", Running: true, Status: agenthub.StatusInProgress,
+	}}}
+	response := request(t, newTestServer(t, view), http.MethodGet, BasePath+"/fleets", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+	}
+	var document map[string]any
+	decodeResponse(t, response, &document)
+	if _, exists := document["next"]; exists {
+		t.Error("the existing fleet collection gained a next field")
+	}
+	items, _ := document["items"].([]any)
+	fleet, _ := items[0].(map[string]any)
+	if _, exists := fleet["running"]; exists {
+		t.Error("the existing fleet model gained a running field")
 	}
 }
 
@@ -744,6 +784,13 @@ func TestTheSpecificationUsesTheCoreVocabularies(t *testing.T) {
 		wantKinds = append(wantKinds, string(kind))
 	}
 	assertSameStrings(t, itemKind, wantKinds)
+
+	activeWorkType := schemaEnum(t, server.spec.schemas, "ActiveWorkType")
+	wantActiveTypes := make([]string, 0, len(agenthub.ActiveWorkTypes()))
+	for _, workType := range agenthub.ActiveWorkTypes() {
+		wantActiveTypes = append(wantActiveTypes, string(workType))
+	}
+	assertSameStrings(t, activeWorkType, wantActiveTypes)
 }
 
 // TestWellKnownCatalogPointsAtTheContract pins host-level discovery.
