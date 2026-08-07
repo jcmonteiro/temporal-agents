@@ -154,6 +154,23 @@ func (s *Source) Execution(_ context.Context, workflowID string) (agenthub.Execu
 	return agenthub.Execution{}, agenthub.ErrNoExecution
 }
 
+// Executions implements the batch half of agenthub.ExecutionSource.
+func (s *Source) Executions(_ context.Context, workflowIDs []string) (map[string]agenthub.Execution, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return nil, s.err
+	}
+	wanted := stringSet(workflowIDs)
+	out := make(map[string]agenthub.Execution, len(workflowIDs))
+	for _, execution := range s.running {
+		if wanted[execution.WorkflowID] {
+			out[execution.WorkflowID] = execution
+		}
+	}
+	return out, nil
+}
+
 // RecordedExecutions implements agenthub.RecordSource, applying the same filters
 // the durable record does: a class, a workflow together with its children, a
 // schedule's runs, and a cap — newest first.

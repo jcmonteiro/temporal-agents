@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"go.temporal.io/api/enums/v1"
@@ -141,6 +142,67 @@ func (e *Executions) Execution(ctx context.Context, workflowID string) (agenthub
 		return agenthub.Execution{}, agenthub.ErrNoExecution
 	}
 	return executionFrom(info), nil
+}
+
+// Executions implements the batch half of agenthub.ExecutionSource with bounded
+// concurrency, so a page of stale durable records does not become sequential
+// orchestration round trips.
+func (e *Executions) Executions(ctx context.Context, workflowIDs []string) (map[string]agenthub.Execution, error) {
+	out := make(map[string]agenthub.Execution, len(workflowIDs))
+	if len(workflowIDs) == 0 {
+		return out, nil
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	jobs := make(chan string)
+	errs := make(chan error, 1)
+	var mu sync.Mutex
+	var workers sync.WaitGroup
+	workerCount := min(len(workflowIDs), 16)
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for workflowID := range jobs {
+				execution, err := e.Execution(ctx, workflowID)
+				switch {
+				case errors.Is(err, agenthub.ErrNoExecution):
+					continue
+				case err != nil:
+					select {
+					case errs <- err:
+						cancel()
+					default:
+					}
+					return
+				}
+				mu.Lock()
+				out[workflowID] = execution
+				mu.Unlock()
+			}
+		}()
+	}
+	for _, workflowID := range workflowIDs {
+		select {
+		case jobs <- workflowID:
+		case <-ctx.Done():
+			break
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	close(jobs)
+	workers.Wait()
+	select {
+	case err := <-errs:
+		return nil, err
+	default:
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // Schedules implements agenthub.ScheduleSource.

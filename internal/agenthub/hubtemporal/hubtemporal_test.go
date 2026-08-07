@@ -175,6 +175,27 @@ func TestExecutionFromAttributesAScheduledRun(t *testing.T) {
 	}
 }
 
+// TestExecutionsReturnsKnownStatesAndOmitsUnknownOnes pins the batch port contract
+// used to reconcile stale durable records in one service operation.
+func TestExecutionsReturnsKnownStatesAndOmitsUnknownOnes(t *testing.T) {
+	known := &workflowpb.WorkflowExecutionInfo{
+		Execution: &commonpb.WorkflowExecution{WorkflowId: "run-known", RunId: "r1"},
+		Status:    enums.WORKFLOW_EXECUTION_STATUS_COMPLETED,
+	}
+	adapter, err := NewExecutions(&fakeWorkflows{describe: known})
+	if err != nil {
+		t.Fatalf("NewExecutions: %v", err)
+	}
+
+	states, err := adapter.Executions(context.Background(), []string{"run-known", "run-unknown"})
+	if err != nil {
+		t.Fatalf("Executions: %v", err)
+	}
+	if len(states) != 1 || states["run-known"].Outcome != agenthub.OutcomeSucceeded {
+		t.Fatalf("states = %+v, want only the known completed execution", states)
+	}
+}
+
 // TestRunningExecutionsPagesUntilTheCap pins that the listing is bounded: it follows
 // the orchestrator's page tokens but stops at the limit, so one request cannot turn
 // into an unbounded scan of a busy server.

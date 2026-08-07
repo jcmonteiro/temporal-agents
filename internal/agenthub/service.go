@@ -133,9 +133,16 @@ func (s *Service) Fleets(ctx context.Context, limit int) ([]Fleet, error) {
 	}
 	chains := make([]ExecutionChain, 0, len(trees))
 	treesByID := make(map[string][]Execution, len(trees))
+	var recorded []Execution
 	for _, tree := range trees {
 		chains = append(chains, tree.Chain)
 		treesByID[tree.Chain.Latest.WorkflowID] = tree.Executions
+		recorded = append(recorded, tree.Chain.Latest)
+		recorded = append(recorded, tree.Executions...)
+	}
+	live, err = s.addExecutionStates(ctx, live, recorded)
+	if err != nil {
+		return nil, err
 	}
 	parents, err := s.resolveExecutionChains(ctx, chains, live, func(e Execution) bool {
 		return isFleet(e) && !dismissed.has(KindFleet, e.WorkflowID)
@@ -183,6 +190,11 @@ func (s *Service) Fleet(ctx context.Context, id string) (Fleet, error) {
 	if len(trees) > 0 {
 		tree = trees[0].Executions
 		chains = append(chains, trees[0].Chain)
+		recorded := append([]Execution{trees[0].Chain.Latest}, tree...)
+		live, err = s.addExecutionStates(ctx, live, recorded)
+		if err != nil {
+			return Fleet{}, err
+		}
 	}
 	parents, err := s.resolveExecutionChains(ctx, chains, live, func(e Execution) bool {
 		return e.WorkflowID == id && isFleet(e)
@@ -237,6 +249,14 @@ func (s *Service) Runs(ctx context.Context, limit int) ([]Run, error) {
 	if err != nil {
 		return nil, err
 	}
+	recordedExecutions := make([]Execution, 0, len(recorded))
+	for _, chain := range recorded {
+		recordedExecutions = append(recordedExecutions, chain.Latest)
+	}
+	live, err = s.addExecutionStates(ctx, live, recordedExecutions)
+	if err != nil {
+		return nil, err
+	}
 	chains, err := s.resolveExecutionChains(ctx, recorded, live, func(e Execution) bool {
 		return isRunSatellite(e) && !dismissed.has(KindRun, e.WorkflowID)
 	})
@@ -266,6 +286,12 @@ func (s *Service) Run(ctx context.Context, id string) (Run, error) {
 	live, err := s.liveByWorkflowID(ctx)
 	if err != nil {
 		return Run{}, err
+	}
+	if len(recorded) > 0 {
+		live, err = s.addExecutionStates(ctx, live, []Execution{recorded[0].Latest})
+		if err != nil {
+			return Run{}, err
+		}
 	}
 	chains, err := s.resolveExecutionChains(ctx, recorded, live, func(e Execution) bool {
 		return e.WorkflowID == id && isRunSatellite(e)
@@ -863,6 +889,49 @@ func (s *Service) liveByWorkflowID(ctx context.Context) (map[string]Execution, e
 		live[e.WorkflowID] = e
 	}
 	return live, nil
+}
+
+// addExecutionStates batch-resolves durable rows that still say running but are
+// absent from the open-execution listing. Unknown chains are marked failed, which
+// is the same honest fallback as settle without one call per row.
+func (s *Service) addExecutionStates(ctx context.Context, states map[string]Execution, recorded []Execution) (map[string]Execution, error) {
+	latest := make(map[string]Execution)
+	for _, execution := range recorded {
+		current, known := latest[execution.WorkflowID]
+		if !known || newer(execution, current) {
+			latest[execution.WorkflowID] = execution
+		}
+	}
+	stale := make(map[string]Execution)
+	for id, execution := range latest {
+		if execution.Running() {
+			if _, current := states[id]; !current {
+				stale[id] = execution
+			}
+		}
+	}
+	if len(stale) == 0 {
+		return states, nil
+	}
+	ids := make([]string, 0, len(stale))
+	for id := range stale {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	resolved, err := s.deps.Live.Executions(ctx, ids)
+	if err != nil {
+		return nil, unavailable("read the executions' live state", err)
+	}
+	for _, id := range ids {
+		if execution, ok := resolved[id]; ok {
+			states[id] = execution
+			continue
+		}
+		execution := stale[id]
+		execution.Outcome = OutcomeFailed
+		states[id] = execution
+	}
+	return states, nil
 }
 
 // dismissalSet is the operator's dismissals indexed for lookup.

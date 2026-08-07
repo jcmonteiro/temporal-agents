@@ -231,6 +231,25 @@ func TestFleetStillRunningAfterItsLastNodeSettled(t *testing.T) {
 	}
 }
 
+// TestFleetReconciliationIgnoresAnOlderStaleIteration pins that only the newest
+// durable iteration can define the current chain state.
+func TestFleetReconciliationIgnoresAnOlderStaleIteration(t *testing.T) {
+	fleetID := "fleet-" + uuidLike("51")
+	older := agenthubtest.Fleet(fleetID, agenthub.OutcomeRunning, ago(2*time.Hour))
+	older.RunID = "iteration-1"
+	newer := agenthubtest.Fleet(fleetID, agenthub.OutcomeSucceeded, ago(time.Hour))
+	newer.RunID = "iteration-2"
+	newer.EndedAt = ago(30 * time.Minute)
+
+	fleets, err := newService(t, agenthubtest.New().WithRecorded(older, newer)).Fleets(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("Fleets: %v", err)
+	}
+	if len(fleets) != 1 || fleets[0].Status != agenthub.StatusDone {
+		t.Fatalf("fleets = %+v, want the newest successful iteration", fleets)
+	}
+}
+
 // TestFleetUnknown pins the 404 path.
 func TestFleetUnknown(t *testing.T) {
 	_, err := newService(t, agenthubtest.New()).Fleet(context.Background(), "fleet-nope")

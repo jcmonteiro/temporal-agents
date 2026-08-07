@@ -102,11 +102,12 @@ type ExecutionSource interface {
 	// RunningExecutions returns the executions that are in flight, capped at limit.
 	RunningExecutions(ctx context.Context, limit int) ([]Execution, error)
 	// Execution returns the current state of one execution chain's latest
-	// iteration, or ErrNoExecution when the orchestrator does not know it (its
-	// retention has passed, or it was terminated and never settled). It is asked
-	// only about executions the durable record still calls running, so the API does
-	// not report work as in progress that nothing is running.
+	// iteration, or ErrNoExecution when the orchestrator does not know it.
 	Execution(ctx context.Context, workflowID string) (Execution, error)
+	// Executions resolves many latest chain states in one adapter operation. Unknown
+	// executions are omitted. Collection reconciliation uses it to avoid one
+	// sequential adapter call per stale durable record.
+	Executions(ctx context.Context, workflowIDs []string) (map[string]Execution, error)
 }
 
 // RecordSource is the driven port for individual durable execution trees. It is
