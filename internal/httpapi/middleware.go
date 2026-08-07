@@ -17,6 +17,8 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/time/rate"
+
+	"temporal-agents/internal/agenthub"
 )
 
 // The middlewares here are the API's security and operability posture, applied to
@@ -389,6 +391,83 @@ func (s *Server) limitParam(w http.ResponseWriter, r *http.Request) (int, bool) 
 		return 0, false
 	}
 	return limit, true
+}
+
+func (s *Server) collectionQuery(w http.ResponseWriter, r *http.Request, allowActive bool) (agenthub.PageQuery, bool, bool) {
+	limit, ok := s.limitParam(w, r)
+	if !ok {
+		return agenthub.PageQuery{}, false, false
+	}
+	active := false
+	if raw := strings.TrimSpace(r.URL.Query().Get("active")); raw != "" {
+		if !allowActive || raw != "true" {
+			s.writeProblem(w, r, codeInvalidRequest, "active must be true on a collection that supports it")
+			return agenthub.PageQuery{}, false, false
+		}
+		active = true
+	}
+	cursor, err := decodePageCursor(r.URL.Query().Get("cursor"))
+	if err != nil {
+		s.writeProblem(w, r, codeInvalidRequest, err.Error())
+		return agenthub.PageQuery{}, false, false
+	}
+	if cursor.ID != "" {
+		switch {
+		case allowActive && !active:
+			s.writeProblem(w, r, codeInvalidRequest, "cursor requires active=true")
+			return agenthub.PageQuery{}, false, false
+		case allowActive && cursor.StartedAt.IsZero():
+			s.writeProblem(w, r, codeInvalidRequest, "cursor is invalid for an active collection")
+			return agenthub.PageQuery{}, false, false
+		case !allowActive && !cursor.StartedAt.IsZero():
+			s.writeProblem(w, r, codeInvalidRequest, "cursor is invalid for a schedule collection")
+			return agenthub.PageQuery{}, false, false
+		}
+	}
+	return agenthub.PageQuery{Limit: limit, After: cursor}, active, true
+}
+
+func decodePageCursor(raw string) (agenthub.PageCursor, error) {
+	if strings.TrimSpace(raw) == "" {
+		return agenthub.PageCursor{}, nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return agenthub.PageCursor{}, errors.New("cursor is invalid")
+	}
+	started, id, found := strings.Cut(string(decoded), "\n")
+	if !found || agenthub.ValidateItemID(id) != nil {
+		return agenthub.PageCursor{}, errors.New("cursor is invalid")
+	}
+	cursor := agenthub.PageCursor{ID: id}
+	if started != "" {
+		cursor.StartedAt, err = time.Parse(time.RFC3339Nano, started)
+		if err != nil {
+			return agenthub.PageCursor{}, errors.New("cursor is invalid")
+		}
+	}
+	return cursor, nil
+}
+
+func encodePageCursor(cursor agenthub.PageCursor) string {
+	if cursor.ID == "" {
+		return ""
+	}
+	started := ""
+	if !cursor.StartedAt.IsZero() {
+		started = cursor.StartedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(started + "\n" + cursor.ID))
+}
+
+func (s *Server) nextPage(r *http.Request, cursor agenthub.PageCursor) string {
+	encoded := encodePageCursor(cursor)
+	if encoded == "" {
+		return ""
+	}
+	query := r.URL.Query()
+	query.Set("cursor", encoded)
+	return r.URL.Path + "?" + query.Encode()
 }
 
 // newLimiter builds the process-wide rate limiter, or nil when rate limiting is

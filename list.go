@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"temporal-agents/internal/hubclient"
+	"temporal-agents/internal/workoverview"
 )
 
 const (
@@ -19,19 +20,16 @@ const (
 	cliHTTPTimeout        = 35 * time.Second
 )
 
-// overviewReader is the HTTP-facing port used by the list command.
-type overviewReader interface {
-	Overview(context.Context) ([]hubclient.WorkItem, error)
-}
-
 // listCmd reads the Agent Hub overview and prints the active top-level work.
-func listCmd(ctx context.Context, out io.Writer, reader overviewReader) error {
+func listCmd(ctx context.Context, out io.Writer, reader workoverview.Reader) error {
 	items, err := reader.Overview(ctx)
 	if err != nil {
 		return fmt.Errorf("could not list work through Agent Hub: %w", err)
 	}
-	_, err = fmt.Fprint(out, formatActiveWork(items))
-	return err
+	if _, err := fmt.Fprint(out, formatActiveWork(items)); err != nil {
+		return fmt.Errorf("write active work: %w", err)
+	}
+	return nil
 }
 
 // listRunning is the command composition root. The CLI uses the same bearer token
@@ -51,12 +49,12 @@ func listRunning() {
 }
 
 // formatActiveWork preserves list's active-work meaning over the Agent Hub model:
-// only in-progress fleets and runs are active, while every recurring schedule is
-// active configuration and remains visible regardless of its latest outcome.
-func formatActiveWork(items []hubclient.WorkItem) string {
-	active := make([]hubclient.WorkItem, 0, len(items))
+// unsettled executions are active, while every recurring schedule is active
+// configuration and remains visible regardless of its latest outcome.
+func formatActiveWork(items []workoverview.Item) string {
+	active := make([]workoverview.Item, 0, len(items))
 	for _, item := range items {
-		if item.Kind == "schedule" || item.Status == "in-progress" {
+		if item.Kind == workoverview.KindSchedule || item.Running {
 			active = append(active, item)
 		}
 	}

@@ -199,6 +199,9 @@ type PlanNode struct {
 type Fleet struct {
 	// ID is the fleet's identity: its parent workflow ID.
 	ID string
+	// Running reports whether the parent fleet execution is unsettled. It is
+	// separate from Status, which aggregates node states.
+	Running bool
 	// Goal is the plan's goal, and the fleet's label.
 	Goal string
 	// PlanID is the stored plan the fleet executes, when it is known.
@@ -218,8 +221,8 @@ type Fleet struct {
 }
 
 // Dismissible reports whether the fleet may be dismissed from the overview: only
-// a finished fleet can be.
-func (f Fleet) Dismissible() bool { return f.Status.Terminal() }
+// a settled parent with a terminal aggregate status can be.
+func (f Fleet) Dismissible() bool { return !f.Running && f.Status.Terminal() }
 
 // UpNext returns the nodes that have not started, prerequisites-ready first
 // (todo) and then merely waiting, in plan order within each group. It is the
@@ -296,6 +299,8 @@ const (
 type Run struct {
 	// ID is the chain's identity: its workflow ID.
 	ID string
+	// Running reports whether the latest chain iteration is unsettled.
+	Running bool
 	// Type is which command started it.
 	Type RunType
 	// Label is what was asked of the agent, i.e. the run's prompt.
@@ -314,7 +319,7 @@ type Run struct {
 }
 
 // Dismissible reports whether the run may be dismissed from the overview.
-func (r Run) Dismissible() bool { return r.Status.Terminal() }
+func (r Run) Dismissible() bool { return !r.Running && r.Status.Terminal() }
 
 // Schedule is one schedule satellite. A schedule is recurring, so it is never
 // "done": its status describes its latest action, and it carries no progress —
@@ -342,6 +347,25 @@ type Schedule struct {
 // Dismissible reports whether the schedule may be dismissed. It never can: a
 // schedule has no terminal state, so hiding it would hide live configuration.
 func (s Schedule) Dismissible() bool { return false }
+
+// PageCursor identifies the last item in a stable collection page.
+type PageCursor struct {
+	StartedAt time.Time
+	ID        string
+}
+
+// PageQuery selects one bounded page after a cursor.
+type PageQuery struct {
+	Limit int
+	After PageCursor
+}
+
+// Page is one collection page and the cursor for the next page. Next is zero on
+// the final page.
+type Page[T any] struct {
+	Items []T
+	Next  PageCursor
+}
 
 // Dismissal records that the operator has dismissed a finished item from the
 // overview. It is view state: it hides an item, and never touches the work.

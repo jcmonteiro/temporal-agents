@@ -130,7 +130,10 @@ type ChainQuery struct {
 	WorkflowID          string
 	RequiredWorkflowIDs []string
 	ExcludedWorkflowIDs []string
-	Limit               int
+	// RequiredOnly excludes the normal newest page and returns only explicitly
+	// required workflow IDs. It supports active pages selected from live state.
+	RequiredOnly bool
+	Limit        int
 }
 
 // ExecutionChain is one fully aggregated continue-as-new chain.

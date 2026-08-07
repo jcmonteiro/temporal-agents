@@ -87,8 +87,16 @@ move to it deliberately.
 | `POST /api/v1/dismissals` | Hide one finished fleet or run |
 | `DELETE /api/v1/dismissals/{id}` | Make the item visible again |
 
-Collections accept `limit` from 1 to 200 and default to 25. The API is an overview,
-not an execution history browser. Use `history` for the durable record.
+Collections accept `limit` from 1 to 200 and default to 25. Active fleet and run
+reads and all schedule reads support cursor pagination. These responses have a
+`next` URL when another page exists and `next: null` on the final page. Pass the
+opaque `cursor` only by following that URL. Other collection reads are bounded
+overviews and have `next: null`. Use `history` for the durable execution record.
+
+Fleet and run collections accept `active=true`. This filter selects unsettled parent
+executions before the page limit is applied. The CLI follows every active fleet and
+run page and every schedule page, so older active work is not hidden by newer
+finished work.
 
 All times are RFC 3339 UTC timestamps. Missing times are JSON `null`, not the year
 1. Successful GET responses carry a strong `ETag` and support `If-None-Match`.
@@ -106,6 +114,10 @@ The detail resource reconciles the plan against child workflow IDs of the form
 `<fleet-id>-<node-id>`. Each node has its plan prompt, predecessor links, derived
 status, and child execution when it started. There are no cross-fleet edges and no
 fabricated owner, estimate, or description.
+
+The `running` field reports whether the parent fleet execution is unsettled. It is
+separate from fleet status because status is aggregated from node states. A running
+fleet can consequently have `todo`, `failed`, or `waiting-input` status.
 
 Fleet status is aggregated by the server. The first matching rule wins:
 
@@ -125,7 +137,8 @@ and never enter the numerator.
 ### Run model
 
 A run resource is a standalone execution **chain**. Its identity is the workflow ID,
-which is stable over continue-as-new. The latest iteration supplies status, the
+which is stable over continue-as-new. The `running` field reports whether the latest
+iteration is unsettled. The latest iteration supplies status, the
 first known iteration supplies start time, and token usage is summed from each
 iteration's incremental count. A chain is never returned as one item per run ID.
 

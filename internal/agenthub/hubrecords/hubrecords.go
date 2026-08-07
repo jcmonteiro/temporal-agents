@@ -82,6 +82,7 @@ func (r *Records) RunChains(ctx context.Context, query agenthub.ChainQuery) ([]a
 		WorkflowID:          query.WorkflowID,
 		RequiredWorkflowIDs: query.RequiredWorkflowIDs,
 		ExcludedWorkflowIDs: query.ExcludedWorkflowIDs,
+		RequiredOnly:        query.RequiredOnly,
 		Limit:               query.Limit,
 	})
 	if err != nil {
@@ -97,6 +98,7 @@ func (r *Records) FleetTrees(ctx context.Context, query agenthub.ChainQuery) ([]
 		WorkflowID:          query.WorkflowID,
 		RequiredWorkflowIDs: query.RequiredWorkflowIDs,
 		ExcludedWorkflowIDs: query.ExcludedWorkflowIDs,
+		RequiredOnly:        query.RequiredOnly,
 		Limit:               query.Limit,
 	})
 	if err != nil {

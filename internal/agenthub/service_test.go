@@ -117,6 +117,64 @@ func TestFleetsAggregatesThePlanAgainstItsNodeExecutions(t *testing.T) {
 	}
 }
 
+func TestActiveFleetsUseParentLivenessInsteadOfAggregateStatus(t *testing.T) {
+	todoID := "fleet-" + uuidLike("todo")
+	failedID := "fleet-" + uuidLike("fail")
+	source := agenthubtest.New().
+		WithRecorded(
+			agenthubtest.Fleet(todoID, agenthub.OutcomeRunning, ago(time.Hour)),
+			agenthubtest.Fleet(failedID, agenthub.OutcomeRunning, ago(2*time.Hour)),
+			agenthubtest.Node(failedID, "broken", agenthub.OutcomeFailed, ago(90*time.Minute)),
+		).
+		WithRunning(
+			agenthubtest.Fleet(todoID, agenthub.OutcomeRunning, ago(time.Hour)),
+			agenthubtest.Fleet(failedID, agenthub.OutcomeRunning, ago(2*time.Hour)),
+		).
+		WithPlan(todoID, agenthub.Plan{Goal: "not started", Nodes: []agenthub.PlanNode{{ID: "ready"}}}).
+		WithPlan(failedID, agenthub.Plan{Goal: "partly failed", Nodes: []agenthub.PlanNode{{ID: "broken"}, {ID: "remaining"}}})
+
+	page, err := newService(t, source).ActiveFleets(context.Background(), agenthub.PageQuery{Limit: 200})
+	if err != nil {
+		t.Fatalf("ActiveFleets: %v", err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("got %d active fleets, want 2", len(page.Items))
+	}
+	statuses := map[string]agenthub.WorkStatus{}
+	for _, fleet := range page.Items {
+		if !fleet.Running {
+			t.Errorf("fleet %q has a settled liveness flag", fleet.ID)
+		}
+		statuses[fleet.ID] = fleet.Status
+	}
+	if statuses[todoID] != agenthub.StatusTodo || statuses[failedID] != agenthub.StatusFailed {
+		t.Errorf("active fleet statuses = %v, want todo and failed", statuses)
+	}
+}
+
+func TestActiveRunsProvideAStableCursorPage(t *testing.T) {
+	source := agenthubtest.New().WithRunning(
+		agenthubtest.Run("run-new", "new", agenthub.OutcomeRunning, ago(time.Minute)),
+		agenthubtest.Run("run-old", "old", agenthub.OutcomeRunning, ago(time.Hour)),
+	)
+	service := newService(t, source)
+
+	first, err := service.ActiveRuns(context.Background(), agenthub.PageQuery{Limit: 1})
+	if err != nil {
+		t.Fatalf("first ActiveRuns: %v", err)
+	}
+	if len(first.Items) != 1 || first.Items[0].ID != "run-new" || first.Next.ID != "run-new" {
+		t.Fatalf("first page = %+v, want run-new and its cursor", first)
+	}
+	second, err := service.ActiveRuns(context.Background(), agenthub.PageQuery{Limit: 1, After: first.Next})
+	if err != nil {
+		t.Fatalf("second ActiveRuns: %v", err)
+	}
+	if len(second.Items) != 1 || second.Items[0].ID != "run-old" || second.Next.ID != "" {
+		t.Fatalf("second page = %+v, want final run-old page", second)
+	}
+}
+
 // TestFleetsUsesTheRecordedBreakdownForSkippedAndBlockedNodes pins where the two
 // outcomes a child execution cannot express come from: a skipped node has no
 // execution at all, and a blocked one is a recoverable stop that needs a human.

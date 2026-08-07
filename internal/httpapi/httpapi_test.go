@@ -37,6 +37,12 @@ func (v *viewStub) Fleets(context.Context, int) ([]agenthub.Fleet, error) {
 	return v.fleets, v.err
 }
 
+func (v *viewStub) ActiveFleets(_ context.Context, query agenthub.PageQuery) (agenthub.Page[agenthub.Fleet], error) {
+	return pageByExecutionCursor(v.fleets, query, func(fleet agenthub.Fleet) (string, time.Time, bool) {
+		return fleet.ID, fleet.StartedAt, fleet.Running
+	}), v.err
+}
+
 func (v *viewStub) Fleet(_ context.Context, id string) (agenthub.Fleet, error) {
 	if v.err != nil {
 		return agenthub.Fleet{}, v.err
@@ -50,6 +56,12 @@ func (v *viewStub) Fleet(_ context.Context, id string) (agenthub.Fleet, error) {
 }
 
 func (v *viewStub) Runs(context.Context, int) ([]agenthub.Run, error) { return v.runs, v.err }
+
+func (v *viewStub) ActiveRuns(_ context.Context, query agenthub.PageQuery) (agenthub.Page[agenthub.Run], error) {
+	return pageByExecutionCursor(v.runs, query, func(run agenthub.Run) (string, time.Time, bool) {
+		return run.ID, run.StartedAt, run.Running
+	}), v.err
+}
 
 func (v *viewStub) Run(_ context.Context, id string) (agenthub.Run, error) {
 	if v.err != nil {
@@ -65,6 +77,39 @@ func (v *viewStub) Run(_ context.Context, id string) (agenthub.Run, error) {
 
 func (v *viewStub) Schedules(context.Context, int) ([]agenthub.Schedule, error) {
 	return v.schedules, v.err
+}
+
+func (v *viewStub) SchedulePage(_ context.Context, query agenthub.PageQuery) (agenthub.Page[agenthub.Schedule], error) {
+	page := agenthub.Page[agenthub.Schedule]{}
+	for _, schedule := range v.schedules {
+		if query.After.ID != "" && schedule.ID <= query.After.ID {
+			continue
+		}
+		if len(page.Items) == query.Limit {
+			last := page.Items[len(page.Items)-1]
+			page.Next = agenthub.PageCursor{ID: last.ID}
+			break
+		}
+		page.Items = append(page.Items, schedule)
+	}
+	return page, v.err
+}
+
+func pageByExecutionCursor[T any](items []T, query agenthub.PageQuery, facts func(T) (string, time.Time, bool)) agenthub.Page[T] {
+	page := agenthub.Page[T]{}
+	for _, item := range items {
+		id, startedAt, running := facts(item)
+		if !running || query.After.ID != "" && !(startedAt.Before(query.After.StartedAt) || startedAt.Equal(query.After.StartedAt) && id > query.After.ID) {
+			continue
+		}
+		if len(page.Items) == query.Limit {
+			lastID, lastStartedAt, _ := facts(page.Items[len(page.Items)-1])
+			page.Next = agenthub.PageCursor{ID: lastID, StartedAt: lastStartedAt}
+			break
+		}
+		page.Items = append(page.Items, item)
+	}
+	return page
 }
 
 func (v *viewStub) Dismissals(context.Context) ([]agenthub.Dismissal, error) {
@@ -210,6 +255,36 @@ func TestFleetCollectionPublishesAPortableContract(t *testing.T) {
 	}
 	if fleet.Nodes != nil {
 		t.Errorf("collection carries %d nodes, want the graph only on the item resource", len(fleet.Nodes))
+	}
+}
+
+func TestActiveFleetCollectionFiltersBeforePagingAndPublishesLiveness(t *testing.T) {
+	view := &viewStub{fleets: []agenthub.Fleet{
+		{ID: "fleet-finished", Status: agenthub.StatusDone, StartedAt: fixedNow},
+		{ID: "fleet-running-new", Running: true, Status: agenthub.StatusTodo, StartedAt: fixedNow.Add(-time.Hour)},
+		{ID: "fleet-running-old", Running: true, Status: agenthub.StatusFailed, StartedAt: fixedNow.Add(-2 * time.Hour)},
+	}}
+	server := newTestServer(t, view)
+
+	response := request(t, server, http.MethodGet, BasePath+"/fleets?active=true&limit=1", nil)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+	}
+	var first collection[fleetResource]
+	decodeResponse(t, response, &first)
+	if len(first.Items) != 1 || first.Items[0].ID != "fleet-running-new" || !first.Items[0].Running || first.Next == nil {
+		t.Fatalf("first active fleet page = %+v, want the running todo fleet and a next link", first)
+	}
+
+	response = request(t, server, http.MethodGet, *first.Next, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("next status = %d: %s", response.Code, response.Body.String())
+	}
+	var second collection[fleetResource]
+	decodeResponse(t, response, &second)
+	if len(second.Items) != 1 || second.Items[0].ID != "fleet-running-old" || second.Next != nil {
+		t.Fatalf("second active fleet page = %+v, want the final running failed fleet", second)
 	}
 }
 
@@ -415,7 +490,7 @@ func TestDismissalBodyIsStrictAndBounded(t *testing.T) {
 // TestActiveItemCannotBeDismissed pins that the server enforces the rule rather than
 // trusting a frontend to hide the affordance.
 func TestActiveItemCannotBeDismissed(t *testing.T) {
-	view := &viewStub{runs: []agenthub.Run{{ID: "run-1", Status: agenthub.StatusInProgress, Iterations: 1}}}
+	view := &viewStub{runs: []agenthub.Run{{ID: "run-1", Running: true, Status: agenthub.StatusInProgress, Iterations: 1}}}
 	server := newTestServer(t, view)
 	req := newRequest(http.MethodPost, BasePath+"/dismissals", strings.NewReader(`{"kind":"run","itemId":"run-1"}`))
 	req.Header.Set("Content-Type", "application/json")

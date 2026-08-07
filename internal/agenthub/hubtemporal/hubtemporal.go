@@ -93,12 +93,9 @@ func NewSchedules(c ScheduleLister) (*Schedules, error) {
 }
 
 // RunningExecutions implements agenthub.ExecutionSource. It pages through the
-// visibility listing until the cap is reached, so one request can never turn into
-// an unbounded scan of a busy orchestrator.
+// visibility listing until the optional cap is reached. A zero limit reads all
+// pages for a caller that provides its own cursor paging.
 func (e *Executions) RunningExecutions(ctx context.Context, limit int) ([]agenthub.Execution, error) {
-	if limit <= 0 {
-		limit = agenthub.MaxLimit
-	}
 	var out []agenthub.Execution
 	var next []byte
 	for {
@@ -111,7 +108,7 @@ func (e *Executions) RunningExecutions(ctx context.Context, limit int) ([]agenth
 		}
 		for _, info := range resp.GetExecutions() {
 			out = append(out, executionFrom(info))
-			if len(out) == limit {
+			if limit > 0 && len(out) == limit {
 				return out, nil
 			}
 		}
@@ -212,9 +209,6 @@ func (e *Executions) Executions(ctx context.Context, workflowIDs []string) (map[
 // each attributed to the schedule that fired it. Describing every schedule here to
 // re-derive that would cost a round trip per schedule for a fact already in hand.
 func (s *Schedules) Schedules(ctx context.Context, limit int) ([]agenthub.ScheduleState, error) {
-	if limit <= 0 {
-		limit = agenthub.MaxLimit
-	}
 	iter, err := s.client.List(ctx, client.ScheduleListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list the schedules: %w", err)
@@ -229,7 +223,7 @@ func (s *Schedules) Schedules(ctx context.Context, limit int) ([]agenthub.Schedu
 			continue
 		}
 		out = append(out, scheduleStateFrom(entry))
-		if len(out) == limit {
+		if limit > 0 && len(out) == limit {
 			break
 		}
 	}

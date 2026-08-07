@@ -338,6 +338,7 @@ type ChainFilter struct {
 	WorkflowID          string
 	RequiredWorkflowIDs []string
 	ExcludedWorkflowIDs []string
+	RequiredOnly        bool
 	Limit               int
 }
 

@@ -168,6 +168,7 @@ func selectedExecutionsSQL(tree bool) string {
 ), page AS (
 	SELECT workflow_id, chain_started
 	FROM eligible
+	WHERE NOT $6
 	ORDER BY chain_started DESC, workflow_id ASC
 	LIMIT $4
 ), selected AS (
@@ -197,7 +198,7 @@ func chainArgs(filter execstore.ChainFilter) []any {
 		required = []string{}
 	}
 	limit := execstore.EffectiveLimit(filter.Limit, execstore.DefaultHistoryLimit)
-	return []any{kinds, filter.WorkflowID, excluded, limit, required}
+	return []any{kinds, filter.WorkflowID, excluded, limit, required, filter.RequiredOnly}
 }
 
 func executionActionID(execution execstore.Execution) string {

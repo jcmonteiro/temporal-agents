@@ -23,22 +23,29 @@ import (
 // describe a page (its cap, how much of it came back) without changing an item's
 // shape.
 type collection[T any] struct {
-	// Items are the page's items, newest first.
+	// Items are the resources in the collection's documented order.
 	Items []T `json:"items"`
 	// Count is how many items this page carries.
 	Count int `json:"count"`
 	// Limit is the cap that was applied, whether the caller asked for it or it is
 	// the default.
 	Limit int `json:"limit"`
+	// Next is the URL of the next complete-list page when paging is enabled,
+	// otherwise null.
+	Next *string `json:"next"`
 }
 
 // newCollection wraps items in the envelope, normalising a nil slice to an empty
 // one so a consumer never has to tell "no items" apart from "no field".
-func newCollection[T any](items []T, limit int) collection[T] {
+func newCollection[T any](items []T, limit int, next ...string) collection[T] {
 	if items == nil {
 		items = []T{}
 	}
-	return collection[T]{Items: items, Count: len(items), Limit: limit}
+	document := collection[T]{Items: items, Count: len(items), Limit: limit}
+	if len(next) > 0 && next[0] != "" {
+		document.Next = &next[0]
+	}
+	return document
 }
 
 // fleetResource is a fleet: an orchestrated plan, its aggregated status and its
@@ -58,6 +65,8 @@ type fleetResource struct {
 	Label string `json:"label"`
 	// Status is the aggregated status of the whole fleet.
 	Status agenthub.WorkStatus `json:"status"`
+	// Running reports whether the parent fleet execution is unsettled.
+	Running bool `json:"running"`
 	// Progress is done nodes over total nodes.
 	Progress progressResource `json:"progress"`
 	// PlanID is the stored plan the fleet executes, when it is known.
@@ -133,6 +142,8 @@ type runResource struct {
 	Label string `json:"label"`
 	// Status is the latest iteration's status.
 	Status agenthub.WorkStatus `json:"status"`
+	// Running reports whether the latest chain iteration is unsettled.
+	Running bool `json:"running"`
 	// StartedAt is when the chain's earliest known iteration started, in UTC.
 	StartedAt *string `json:"startedAt"`
 	// EndedAt is when the latest iteration settled, or null while it runs.
@@ -207,6 +218,7 @@ func fleetFrom(fleet agenthub.Fleet, withNodes bool) fleetResource {
 		Kind:        agenthub.KindFleet,
 		Label:       fleet.Goal,
 		Status:      fleet.Status,
+		Running:     fleet.Running,
 		Progress:    progressFrom(fleet.Progress),
 		PlanID:      fleet.PlanID,
 		StartedAt:   timestamp(fleet.StartedAt),
@@ -267,6 +279,7 @@ func runFrom(run agenthub.Run) runResource {
 		Type:        run.Type,
 		Label:       run.Label,
 		Status:      run.Status,
+		Running:     run.Running,
 		StartedAt:   timestamp(run.StartedAt),
 		EndedAt:     timestamp(run.EndedAt),
 		Iterations:  run.Iterations,

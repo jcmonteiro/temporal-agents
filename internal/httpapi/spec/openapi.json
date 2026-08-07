@@ -3,7 +3,7 @@
   "info": {
     "title": "Temporal Agents API",
     "version": "1.0.0",
-    "description": "A versioned local API for observing agent work as fleets, standalone run chains, and schedules. The API exposes the work model rather than Temporal or database structures. It is read-only except for dismissing finished overview items. All times are RFC 3339 UTC timestamps. Collection reads are capped and newest first. A continue-as-new chain is one run identified by its stable workflow ID. The server binds to loopback by default because responses can contain workflow goals and prompts.",
+    "description": "A versioned local API for observing agent work as fleets, standalone run chains, and schedules. The API exposes the work model rather than Temporal or database structures. It is read-only except for dismissing finished overview items. All times are RFC 3339 UTC timestamps. Collection reads are capped. Active fleet and run reads and schedule reads support cursor pagination. A continue-as-new chain is one run identified by its stable workflow ID. The server binds to loopback by default because responses can contain workflow goals and prompts.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -301,6 +301,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Active"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
           }
         ],
         "responses": {
@@ -413,6 +419,12 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Active"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
           }
         ],
         "responses": {
@@ -524,6 +536,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
           }
         ],
         "responses": {
@@ -772,6 +787,26 @@
         "description": "A problem code from the problem catalogue.",
         "schema": {
           "type": "string"
+        }
+      },
+      "Active": {
+        "name": "active",
+        "in": "query",
+        "required": false,
+        "description": "When true, return only resources whose parent execution is unsettled. Supported by fleets and runs.",
+        "schema": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "Opaque cursor from the previous collection page's next link.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
@@ -1072,6 +1107,7 @@
           "kind",
           "label",
           "status",
+          "running",
           "progress",
           "startedAt",
           "endedAt",
@@ -1124,6 +1160,10 @@
             "items": {
               "$ref": "#/components/schemas/FleetNode"
             }
+          },
+          "running": {
+            "type": "boolean",
+            "description": "Whether the parent execution or latest chain iteration is unsettled."
           }
         }
       },
@@ -1136,6 +1176,7 @@
           "type",
           "label",
           "status",
+          "running",
           "startedAt",
           "endedAt",
           "iterations",
@@ -1180,6 +1221,10 @@
           },
           "dismissible": {
             "type": "boolean"
+          },
+          "running": {
+            "type": "boolean",
+            "description": "Whether the parent execution or latest chain iteration is unsettled."
           }
         }
       },
@@ -1293,7 +1338,8 @@
         "required": [
           "items",
           "count",
-          "limit"
+          "limit",
+          "next"
         ],
         "properties": {
           "items": {
@@ -1310,6 +1356,14 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 200
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri-reference",
+            "description": "URL of the next complete-list page when paging is enabled, otherwise null."
           }
         }
       },
@@ -1319,7 +1373,8 @@
         "required": [
           "items",
           "count",
-          "limit"
+          "limit",
+          "next"
         ],
         "properties": {
           "items": {
@@ -1336,6 +1391,14 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 200
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri-reference",
+            "description": "URL of the next complete-list page when paging is enabled, otherwise null."
           }
         }
       },
@@ -1345,7 +1408,8 @@
         "required": [
           "items",
           "count",
-          "limit"
+          "limit",
+          "next"
         ],
         "properties": {
           "items": {
@@ -1362,6 +1426,14 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 200
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri-reference",
+            "description": "URL of the next complete-list page when paging is enabled, otherwise null."
           }
         }
       },
@@ -1371,7 +1443,8 @@
         "required": [
           "items",
           "count",
-          "limit"
+          "limit",
+          "next"
         ],
         "properties": {
           "items": {
@@ -1387,6 +1460,14 @@
           "limit": {
             "type": "integer",
             "minimum": 0
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri-reference",
+            "description": "URL of the next complete-list page when paging is enabled, otherwise null."
           }
         }
       },
