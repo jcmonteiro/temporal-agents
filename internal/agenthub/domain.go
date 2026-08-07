@@ -446,10 +446,14 @@ func ValidateItemID(itemID string) error {
 	if !utf8.ValidString(itemID) || utf8.RuneCountInString(itemID) > maxItemIDLength {
 		return fmt.Errorf("%w: the item id must be at most %d characters", ErrInvalid, maxItemIDLength)
 	}
-	if strings.ContainsAny(itemID, "/?#% \t\n\r") || strings.IndexFunc(itemID, unicode.IsControl) >= 0 {
+	if strings.ContainsAny(itemID, "/?#%") || strings.IndexFunc(itemID, invalidItemIDRune) >= 0 {
 		return fmt.Errorf("%w: the item id %q contains characters that cannot appear in an identifier", ErrInvalid, itemID)
 	}
 	return nil
+}
+
+func invalidItemIDRune(r rune) bool {
+	return unicode.IsControl(r) || unicode.IsSpace(r) || r == '\ufeff'
 }
 
 // ValidateDismissalTarget checks that kind and itemID can identify a dismissible

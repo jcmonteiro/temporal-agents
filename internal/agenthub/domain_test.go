@@ -269,7 +269,10 @@ func TestValidateDismissalTarget(t *testing.T) {
 			}
 		})
 	}
-	for _, itemID := range []string{"", "run/1", "run%2f1", "run\x1b[2J", "run\u00851", strings.Repeat("x", maxItemIDLength+1)} {
+	for _, itemID := range []string{
+		"", "run/1", "run%2f1", "run\x1b[2J", "run\u00851", "run\u00a01", "run\ufeff1",
+		strings.Repeat("x", maxItemIDLength+1),
+	} {
 		if err := ValidateItemID(itemID); err == nil {
 			t.Errorf("ValidateItemID(%q) = nil, want an error", itemID)
 		}

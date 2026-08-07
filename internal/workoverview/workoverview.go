@@ -15,10 +15,14 @@ const maxIDLength = 255
 // to a terminal or uses it as one URL path segment.
 func ValidateID(id string) error {
 	if id == "" || !utf8.ValidString(id) || utf8.RuneCountInString(id) > maxIDLength ||
-		strings.ContainsAny(id, "/?#% \t\r\n") || strings.IndexFunc(id, unicode.IsControl) >= 0 {
+		strings.ContainsAny(id, "/?#%") || strings.IndexFunc(id, invalidIDRune) >= 0 {
 		return errors.New("invalid work item ID")
 	}
 	return nil
+}
+
+func invalidIDRune(r rune) bool {
+	return unicode.IsControl(r) || unicode.IsSpace(r) || r == '\ufeff'
 }
 
 // Kind is the display type of one top-level work item.

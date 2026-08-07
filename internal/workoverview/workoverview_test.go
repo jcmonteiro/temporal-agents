@@ -47,6 +47,8 @@ func TestValidateIDRejectsTerminalAndResourceControlCharacters(t *testing.T) {
 		"run\n1",
 		"run\x1b[2J",
 		"run\u00851",
+		"run\u00a01",
+		"run\ufeff1",
 		strings.Repeat("x", 256),
 	}
 	for _, id := range invalid {
