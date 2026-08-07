@@ -109,6 +109,24 @@ func TestServeSecurityRequiresAuthenticationOutsideLoopback(t *testing.T) {
 	}
 }
 
+// TestLocalOriginsAllowsTheBundledUIOnLoopback pins that strict Origin rejection
+// does not block a dismissal submitted by the same server's static UI.
+func TestLocalOriginsAllowsTheBundledUIOnLoopback(t *testing.T) {
+	origins := localOrigins(defaultServeAddress, []string{"hub.example.test"})
+	want := map[string]bool{
+		"http://127.0.0.1:8973":        true,
+		"http://localhost:8973":        true,
+		"http://[::1]:8973":            true,
+		"http://hub.example.test:8973": true,
+	}
+	for _, origin := range origins {
+		delete(want, origin)
+	}
+	if len(want) != 0 {
+		t.Errorf("local origins = %v, missing %v", origins, want)
+	}
+}
+
 // TestServeHelpExplainsTheSecurityBoundary keeps the operational contract in the
 // command itself: loopback, the versioned API path, the contract location and the
 // environment required to run it must be visible without reading this repository.

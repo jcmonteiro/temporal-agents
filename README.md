@@ -101,7 +101,7 @@ cannot record its *outcome* keeps its result and reports the bookkeeping failure
 | `watch <workflow-id>` | Stream a workflow's live Pi progress, then its result. |
 | `list` | List running workflows and schedules (fleet parents and per-node children included). |
 | `history [--kind <k>] [--limit <n>] [--workflow-id <id>] [--schedule-id <id>]` | List durably recorded executions, newest first. |
-| `serve [--addr <host:port>] [--web-dir <path>] [--allow-origin <origin>]...` | Serve the versioned Agent Hub REST API and, optionally, an independently built SPA. |
+| `serve [--addr <host:port>] [--web-dir <path>] [--allow-host <host>]... [--allow-origin <origin>]...` | Serve the versioned Agent Hub REST API and, optionally, an independently built SPA. |
 
 Common flags: `--save <name>` stores the invocation as a reusable template; `--chain` re-triggers `run`/`schedule` on each success (`code pilot` chains by default, disable with `--no-chain`); `--summary` (code subcommands only) sends a Pi-generated summary as the webhook body, and on `fleet execute` propagates that behavior to each node's develop workflow.
 
@@ -122,10 +122,12 @@ Finished items remain visible until dismissed. A dismissal is Postgres-backed vi
 state and never changes workflow state. Continue-as-new iterations are one run
 resource identified by workflow ID.
 
-The API binds to `127.0.0.1:8973` by default because it is unauthenticated and can
-contain prompts. A non-loopback `--addr` and each `--allow-origin` are explicit
-opt-ins. The contract is OpenAPI 3.1; versioned standalone JSON Schemas and resolvable
-problem types are served with it. See [the REST API guide](docs/rest-api.md).
+The API binds to `127.0.0.1:8973` by default and accepts only configured HTTP Host
+names. A non-loopback `--addr` requires `AGENT_HUB_AUTH_TOKEN`; remote clients send it
+as a bearer token. Additional Host names use `--allow-host`. Each cross-origin browser
+origin requires an exact `--allow-origin`; other supplied origins are rejected. The
+contract is OpenAPI 3.1; versioned standalone JSON Schemas and resolvable problem types
+are served with it. See [the REST API guide](docs/rest-api.md).
 
 ### Fleet fan-out
 

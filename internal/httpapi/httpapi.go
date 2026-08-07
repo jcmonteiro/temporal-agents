@@ -10,8 +10,8 @@
 //
 // The API is read-only except for one write: an operator dismissing a finished item
 // from their overview, which is view state and never touches the work. It is
-// unauthenticated by design (a single trusted local operator) and therefore bound to
-// loopback by default and built as if it were exposed anyway: bounded rate, bounded
+// unauthenticated only on its default loopback listener; an exposed listener requires
+// bearer authentication. It is built as if exposed in either mode: bounded rate, bounded
 // bodies, bounded time, no permissive cross-origin default, and no internal detail in
 // any answer.
 package httpapi

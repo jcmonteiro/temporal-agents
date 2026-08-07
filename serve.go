@@ -29,10 +29,9 @@ import (
 // driving port. That is the only dependency direction a hexagonal application
 // permits — adapters point inward, never the core outward.
 
-// serveDefaults are safe for an unauthenticated API that contains workflow goals and
-// prompts. A non-loopback address is possible, but it can only be selected with the
-// explicit --addr option; there is no environment variable that can widen the bind by
-// accident.
+// serveDefaults are safe for an API that contains workflow goals and prompts. A
+// non-loopback address is possible only with an explicit --addr and a bearer token;
+// no environment variable can widen the bind by accident.
 const (
 	defaultServeAddress  = "127.0.0.1:8973"
 	defaultWebDirectory  = "web/dist"
@@ -183,6 +182,36 @@ func serveSecurity(options serveOptions, configuredToken string) ([]string, stri
 	return hosts, token, nil
 }
 
+// localOrigins derives the server origins that browsers can use for the bundled
+// same-origin UI. They are explicit consequences of the listener and Host allowlist.
+func localOrigins(address string, allowedHosts []string) []string {
+	listenerHost, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil
+	}
+	hosts := append([]string(nil), allowedHosts...)
+	if ip := net.ParseIP(listenerHost); ip != nil && ip.IsLoopback() || strings.EqualFold(listenerHost, "localhost") {
+		hosts = append(hosts, "localhost", "127.0.0.1", "::1")
+	}
+	seen := map[string]bool{}
+	origins := make([]string, 0, len(hosts))
+	for _, host := range hosts {
+		if parsedHost, _, splitErr := net.SplitHostPort(host); splitErr == nil {
+			host = parsedHost
+		}
+		host = strings.Trim(strings.TrimSpace(host), "[]")
+		if host == "" {
+			continue
+		}
+		origin := "http://" + net.JoinHostPort(host, port)
+		if !seen[origin] {
+			seen[origin] = true
+			origins = append(origins, origin)
+		}
+	}
+	return origins
+}
+
 // runAPIServer wires every port and runs the HTTP server.
 func runAPIServer(options serveOptions) error {
 	allowedHosts, authToken, err := serveSecurity(options, os.Getenv(agentHubAuthTokenEnv))
@@ -245,10 +274,11 @@ func runAPIServer(options serveOptions) error {
 		return err
 	}
 
+	allowedOrigins := append(localOrigins(options.address, allowedHosts), options.allowedOrigins...)
 	api, err := httpapi.New(service, httpapi.Options{
 		Logger:         slog.Default(),
 		AllowedHosts:   allowedHosts,
-		AllowedOrigins: options.allowedOrigins,
+		AllowedOrigins: allowedOrigins,
 		AuthToken:      authToken,
 		WebDir:         options.webDir,
 		HealthChecks: []httpapi.HealthCheck{

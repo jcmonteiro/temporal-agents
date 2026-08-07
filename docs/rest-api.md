@@ -14,17 +14,22 @@ export DATABASE_URL=postgres://postgres:postgres@localhost:15432/temporal_agents
 temporal-agents serve
 ```
 
-The default listener is `127.0.0.1:8973`. This loopback default is a security
-boundary: responses can contain workflow goals and prompts, and the API has no
-authentication in its single-operator mode. A non-loopback bind is an explicit
-choice:
+The default listener is `127.0.0.1:8973`. Responses can contain workflow goals and
+prompts. The server accepts only loopback Host names, its concrete listener host, and
+names supplied with `--allow-host`. This blocks DNS-rebinding requests that use a
+hostile hostname.
+
+A non-loopback bind requires bearer authentication. Set the token in the environment;
+do not put it in a command-line argument:
 
 ```sh
-temporal-agents serve --addr 0.0.0.0:8973
+export AGENT_HUB_AUTH_TOKEN='replace-with-a-long-random-token'
+temporal-agents serve --addr 0.0.0.0:8973 --allow-host hub.example.test
+curl -H "Authorization: Bearer $AGENT_HUB_AUTH_TOKEN" http://hub.example.test:8973/api/v1
 ```
 
-No browser origin is allowed cross-origin by default. Each trusted origin must be
-listed separately:
+The server explicitly allows its own configured origins for the bundled UI. Each
+additional browser origin must be listed separately:
 
 ```sh
 temporal-agents serve --allow-origin http://localhost:5173
@@ -194,10 +199,12 @@ fields and multiple JSON documents.
 
 ## Security notes
 
-- Loopback is the default bind. Non-loopback is an explicit `--addr` choice.
-- There is no authentication or authorization in single-operator mode.
-- Cross-origin access is denied unless an exact origin is configured. Wildcards are
-  not accepted.
+- Loopback is the default bind. A non-loopback `--addr` requires
+  `AGENT_HUB_AUTH_TOKEN` and bearer authentication.
+- Every request Host must match the loopback names, the concrete listener host, or an
+  exact `--allow-host` entry.
+- A supplied browser Origin is rejected unless it is one of the server's own origins
+  or an exact `--allow-origin` entry. Wildcards are not accepted.
 - Requests have body, rate, and time limits. Responses use restrictive browser
   security headers.
 - Postgres remains bound to loopback in the local compose stack.
