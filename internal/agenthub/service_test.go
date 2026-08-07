@@ -3,6 +3,7 @@ package agenthub_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -34,11 +35,12 @@ func TestNewServiceRequiresEveryPort(t *testing.T) {
 	source := agenthubtest.New()
 	full := source.Dependencies(now)
 	cases := map[string]func(*agenthub.Dependencies){
-		"live":       func(d *agenthub.Dependencies) { d.Live = nil },
-		"records":    func(d *agenthub.Dependencies) { d.Records = nil },
-		"plans":      func(d *agenthub.Dependencies) { d.Plans = nil },
-		"schedules":  func(d *agenthub.Dependencies) { d.Schedules = nil },
-		"dismissals": func(d *agenthub.Dependencies) { d.Dismissals = nil },
+		"live":        func(d *agenthub.Dependencies) { d.Live = nil },
+		"records":     func(d *agenthub.Dependencies) { d.Records = nil },
+		"collections": func(d *agenthub.Dependencies) { d.Collections = nil },
+		"plans":       func(d *agenthub.Dependencies) { d.Plans = nil },
+		"schedules":   func(d *agenthub.Dependencies) { d.Schedules = nil },
+		"dismissals":  func(d *agenthub.Dependencies) { d.Dismissals = nil },
 	}
 	for name, remove := range cases {
 		t.Run("without the "+name+" port", func(t *testing.T) {
@@ -271,6 +273,35 @@ func TestRunsCollapseAContinueAsNewChainIntoOneSatellite(t *testing.T) {
 		t.Errorf("tokens = %d, want the chain's 175", run.Tokens)
 	case !run.StartedAt.Equal(ago(3 * time.Hour)):
 		t.Errorf("startedAt = %v, want the chain's first iteration %v", run.StartedAt, ago(3*time.Hour))
+	}
+}
+
+// TestRunsAggregateEveryIterationBeforeLimitingChains pins that a row cap cannot
+// hide another resource or truncate a continue-as-new chain.
+func TestRunsAggregateEveryIterationBeforeLimitingChains(t *testing.T) {
+	longID := "run-" + uuidLike("62")
+	otherID := "run-" + uuidLike("63")
+	source := agenthubtest.New()
+	for i := 0; i < 1001; i++ {
+		iteration := agenthubtest.Run(longID, "long chain", agenthub.OutcomeSucceeded,
+			now.Add(-time.Duration(i)*time.Second))
+		iteration.RunID = fmt.Sprintf("iteration-%04d", i)
+		iteration.Tokens = 1
+		source.WithRecorded(iteration)
+	}
+	source.WithRecorded(agenthubtest.Run(otherID, "other chain", agenthub.OutcomeSucceeded, ago(2*time.Hour)))
+
+	runs, err := newService(t, source).Runs(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("Runs: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("got %d runs, want both chains", len(runs))
+	}
+	for _, run := range runs {
+		if run.ID == longID && (run.Iterations != 1001 || run.Tokens != 1001) {
+			t.Errorf("long chain = %d iterations/%d tokens, want 1001/1001", run.Iterations, run.Tokens)
+		}
 	}
 }
 
@@ -516,6 +547,27 @@ func TestAnUnavailableDependencyIsReportedAsRetryable(t *testing.T) {
 				t.Fatalf("%s = %v, want ErrUnavailable", name, err)
 			}
 		})
+	}
+}
+
+// TestDismissedFleetsAreExcludedBeforeTheLimit pins that any number of newer
+// dismissals cannot permanently hide an older visible fleet.
+func TestDismissedFleetsAreExcludedBeforeTheLimit(t *testing.T) {
+	source := agenthubtest.New()
+	for i := 0; i < 201; i++ {
+		id := "fleet-" + uuidLike(fmt.Sprintf("%x", 0x100+i))
+		source.WithRecorded(agenthubtest.Fleet(id, agenthub.OutcomeSucceeded, now.Add(-time.Duration(i)*time.Second)))
+		source.WithDismissal(agenthub.KindFleet, id)
+	}
+	visibleID := "fleet-" + uuidLike("2ff")
+	source.WithRecorded(agenthubtest.Fleet(visibleID, agenthub.OutcomeSucceeded, ago(time.Hour)))
+
+	fleets, err := newService(t, source).Fleets(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("Fleets: %v", err)
+	}
+	if len(fleets) != 1 || fleets[0].ID != visibleID {
+		t.Fatalf("fleets = %v, want older visible fleet %q", fleets, visibleID)
 	}
 }
 

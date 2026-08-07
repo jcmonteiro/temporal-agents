@@ -27,26 +27,31 @@ import (
 // in-memory fake the workflows' tests use and never sees a driver type.
 type Records struct {
 	executions execstore.ExecutionReader
-	plans      execstore.PlanStore
+	overview   execstore.OverviewReader
+	plans      execstore.PlanReader
 }
 
 // Compile-time proof the adapter satisfies the ports it is injected as.
 var (
-	_ agenthub.RecordSource = (*Records)(nil)
-	_ agenthub.PlanSource   = (*Records)(nil)
+	_ agenthub.RecordSource     = (*Records)(nil)
+	_ agenthub.CollectionSource = (*Records)(nil)
+	_ agenthub.PlanSource       = (*Records)(nil)
 )
 
 // New returns the adapter over the given ports. Both are required: a reader
 // without a plan store could answer executions but would report every fleet as
 // having no plan, which looks exactly like a fleet whose plan was lost.
-func New(executions execstore.ExecutionReader, plans execstore.PlanStore) (*Records, error) {
+func New(executions interface {
+	execstore.ExecutionReader
+	execstore.OverviewReader
+}, plans execstore.PlanReader) (*Records, error) {
 	if executions == nil {
 		return nil, errors.New("the execution reader is required")
 	}
 	if plans == nil {
-		return nil, errors.New("the plan store is required")
+		return nil, errors.New("the plan reader is required")
 	}
-	return &Records{executions: executions, plans: plans}, nil
+	return &Records{executions: executions, overview: executions, plans: plans}, nil
 }
 
 // RecordedExecutions implements agenthub.RecordSource.
@@ -67,6 +72,105 @@ func (r *Records) RecordedExecutions(ctx context.Context, q agenthub.RecordQuery
 	return out, nil
 }
 
+// RunChains implements agenthub.CollectionSource.
+func (r *Records) RunChains(ctx context.Context, query agenthub.ChainQuery) ([]agenthub.ExecutionChain, error) {
+	chains, err := r.overview.ListExecutionChains(ctx, execstore.ChainFilter{
+		Kinds: []execstore.Kind{
+			execstore.KindRun, execstore.KindDevelop, execstore.KindReview,
+			execstore.KindPilot, execstore.KindFleetPlan,
+		},
+		WorkflowID:          query.WorkflowID,
+		ExcludedWorkflowIDs: query.ExcludedWorkflowIDs,
+		Limit:               query.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return chainsFrom(chains), nil
+}
+
+// FleetTrees implements agenthub.CollectionSource.
+func (r *Records) FleetTrees(ctx context.Context, query agenthub.ChainQuery) ([]agenthub.FleetTree, error) {
+	trees, err := r.overview.ListExecutionTrees(ctx, execstore.ChainFilter{
+		Kinds:               []execstore.Kind{execstore.KindFleet},
+		WorkflowID:          query.WorkflowID,
+		ExcludedWorkflowIDs: query.ExcludedWorkflowIDs,
+		Limit:               query.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]agenthub.FleetTree, 0, len(trees))
+	for _, tree := range trees {
+		converted := agenthub.FleetTree{Chain: chainFrom(tree.Chain)}
+		for _, execution := range tree.Executions {
+			converted.Executions = append(converted.Executions, executionFrom(execution))
+		}
+		out = append(out, converted)
+	}
+	return out, nil
+}
+
+// ScheduleActions implements agenthub.CollectionSource.
+func (r *Records) ScheduleActions(ctx context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]agenthub.Execution, error) {
+	actions, err := r.overview.ListScheduleExecutions(ctx, scheduleIDs, perScheduleLimit)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]agenthub.Execution, len(actions))
+	for id, executions := range actions {
+		for _, execution := range executions {
+			out[id] = append(out[id], executionFrom(execution))
+		}
+	}
+	return out, nil
+}
+
+// Plans implements agenthub.PlanSource.
+func (r *Records) Plans(ctx context.Context, refs []agenthub.PlanReference) (map[string]agenthub.Plan, error) {
+	ids := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if ref.PlanID != "" {
+			ids = append(ids, ref.PlanID)
+		}
+	}
+	stored, err := r.plans.Plans(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]agenthub.Plan, len(refs))
+	for _, ref := range refs {
+		plan, ok := stored[ref.PlanID]
+		if !ok {
+			continue
+		}
+		converted, err := planFrom(plan)
+		if err != nil {
+			return nil, err
+		}
+		out[ref.FleetID] = converted
+	}
+	return out, nil
+}
+
+func chainsFrom(chains []execstore.ExecutionChain) []agenthub.ExecutionChain {
+	out := make([]agenthub.ExecutionChain, 0, len(chains))
+	for _, chain := range chains {
+		out = append(out, chainFrom(chain))
+	}
+	return out
+}
+
+func chainFrom(chain execstore.ExecutionChain) agenthub.ExecutionChain {
+	return agenthub.ExecutionChain{
+		Latest:     executionFrom(chain.Latest),
+		StartedAt:  chain.StartedAt,
+		Iterations: chain.Iterations,
+		Tokens:     chain.Tokens,
+	}
+}
+
+// PlanFor resolves one fleet plan for compatibility with detail-focused callers.
 // PlanFor implements agenthub.PlanSource: it resolves the plan a fleet executes by
 // following the plan handle the fleet's own record carries, then reading that plan
 // from the store.

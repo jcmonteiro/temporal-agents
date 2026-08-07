@@ -109,22 +109,60 @@ type ExecutionSource interface {
 	Execution(ctx context.Context, workflowID string) (Execution, error)
 }
 
-// RecordSource is the driven port for the durable execution record: the memory
-// that outlives the orchestrator's retention. It is what lets a finished item stay
-// on the overview until an operator dismisses it.
+// RecordSource is the driven port for individual durable execution trees. It is
+// used by item detail reads; collection selection and aggregation use
+// CollectionSource so a row limit can never become a resource limit by accident.
 type RecordSource interface {
 	// RecordedExecutions returns the recorded executions matching q, newest first.
 	RecordedExecutions(ctx context.Context, q RecordQuery) ([]Execution, error)
 }
 
-// PlanSource is the driven port that resolves a fleet's approved plan by the
+// ChainQuery selects execution-chain resources before a collection limit is
+// applied. ExcludedWorkflowIDs are dismissals that must be removed by the adapter
+// before selection.
+type ChainQuery struct {
+	WorkflowID          string
+	ExcludedWorkflowIDs []string
+	Limit               int
+}
+
+// ExecutionChain is one fully aggregated continue-as-new chain.
+type ExecutionChain struct {
+	Latest     Execution
+	StartedAt  time.Time
+	Iterations int
+	Tokens     int
+}
+
+// FleetTree carries one selected fleet chain and all direct child execution rows.
+type FleetTree struct {
+	Chain      ExecutionChain
+	Executions []Execution
+}
+
+// CollectionSource is the driven port for collection-oriented record reads. The
+// adapter selects resource identities before limits and aggregates every row that
+// belongs to those resources.
+type CollectionSource interface {
+	RunChains(ctx context.Context, query ChainQuery) ([]ExecutionChain, error)
+	FleetTrees(ctx context.Context, query ChainQuery) ([]FleetTree, error)
+	ScheduleActions(ctx context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]Execution, error)
+}
+
+// PlanReference identifies the stored plan used by one fleet.
+type PlanReference struct {
+	FleetID string
+	PlanID  string
+}
+
+// PlanSource is the driven port that resolves fleets' approved plans by their
 // fleet's ID. Keeping it a port of its own is what lets the plan come from the
 // plan store today and from anywhere else tomorrow without touching the readers
 // that reconcile a plan against its executions.
 type PlanSource interface {
-	// PlanFor returns the plan the fleet executes, or ErrNoPlan when it cannot be
-	// resolved.
-	PlanFor(ctx context.Context, fleetID string) (Plan, error)
+	// Plans returns every resolvable plan, keyed by fleet ID. Missing plans are
+	// omitted so a fleet can still be shown without an invented graph.
+	Plans(ctx context.Context, refs []PlanReference) (map[string]Plan, error)
 }
 
 // ScheduleState is one schedule as the orchestration source knows it, before the

@@ -234,11 +234,12 @@ func runAPIServer(options serveOptions) error {
 		return err
 	}
 	service, err := agenthub.NewService(agenthub.Dependencies{
-		Live:       live,
-		Records:    records,
-		Plans:      records,
-		Schedules:  schedules,
-		Dismissals: dismissals,
+		Live:        live,
+		Records:     records,
+		Collections: records,
+		Plans:       records,
+		Schedules:   schedules,
+		Dismissals:  dismissals,
 	})
 	if err != nil {
 		return err

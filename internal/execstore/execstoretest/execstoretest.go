@@ -42,6 +42,7 @@ type Store struct {
 var (
 	_ execstore.ExecutionWriter = (*Store)(nil)
 	_ execstore.ExecutionReader = (*Store)(nil)
+	_ execstore.OverviewReader  = (*Store)(nil)
 	_ execstore.PlanStore       = (*Store)(nil)
 )
 
@@ -93,6 +94,60 @@ func (s *Store) ListExecutions(_ context.Context, _ execstore.Filter) ([]execsto
 	return s.records(), nil
 }
 
+// ListExecutionChains returns fully aggregated chains after identity selection.
+func (s *Store) ListExecutionChains(_ context.Context, filter execstore.ChainFilter) ([]execstore.ExecutionChain, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.outage(); err != nil {
+		return nil, err
+	}
+	return executionChains(s.saved, filter), nil
+}
+
+// ListExecutionTrees returns selected root chains with their direct children.
+func (s *Store) ListExecutionTrees(_ context.Context, filter execstore.ChainFilter) ([]execstore.ExecutionTree, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.outage(); err != nil {
+		return nil, err
+	}
+	chains := executionChains(s.saved, filter)
+	trees := make([]execstore.ExecutionTree, 0, len(chains))
+	for _, chain := range chains {
+		tree := execstore.ExecutionTree{Chain: chain}
+		for _, execution := range s.saved {
+			if execution.WorkflowID == chain.Latest.WorkflowID || execution.ParentWorkflowID == chain.Latest.WorkflowID {
+				tree.Executions = append(tree.Executions, execution)
+			}
+		}
+		trees = append(trees, tree)
+	}
+	return trees, nil
+}
+
+// ListScheduleExecutions returns a bounded action sample for every schedule in one read.
+func (s *Store) ListScheduleExecutions(_ context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]execstore.Execution, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.outage(); err != nil {
+		return nil, err
+	}
+	wanted := stringsOf(scheduleIDs)
+	out := make(map[string][]execstore.Execution, len(scheduleIDs))
+	for _, execution := range s.saved {
+		if wanted[execution.ScheduleID] {
+			out[execution.ScheduleID] = append(out[execution.ScheduleID], execution)
+		}
+	}
+	for id := range out {
+		sort.SliceStable(out[id], func(i, j int) bool { return out[id][i].StartedAt.After(out[id][j].StartedAt) })
+		if perScheduleLimit > 0 && len(out[id]) > perScheduleLimit {
+			out[id] = out[id][:perScheduleLimit]
+		}
+	}
+	return out, nil
+}
+
 // SavePlan stores the plan under its handle, or fails when the store is failing.
 func (s *Store) SavePlan(_ context.Context, plan execstore.Plan) error {
 	s.mu.Lock()
@@ -120,6 +175,22 @@ func (s *Store) Plan(_ context.Context, id string) (execstore.Plan, error) {
 		return execstore.Plan{}, execstore.ErrNoSuchPlan
 	}
 	return plan, nil
+}
+
+// Plans resolves all existing handles in one read.
+func (s *Store) Plans(_ context.Context, ids []string) (map[string]execstore.Plan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.outage(); err != nil {
+		return nil, err
+	}
+	out := make(map[string]execstore.Plan, len(ids))
+	for _, id := range ids {
+		if plan, ok := s.plans[id]; ok {
+			out[id] = plan
+		}
+	}
+	return out, nil
 }
 
 // ListPlans returns the stored plans, newest first. The limit is ignored, for the
@@ -158,6 +229,62 @@ func (s *Store) Records() []execstore.Execution {
 // records copies the recorded executions. The caller must hold mu.
 func (s *Store) records() []execstore.Execution {
 	return append([]execstore.Execution{}, s.saved...)
+}
+
+func executionChains(executions []execstore.Execution, filter execstore.ChainFilter) []execstore.ExecutionChain {
+	kinds := make(map[execstore.Kind]bool, len(filter.Kinds))
+	for _, kind := range filter.Kinds {
+		kinds[kind] = true
+	}
+	excluded := stringsOf(filter.ExcludedWorkflowIDs)
+	groups := map[string][]execstore.Execution{}
+	for _, execution := range executions {
+		if len(kinds) > 0 && !kinds[execution.Kind] || excluded[execution.WorkflowID] {
+			continue
+		}
+		if filter.WorkflowID != "" && execution.WorkflowID != filter.WorkflowID {
+			continue
+		}
+		if execution.ParentWorkflowID != "" || execution.ScheduleID != "" {
+			continue
+		}
+		groups[execution.WorkflowID] = append(groups[execution.WorkflowID], execution)
+	}
+	chains := make([]execstore.ExecutionChain, 0, len(groups))
+	for _, group := range groups {
+		chain := execstore.ExecutionChain{Iterations: len(group)}
+		for _, execution := range group {
+			chain.Tokens += execution.Tokens
+			if chain.StartedAt.IsZero() || execution.StartedAt.Before(chain.StartedAt) {
+				chain.StartedAt = execution.StartedAt
+			}
+			if chain.Latest.WorkflowID == "" || execution.StartedAt.After(chain.Latest.StartedAt) ||
+				execution.StartedAt.Equal(chain.Latest.StartedAt) && execution.RunID > chain.Latest.RunID {
+				chain.Latest = execution
+			}
+		}
+		chain.Latest.StartedAt = chain.StartedAt
+		chain.Latest.Tokens = chain.Tokens
+		chains = append(chains, chain)
+	}
+	sort.SliceStable(chains, func(i, j int) bool {
+		if chains[i].StartedAt.Equal(chains[j].StartedAt) {
+			return chains[i].Latest.WorkflowID < chains[j].Latest.WorkflowID
+		}
+		return chains[i].StartedAt.After(chains[j].StartedAt)
+	})
+	if filter.Limit > 0 && len(chains) > filter.Limit {
+		chains = chains[:filter.Limit]
+	}
+	return chains
+}
+
+func stringsOf(values []string) map[string]bool {
+	set := make(map[string]bool, len(values))
+	for _, value := range values {
+		set[value] = true
+	}
+	return set
 }
 
 // Last returns the most recent write, which for a settled workflow is its

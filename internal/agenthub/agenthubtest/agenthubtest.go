@@ -41,11 +41,12 @@ type Source struct {
 
 // Compile-time proof the fake satisfies every port it is injected as.
 var (
-	_ agenthub.ExecutionSource = (*Source)(nil)
-	_ agenthub.RecordSource    = (*Source)(nil)
-	_ agenthub.PlanSource      = (*Source)(nil)
-	_ agenthub.ScheduleSource  = (*Source)(nil)
-	_ agenthub.DismissalStore  = (*Source)(nil)
+	_ agenthub.ExecutionSource  = (*Source)(nil)
+	_ agenthub.RecordSource     = (*Source)(nil)
+	_ agenthub.CollectionSource = (*Source)(nil)
+	_ agenthub.PlanSource       = (*Source)(nil)
+	_ agenthub.ScheduleSource   = (*Source)(nil)
+	_ agenthub.DismissalStore   = (*Source)(nil)
 )
 
 // New returns an empty source.
@@ -65,12 +66,13 @@ func Failing(err error) *Source {
 // recorded timestamp is assertable.
 func (s *Source) Dependencies(now time.Time) agenthub.Dependencies {
 	return agenthub.Dependencies{
-		Live:       s,
-		Records:    s,
-		Plans:      s,
-		Schedules:  s,
-		Dismissals: s,
-		Now:        func() time.Time { return now },
+		Live:        s,
+		Records:     s,
+		Collections: s,
+		Plans:       s,
+		Schedules:   s,
+		Dismissals:  s,
+		Now:         func() time.Time { return now },
 	}
 }
 
@@ -96,6 +98,11 @@ func (s *Source) WithPlan(fleetID string, plan agenthub.Plan) *Source {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.plans[fleetID] = plan
+	for i := range s.recorded {
+		if s.recorded[i].WorkflowID == fleetID && s.recorded[i].Class == wfid.ClassFleet {
+			s.recorded[i].PlanID = fleetID
+		}
+	}
 	return s
 }
 
@@ -176,18 +183,93 @@ func (s *Source) RecordedExecutions(_ context.Context, q agenthub.RecordQuery) (
 	return out, nil
 }
 
-// PlanFor implements agenthub.PlanSource.
-func (s *Source) PlanFor(_ context.Context, fleetID string) (agenthub.Plan, error) {
+// RunChains implements agenthub.CollectionSource.
+func (s *Source) RunChains(_ context.Context, query agenthub.ChainQuery) ([]agenthub.ExecutionChain, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
-		return agenthub.Plan{}, s.err
+		return nil, s.err
 	}
-	plan, ok := s.plans[fleetID]
-	if !ok {
-		return agenthub.Plan{}, agenthub.ErrNoPlan
+	excluded := stringSet(query.ExcludedWorkflowIDs)
+	groups := map[string][]agenthub.Execution{}
+	for _, e := range s.recorded {
+		if query.WorkflowID != "" && e.WorkflowID != query.WorkflowID {
+			continue
+		}
+		if excluded[e.WorkflowID] || e.ParentWorkflowID != "" || e.ScheduleID != "" || !runClass(e.Class) {
+			continue
+		}
+		groups[e.WorkflowID] = append(groups[e.WorkflowID], e)
 	}
-	return plan, nil
+	return limitedChains(groups, query.Limit), nil
+}
+
+// FleetTrees implements agenthub.CollectionSource.
+func (s *Source) FleetTrees(_ context.Context, query agenthub.ChainQuery) ([]agenthub.FleetTree, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return nil, s.err
+	}
+	excluded := stringSet(query.ExcludedWorkflowIDs)
+	groups := map[string][]agenthub.Execution{}
+	for _, e := range s.recorded {
+		if e.Class != wfid.ClassFleet || excluded[e.WorkflowID] || query.WorkflowID != "" && e.WorkflowID != query.WorkflowID {
+			continue
+		}
+		groups[e.WorkflowID] = append(groups[e.WorkflowID], e)
+	}
+	chains := limitedChains(groups, query.Limit)
+	trees := make([]agenthub.FleetTree, 0, len(chains))
+	for _, chain := range chains {
+		tree := agenthub.FleetTree{Chain: chain}
+		for _, e := range s.recorded {
+			if e.WorkflowID == chain.Latest.WorkflowID || e.ParentWorkflowID == chain.Latest.WorkflowID {
+				tree.Executions = append(tree.Executions, e)
+			}
+		}
+		trees = append(trees, tree)
+	}
+	return trees, nil
+}
+
+// ScheduleActions implements agenthub.CollectionSource.
+func (s *Source) ScheduleActions(_ context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]agenthub.Execution, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return nil, s.err
+	}
+	wanted := stringSet(scheduleIDs)
+	out := make(map[string][]agenthub.Execution, len(scheduleIDs))
+	for _, e := range s.recorded {
+		if wanted[e.ScheduleID] {
+			out[e.ScheduleID] = append(out[e.ScheduleID], e)
+		}
+	}
+	for id := range out {
+		sort.SliceStable(out[id], func(i, j int) bool { return out[id][i].StartedAt.After(out[id][j].StartedAt) })
+		if perScheduleLimit > 0 && len(out[id]) > perScheduleLimit {
+			out[id] = out[id][:perScheduleLimit]
+		}
+	}
+	return out, nil
+}
+
+// Plans implements agenthub.PlanSource.
+func (s *Source) Plans(_ context.Context, refs []agenthub.PlanReference) (map[string]agenthub.Plan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return nil, s.err
+	}
+	out := make(map[string]agenthub.Plan, len(refs))
+	for _, ref := range refs {
+		if plan, ok := s.plans[ref.FleetID]; ok && ref.PlanID != "" {
+			out[ref.FleetID] = plan
+		}
+	}
+	return out, nil
 }
 
 // Schedules implements agenthub.ScheduleSource.
@@ -249,6 +331,53 @@ func (s *Source) Undismiss(_ context.Context, kind agenthub.ItemKind, itemID str
 	}
 	delete(s.dismissals, id)
 	return nil
+}
+
+func stringSet(values []string) map[string]bool {
+	set := make(map[string]bool, len(values))
+	for _, value := range values {
+		set[value] = true
+	}
+	return set
+}
+
+func runClass(class wfid.Class) bool {
+	switch class {
+	case wfid.ClassRun, wfid.ClassDevelop, wfid.ClassReview, wfid.ClassPilot, wfid.ClassFleetPlan:
+		return true
+	default:
+		return false
+	}
+}
+
+func limitedChains(groups map[string][]agenthub.Execution, limit int) []agenthub.ExecutionChain {
+	chains := make([]agenthub.ExecutionChain, 0, len(groups))
+	for _, executions := range groups {
+		chain := agenthub.ExecutionChain{Iterations: len(executions)}
+		for _, e := range executions {
+			chain.Tokens += e.Tokens
+			if chain.StartedAt.IsZero() || e.StartedAt.Before(chain.StartedAt) {
+				chain.StartedAt = e.StartedAt
+			}
+			if chain.Latest.WorkflowID == "" || e.StartedAt.After(chain.Latest.StartedAt) ||
+				e.StartedAt.Equal(chain.Latest.StartedAt) && e.RunID > chain.Latest.RunID {
+				chain.Latest = e
+			}
+		}
+		chain.Latest.StartedAt = chain.StartedAt
+		chain.Latest.Tokens = chain.Tokens
+		chains = append(chains, chain)
+	}
+	sort.SliceStable(chains, func(i, j int) bool {
+		if chains[i].StartedAt.Equal(chains[j].StartedAt) {
+			return chains[i].Latest.WorkflowID < chains[j].Latest.WorkflowID
+		}
+		return chains[i].StartedAt.After(chains[j].StartedAt)
+	})
+	if limit > 0 && len(chains) > limit {
+		chains = chains[:limit]
+	}
+	return chains
 }
 
 // Fleet builds a recorded fleet parent execution, for readable test setup.

@@ -72,9 +72,11 @@ func ValidateLimit(limit int) (int, error) {
 type Dependencies struct {
 	// Live is the orchestrator's current state.
 	Live ExecutionSource
-	// Records is the durable execution record.
+	// Records is the durable execution record for detail reads.
 	Records RecordSource
-	// Plans resolves a fleet's approved plan.
+	// Collections selects and aggregates durable collection resources.
+	Collections CollectionSource
+	// Plans resolves fleets' approved plans in batches.
 	Plans PlanSource
 	// Schedules lists the configured schedules.
 	Schedules ScheduleSource
@@ -102,6 +104,8 @@ func NewService(deps Dependencies) (*Service, error) {
 		return nil, errors.New("the live execution source is required")
 	case deps.Records == nil:
 		return nil, errors.New("the execution record source is required")
+	case deps.Collections == nil:
+		return nil, errors.New("the execution collection source is required")
 	case deps.Plans == nil:
 		return nil, errors.New("the plan source is required")
 	case deps.Schedules == nil:
@@ -125,11 +129,9 @@ func (s *Service) Fleets(ctx context.Context, limit int) ([]Fleet, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Over-fetch by the number of dismissed fleets so filtering them out cannot
-	// leave a short page while older, still-visible fleets exist.
-	recorded, err := s.deps.Records.RecordedExecutions(ctx, RecordQuery{
-		Class: wfid.ClassFleet,
-		Limit: overFetch(limit, dismissed.count(KindFleet)),
+	trees, err := s.deps.Collections.FleetTrees(ctx, ChainQuery{
+		ExcludedWorkflowIDs: dismissed.ids(KindFleet),
+		Limit:               limit,
 	})
 	if err != nil {
 		return nil, unavailable("read the recorded fleets", err)
@@ -138,24 +140,33 @@ func (s *Service) Fleets(ctx context.Context, limit int) ([]Fleet, error) {
 	if err != nil {
 		return nil, err
 	}
-	parents, err := s.resolveChains(ctx, recorded, live, isFleet)
+	chains := make([]ExecutionChain, 0, len(trees))
+	treesByID := make(map[string][]Execution, len(trees))
+	for _, tree := range trees {
+		chains = append(chains, tree.Chain)
+		treesByID[tree.Chain.Latest.WorkflowID] = tree.Executions
+	}
+	parents, err := s.resolveExecutionChains(ctx, chains, live, func(e Execution) bool {
+		return isFleet(e) && !dismissed.has(KindFleet, e.WorkflowID)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(parents) > limit {
+		parents = parents[:limit]
+	}
+	plans, err := s.plansFor(ctx, parents)
 	if err != nil {
 		return nil, err
 	}
 
 	fleets := make([]Fleet, 0, len(parents))
 	for _, parent := range parents {
-		if dismissed.has(KindFleet, parent.WorkflowID) {
-			continue
-		}
-		fleet, err := s.buildFleet(ctx, parent, nil, live)
+		fleet, err := s.buildFleet(ctx, parent, treesByID[parent.WorkflowID], live, plans[parent.WorkflowID])
 		if err != nil {
 			return nil, err
 		}
 		fleets = append(fleets, fleet)
-		if len(fleets) == limit {
-			break
-		}
 	}
 	return fleets, nil
 }
@@ -166,10 +177,9 @@ func (s *Service) Fleet(ctx context.Context, id string) (Fleet, error) {
 	if err := ValidateItemID(id); err != nil {
 		return Fleet{}, err
 	}
-	// One read brings back the fleet and its children, so the graph is reconciled
-	// from a single consistent snapshot rather than from a fleet read and a
-	// children read that could disagree.
-	tree, err := s.deps.Records.RecordedExecutions(ctx, RecordQuery{WorkflowID: id, Limit: recordScanLimit})
+	// The collection adapter selects this identity first and then returns its whole
+	// tree, so a large execution history cannot truncate the graph.
+	trees, err := s.deps.Collections.FleetTrees(ctx, ChainQuery{WorkflowID: id, Limit: 1})
 	if err != nil {
 		return Fleet{}, unavailable("read the fleet's records", err)
 	}
@@ -177,16 +187,13 @@ func (s *Service) Fleet(ctx context.Context, id string) (Fleet, error) {
 	if err != nil {
 		return Fleet{}, err
 	}
-	var own []Execution
-	for _, e := range tree {
-		if e.WorkflowID == id {
-			own = append(own, e)
-		}
+	var tree []Execution
+	var chains []ExecutionChain
+	if len(trees) > 0 {
+		tree = trees[0].Executions
+		chains = append(chains, trees[0].Chain)
 	}
-	// The predicate is pinned to this one ID: the live listing is a whole-world view,
-	// so without it a read for one fleet could resolve to another fleet that happens
-	// to be running.
-	parents, err := s.resolveChains(ctx, own, live, func(e Execution) bool {
+	parents, err := s.resolveExecutionChains(ctx, chains, live, func(e Execution) bool {
 		return e.WorkflowID == id && isFleet(e)
 	})
 	if err != nil {
@@ -207,7 +214,11 @@ func (s *Service) Fleet(ctx context.Context, id string) (Fleet, error) {
 		}
 		parents = []resolvedChain{{Execution: parent, Iterations: 1}}
 	}
-	return s.buildFleet(ctx, parents[0], tree, live)
+	plans, err := s.plansFor(ctx, parents)
+	if err != nil {
+		return Fleet{}, err
+	}
+	return s.buildFleet(ctx, parents[0], tree, live, plans[id])
 }
 
 // Runs returns the standalone run satellites, newest first: every running chain
@@ -224,36 +235,30 @@ func (s *Service) Runs(ctx context.Context, limit int) ([]Run, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Read a bounded slice of execution *rows*, then collapse it to the requested
-	// number of chains. Fetching only `limit` rows would let one long
-	// continue-as-new chain fill the page and hide every other run.
-	fetch := recordScanLimit
-	var recorded []Execution
-	for _, class := range runClasses() {
-		execs, err := s.deps.Records.RecordedExecutions(ctx, RecordQuery{Class: class, Limit: fetch})
-		if err != nil {
-			return nil, unavailable("read the recorded runs", err)
-		}
-		recorded = append(recorded, execs...)
+	recorded, err := s.deps.Collections.RunChains(ctx, ChainQuery{
+		ExcludedWorkflowIDs: dismissed.ids(KindRun),
+		Limit:               limit,
+	})
+	if err != nil {
+		return nil, unavailable("read the recorded runs", err)
 	}
 	live, err := s.liveByWorkflowID(ctx)
 	if err != nil {
 		return nil, err
 	}
-	chains, err := s.resolveChains(ctx, recorded, live, isRunSatellite)
+	chains, err := s.resolveExecutionChains(ctx, recorded, live, func(e Execution) bool {
+		return isRunSatellite(e) && !dismissed.has(KindRun, e.WorkflowID)
+	})
 	if err != nil {
 		return nil, err
+	}
+	if len(chains) > limit {
+		chains = chains[:limit]
 	}
 
 	runs := make([]Run, 0, len(chains))
 	for _, chain := range chains {
-		if dismissed.has(KindRun, chain.WorkflowID) {
-			continue
-		}
 		runs = append(runs, runFrom(chain))
-		if len(runs) == limit {
-			break
-		}
 	}
 	return runs, nil
 }
@@ -263,21 +268,15 @@ func (s *Service) Run(ctx context.Context, id string) (Run, error) {
 	if err := ValidateItemID(id); err != nil {
 		return Run{}, err
 	}
-	recorded, err := s.deps.Records.RecordedExecutions(ctx, RecordQuery{WorkflowID: id, Limit: recordScanLimit})
+	recorded, err := s.deps.Collections.RunChains(ctx, ChainQuery{WorkflowID: id, Limit: 1})
 	if err != nil {
 		return Run{}, unavailable("read the run's records", err)
-	}
-	var own []Execution
-	for _, e := range recorded {
-		if e.WorkflowID == id {
-			own = append(own, e)
-		}
 	}
 	live, err := s.liveByWorkflowID(ctx)
 	if err != nil {
 		return Run{}, err
 	}
-	chains, err := s.resolveChains(ctx, own, live, func(e Execution) bool {
+	chains, err := s.resolveExecutionChains(ctx, recorded, live, func(e Execution) bool {
 		return e.WorkflowID == id && isRunSatellite(e)
 	})
 	if err != nil {
@@ -326,20 +325,22 @@ func (s *Service) Schedules(ctx context.Context, limit int) ([]Schedule, error) 
 		}
 	}
 
+	scheduleIDs := make([]string, 0, len(states))
+	for _, state := range states {
+		scheduleIDs = append(scheduleIDs, state.ID)
+	}
+	actions, err := s.deps.Collections.ScheduleActions(ctx, scheduleIDs, scheduleActionSample)
+	if err != nil {
+		return nil, unavailable("read the schedules' runs", err)
+	}
+
 	schedules := make([]Schedule, 0, len(states))
 	for _, state := range states {
-		fired, err := s.deps.Records.RecordedExecutions(ctx, RecordQuery{
-			ScheduleID: state.ID,
-			Limit:      scheduleActionSample,
-		})
-		if err != nil {
-			return nil, unavailable("read the schedule's runs", err)
-		}
 		// A schedule adapter may already know the running count. The live execution
 		// count is the same fact from another source, so use the larger observation
 		// rather than adding them and counting one action twice.
 		runningActions := max(state.RunningActions, running[state.ID])
-		schedules = append(schedules, scheduleFrom(state, fired, runningActions))
+		schedules = append(schedules, scheduleFrom(state, actions[state.ID], runningActions))
 		if len(schedules) == limit {
 			break
 		}
@@ -454,6 +455,21 @@ func (s *Service) dismissible(ctx context.Context, kind ItemKind, itemID string)
 	}
 }
 
+// plansFor resolves all plans needed by a fleet page in one adapter call.
+func (s *Service) plansFor(ctx context.Context, parents []resolvedChain) (map[string]Plan, error) {
+	refs := make([]PlanReference, 0, len(parents))
+	for _, parent := range parents {
+		if parent.PlanID != "" {
+			refs = append(refs, PlanReference{FleetID: parent.WorkflowID, PlanID: parent.PlanID})
+		}
+	}
+	plans, err := s.deps.Plans.Plans(ctx, refs)
+	if err != nil {
+		return nil, unavailable("resolve the fleets' plans", err)
+	}
+	return plans, nil
+}
+
 // buildFleet reconciles one fleet: its plan's nodes against the executions of
 // those nodes, then the aggregated status and progress over the result.
 //
@@ -461,7 +477,7 @@ func (s *Service) dismissible(ctx context.Context, kind ItemKind, itemID string)
 // (see Fleet); otherwise the children are read here. A fleet whose plan cannot be
 // resolved is still returned — with no nodes and its own execution's status — so a
 // plan the store has lost hides the graph rather than the fleet.
-func (s *Service) buildFleet(ctx context.Context, parent resolvedChain, tree []Execution, live map[string]Execution) (Fleet, error) {
+func (s *Service) buildFleet(ctx context.Context, parent resolvedChain, tree []Execution, live map[string]Execution, plan Plan) (Fleet, error) {
 	if tree == nil {
 		var err error
 		tree, err = s.deps.Records.RecordedExecutions(ctx, RecordQuery{WorkflowID: parent.WorkflowID, Limit: recordScanLimit})
@@ -478,13 +494,9 @@ func (s *Service) buildFleet(ctx context.Context, parent resolvedChain, tree []E
 		EndedAt:   parent.EndedAt,
 	}
 
-	plan, err := s.deps.Plans.PlanFor(ctx, parent.WorkflowID)
-	switch {
-	case errors.Is(err, ErrNoPlan):
+	if len(plan.Nodes) == 0 && plan.Goal == "" {
 		fleet.Status = parent.Outcome.WorkStatus()
 		return fleet, nil
-	case err != nil:
-		return Fleet{}, unavailable("resolve the fleet's plan", err)
 	}
 	if plan.Goal != "" {
 		fleet.Goal = plan.Goal
@@ -600,6 +612,60 @@ type resolvedChain struct {
 	Execution
 	// Iterations is how many continue-as-new iterations of the chain are known.
 	Iterations int
+}
+
+// resolveExecutionChains reconciles already-aggregated durable chains with live
+// state. Collection limits have already been applied to chain identities, never to
+// their rows.
+func (s *Service) resolveExecutionChains(ctx context.Context, recorded []ExecutionChain, live map[string]Execution, keep func(Execution) bool) ([]resolvedChain, error) {
+	chains := make(map[string]resolvedChain, len(recorded))
+	for _, chain := range recorded {
+		if !keep(chain.Latest) {
+			continue
+		}
+		latest := chain.Latest
+		latest.StartedAt = chain.StartedAt
+		latest.Tokens = chain.Tokens
+		chains[latest.WorkflowID] = resolvedChain{Execution: latest, Iterations: chain.Iterations}
+	}
+	for _, execution := range live {
+		if !keep(execution) {
+			continue
+		}
+		if _, known := chains[execution.WorkflowID]; !known {
+			chains[execution.WorkflowID] = resolvedChain{Execution: execution, Iterations: 1}
+		}
+	}
+
+	resolved := make([]resolvedChain, 0, len(chains))
+	for id, chain := range chains {
+		latest := chain.Execution
+		if current, running := live[id]; running {
+			if current.RunID != "" && latest.RunID != "" && current.RunID != latest.RunID {
+				chain.Iterations++
+			}
+			latest.Outcome = current.Outcome
+			latest.EndedAt = current.EndedAt
+			if current.RunID != "" {
+				latest.RunID = current.RunID
+			}
+		} else if latest.Running() {
+			settled, err := s.settle(ctx, latest)
+			if err != nil {
+				return nil, err
+			}
+			latest = settled
+		}
+		chain.Execution = latest
+		resolved = append(resolved, chain)
+	}
+	sort.SliceStable(resolved, func(i, j int) bool {
+		if !resolved[i].StartedAt.Equal(resolved[j].StartedAt) {
+			return resolved[i].StartedAt.After(resolved[j].StartedAt)
+		}
+		return resolved[i].WorkflowID < resolved[j].WorkflowID
+	})
+	return resolved, nil
 }
 
 // resolveChains collapses executions into one entry per workflow ID and settles
@@ -825,17 +891,17 @@ func (d dismissalSet) has(kind ItemKind, itemID string) bool {
 	return ok
 }
 
-// count returns how many dismissals of a kind are in force, which is how much a
-// listing must over-fetch to still fill a page after filtering them out.
-func (d dismissalSet) count(kind ItemKind) int {
-	n := 0
+// ids returns the dismissed item IDs of one kind for adapter-side exclusion.
+func (d dismissalSet) ids(kind ItemKind) []string {
 	prefix := string(kind) + ":"
+	ids := make([]string, 0)
 	for id := range d {
 		if len(id) > len(prefix) && id[:len(prefix)] == prefix {
-			n++
+			ids = append(ids, id[len(prefix):])
 		}
 	}
-	return n
+	sort.Strings(ids)
+	return ids
 }
 
 // dismissedIDs reads the dismissals. A failure is reported rather than ignored: a
@@ -865,17 +931,6 @@ func resolveLimit(limit int) int {
 	default:
 		return limit
 	}
-}
-
-// overFetch is how many records to read to be able to return limit items after
-// filtering out the dismissed ones, capped so a large dismissal set cannot turn a
-// page into a table scan.
-func overFetch(limit, dismissed int) int {
-	fetch := limit + dismissed
-	if fetch > MaxLimit {
-		return MaxLimit
-	}
-	return fetch
 }
 
 // unavailable marks a port failure as the retryable condition it is, keeping the

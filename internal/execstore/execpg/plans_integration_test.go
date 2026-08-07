@@ -86,6 +86,23 @@ func TestPostgres_PlanUnknownHandle(t *testing.T) {
 	require.ErrorIs(t, err, execstore.ErrNoSuchPlan)
 }
 
+func TestPostgres_PlansResolvesManyHandlesInOneRead(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	for _, id := range []string{"plan-1", "plan-2"} {
+		require.NoError(t, store.SavePlan(ctx, execstore.Plan{
+			ID: id, Goal: id, Document: []byte(`{"goal":"batch"}`), CreatedAt: stamp,
+		}))
+	}
+
+	plans, err := store.Plans(ctx, []string{"plan-2", "plan-missing", "plan-1"})
+
+	require.NoError(t, err)
+	require.Len(t, plans, 2)
+	require.Equal(t, "plan-1", plans["plan-1"].Goal)
+	require.Equal(t, "plan-2", plans["plan-2"].Goal)
+}
+
 func TestPostgres_ListPlansNewestFirst(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
