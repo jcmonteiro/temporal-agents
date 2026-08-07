@@ -315,7 +315,7 @@ func TestPostgres_ListExecutionTreesExcludesDismissalsBeforeTheLimit(t *testing.
 	require.Equal(t, "fleet-visible", trees[0].Chain.Latest.WorkflowID)
 }
 
-func TestPostgres_ListScheduleExecutionsBatchesPerScheduleLimits(t *testing.T) {
+func TestPostgres_ListScheduleActionChainsBatchesPerScheduleLimits(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 	for _, scheduleID := range []string{"schedule-a", "schedule-b"} {
@@ -329,13 +329,41 @@ func TestPostgres_ListScheduleExecutionsBatchesPerScheduleLimits(t *testing.T) {
 		}
 	}
 
-	actions, err := store.ListScheduleExecutions(ctx, []string{"schedule-a", "schedule-b"}, 2)
+	actions, err := store.ListScheduleActionChains(ctx, []string{"schedule-a", "schedule-b"}, 2)
 
 	require.NoError(t, err)
 	require.Len(t, actions["schedule-a"], 2)
 	require.Len(t, actions["schedule-b"], 2)
-	require.Equal(t, "schedule-a-2", actions["schedule-a"][0].RunID)
-	require.Equal(t, "schedule-b-2", actions["schedule-b"][0].RunID)
+	require.Equal(t, "schedule-a-2", actions["schedule-a"][0].Latest.RunID)
+	require.Equal(t, "schedule-b-2", actions["schedule-b"][0].Latest.RunID)
+}
+
+func TestPostgres_ListScheduleActionChainsLimitsActionsAfterAggregation(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	const scheduleID = "schedule-long"
+
+	previous := execstore.Execution{
+		WorkflowID: "run-previous", RunID: "previous-1", Kind: execstore.KindRun,
+		ScheduleID: scheduleID, StartedAt: stamp, Status: execstore.StatusFailed,
+	}
+	require.NoError(t, store.SaveExecution(ctx, previous))
+	for i := 0; i < 11; i++ {
+		require.NoError(t, store.SaveExecution(ctx, execstore.Execution{
+			WorkflowID: "run-latest", RunID: fmt.Sprintf("latest-%02d", i), Kind: execstore.KindRun,
+			ScheduleID: scheduleID, StartedAt: stamp.Add(time.Hour + time.Duration(i)*time.Minute),
+			Status: execstore.StatusSucceeded, Tokens: 1,
+		}))
+	}
+
+	actions, err := store.ListScheduleActionChains(ctx, []string{scheduleID}, 2)
+
+	require.NoError(t, err)
+	require.Len(t, actions[scheduleID], 2, "the long latest chain must not consume the action limit")
+	require.Equal(t, "run-latest", actions[scheduleID][0].Latest.WorkflowID)
+	require.Equal(t, 11, actions[scheduleID][0].Iterations)
+	require.Equal(t, "run-previous", actions[scheduleID][1].Latest.WorkflowID)
+	require.Equal(t, execstore.StatusFailed, actions[scheduleID][1].Latest.Status)
 }
 
 func TestPostgres_ReadBeforeAnyWorkerMigrated(t *testing.T) {

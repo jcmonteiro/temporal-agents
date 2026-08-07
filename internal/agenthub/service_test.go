@@ -543,6 +543,50 @@ func TestSchedulePausedWhileAnActionRuns(t *testing.T) {
 	}
 }
 
+// TestScheduledActionRecordedAsRunningButGoneFromTheOrchestrator pins that a
+// scheduled execution follows the same reconciliation rule as a standalone run:
+// a stale running record is a failed action, not evidence that the schedule never
+// fired.
+func TestScheduledActionRecordedAsRunningButGoneFromTheOrchestrator(t *testing.T) {
+	scheduleID := "schedule-" + uuidLike("16")
+	action := agenthubtest.Run("run-"+uuidLike("17"), "daily digest", agenthub.OutcomeRunning, ago(time.Hour))
+	action.ScheduleID = scheduleID
+	source := agenthubtest.New().WithRecorded(action).WithSchedules(agenthub.ScheduleState{ID: scheduleID})
+
+	schedules, err := newService(t, source).Schedules(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("Schedules: %v", err)
+	}
+	if len(schedules) != 1 || schedules[0].Status != agenthub.StatusFailed {
+		t.Fatalf("schedules = %+v, want the stale action reported as failed", schedules)
+	}
+}
+
+// TestScheduledActionSettlesBetweenListAndDescribe pins the race at the live
+// boundary: an action omitted from the running listing can be returned as closed by
+// the batch describe, and that terminal state must define the schedule.
+func TestScheduledActionSettlesBetweenListAndDescribe(t *testing.T) {
+	scheduleID := "schedule-" + uuidLike("18")
+	action := agenthubtest.Run("run-"+uuidLike("19"), "daily digest", agenthub.OutcomeRunning, ago(time.Hour))
+	action.ScheduleID = scheduleID
+	settled := action
+	settled.RunID = "closed-run"
+	settled.Outcome = agenthub.OutcomeSucceeded
+	settled.EndedAt = ago(30 * time.Minute)
+	source := agenthubtest.New().
+		WithRecorded(action).
+		WithExecutionState(settled).
+		WithSchedules(agenthub.ScheduleState{ID: scheduleID})
+
+	schedules, err := newService(t, source).Schedules(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("Schedules: %v", err)
+	}
+	if len(schedules) != 1 || schedules[0].Status != agenthub.StatusDone {
+		t.Fatalf("schedules = %+v, want the closed action reported as done", schedules)
+	}
+}
+
 // TestAnUnavailableDependencyIsReportedAsRetryable pins that a port failure is
 // never answered with a half-empty overview: it is marked as the retryable
 // condition it is, so the transport can say "come back in a moment" instead of

@@ -24,8 +24,12 @@ import (
 type Source struct {
 	// mu guards the state, so a test may drive the service from several goroutines.
 	mu sync.Mutex
-	// running holds the executions the orchestrator is running now.
+	// running holds the executions returned by the orchestrator's running listing.
 	running []agenthub.Execution
+	// executionStates holds explicit latest states returned by describe operations.
+	// It is separate from running so a test can represent an execution that settles
+	// between the list and describe calls.
+	executionStates map[string]agenthub.Execution
 	// recorded holds the durable execution records.
 	recorded []agenthub.Execution
 	// plans holds the plans by fleet ID.
@@ -51,7 +55,11 @@ var (
 
 // New returns an empty source.
 func New() *Source {
-	return &Source{plans: map[string]agenthub.Plan{}, dismissals: map[string]agenthub.Dismissal{}}
+	return &Source{
+		executionStates: map[string]agenthub.Execution{},
+		plans:           map[string]agenthub.Plan{},
+		dismissals:      map[string]agenthub.Dismissal{},
+	}
 }
 
 // Failing returns a source whose every operation fails with err, which is how a
@@ -81,6 +89,21 @@ func (s *Source) WithRunning(execs ...agenthub.Execution) *Source {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.running = append(s.running, execs...)
+	return s
+}
+
+// WithExecutionState configures the latest state returned by a describe operation.
+// The state need not be in the running listing, which represents an execution that
+// settled between list and describe.
+func (s *Source) WithExecutionState(execs ...agenthub.Execution) *Source {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.executionStates == nil {
+		s.executionStates = map[string]agenthub.Execution{}
+	}
+	for _, execution := range execs {
+		s.executionStates[execution.WorkflowID] = execution
+	}
 	return s
 }
 
@@ -137,14 +160,17 @@ func (s *Source) RunningExecutions(_ context.Context, limit int) ([]agenthub.Exe
 	return out, nil
 }
 
-// Execution implements agenthub.ExecutionSource: it answers from the live listing
-// only, so an execution the record calls running but that is not running here is
-// reported as unknown — the case a reader must not present as in progress.
+// Execution implements agenthub.ExecutionSource. An explicit describe state wins;
+// otherwise an item in the running listing is still returned as running. An item in
+// neither view is unknown.
 func (s *Source) Execution(_ context.Context, workflowID string) (agenthub.Execution, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
 		return agenthub.Execution{}, s.err
+	}
+	if execution, ok := s.executionStates[workflowID]; ok {
+		return execution, nil
 	}
 	for _, e := range s.running {
 		if e.WorkflowID == workflowID {
@@ -163,9 +189,16 @@ func (s *Source) Executions(_ context.Context, workflowIDs []string) (map[string
 	}
 	wanted := stringSet(workflowIDs)
 	out := make(map[string]agenthub.Execution, len(workflowIDs))
+	for workflowID, execution := range s.executionStates {
+		if wanted[workflowID] {
+			out[workflowID] = execution
+		}
+	}
 	for _, execution := range s.running {
 		if wanted[execution.WorkflowID] {
-			out[execution.WorkflowID] = execution
+			if _, explicit := out[execution.WorkflowID]; !explicit {
+				out[execution.WorkflowID] = execution
+			}
 		}
 	}
 	return out, nil
@@ -249,25 +282,28 @@ func (s *Source) FleetTrees(_ context.Context, query agenthub.ChainQuery) ([]age
 	return trees, nil
 }
 
-// ScheduleActions implements agenthub.CollectionSource.
-func (s *Source) ScheduleActions(_ context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]agenthub.Execution, error) {
+// ScheduleActionChains implements agenthub.CollectionSource.
+func (s *Source) ScheduleActionChains(_ context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]agenthub.ExecutionChain, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
 		return nil, s.err
 	}
 	wanted := stringSet(scheduleIDs)
-	out := make(map[string][]agenthub.Execution, len(scheduleIDs))
-	for _, e := range s.recorded {
-		if wanted[e.ScheduleID] {
-			out[e.ScheduleID] = append(out[e.ScheduleID], e)
+	groups := make(map[string]map[string][]agenthub.Execution, len(scheduleIDs))
+	for _, execution := range s.recorded {
+		if !wanted[execution.ScheduleID] {
+			continue
 		}
+		if groups[execution.ScheduleID] == nil {
+			groups[execution.ScheduleID] = map[string][]agenthub.Execution{}
+		}
+		groups[execution.ScheduleID][execution.WorkflowID] = append(
+			groups[execution.ScheduleID][execution.WorkflowID], execution)
 	}
-	for id := range out {
-		sort.SliceStable(out[id], func(i, j int) bool { return out[id][i].StartedAt.After(out[id][j].StartedAt) })
-		if perScheduleLimit > 0 && len(out[id]) > perScheduleLimit {
-			out[id] = out[id][:perScheduleLimit]
-		}
+	out := make(map[string][]agenthub.ExecutionChain, len(scheduleIDs))
+	for scheduleID, actions := range groups {
+		out[scheduleID] = limitedChains(actions, perScheduleLimit)
 	}
 	return out, nil
 }

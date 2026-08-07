@@ -111,17 +111,15 @@ func (r *Records) FleetTrees(ctx context.Context, query agenthub.ChainQuery) ([]
 	return out, nil
 }
 
-// ScheduleActions implements agenthub.CollectionSource.
-func (r *Records) ScheduleActions(ctx context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]agenthub.Execution, error) {
-	actions, err := r.overview.ListScheduleExecutions(ctx, scheduleIDs, perScheduleLimit)
+// ScheduleActionChains implements agenthub.CollectionSource.
+func (r *Records) ScheduleActionChains(ctx context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]agenthub.ExecutionChain, error) {
+	actions, err := r.overview.ListScheduleActionChains(ctx, scheduleIDs, perScheduleLimit)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string][]agenthub.Execution, len(actions))
-	for id, executions := range actions {
-		for _, execution := range executions {
-			out[id] = append(out[id], executionFrom(execution))
-		}
+	out := make(map[string][]agenthub.ExecutionChain, len(actions))
+	for id, chains := range actions {
+		out[id] = chainsFrom(chains)
 	}
 	return out, nil
 }

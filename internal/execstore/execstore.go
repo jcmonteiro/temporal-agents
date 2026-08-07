@@ -354,7 +354,7 @@ type ExecutionTree struct {
 type OverviewReader interface {
 	ListExecutionChains(ctx context.Context, filter ChainFilter) ([]ExecutionChain, error)
 	ListExecutionTrees(ctx context.Context, filter ChainFilter) ([]ExecutionTree, error)
-	ListScheduleExecutions(ctx context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]Execution, error)
+	ListScheduleActionChains(ctx context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]ExecutionChain, error)
 }
 
 // PlanReader is the read-only half of the authoritative fleet plan store.

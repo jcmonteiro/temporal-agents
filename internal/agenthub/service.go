@@ -346,9 +346,29 @@ func (s *Service) Schedules(ctx context.Context, limit int) ([]Schedule, error) 
 	for _, state := range states {
 		scheduleIDs = append(scheduleIDs, state.ID)
 	}
-	actions, err := s.deps.Collections.ScheduleActions(ctx, scheduleIDs, scheduleActionSample)
+	actions, err := s.deps.Collections.ScheduleActionChains(ctx, scheduleIDs, scheduleActionSample)
 	if err != nil {
 		return nil, unavailable("read the schedules' runs", err)
+	}
+	var recordedActions []Execution
+	for _, chains := range actions {
+		for _, chain := range chains {
+			recordedActions = append(recordedActions, chain.Latest)
+		}
+	}
+	current, err := s.addExecutionStates(ctx, live, recordedActions)
+	if err != nil {
+		return nil, err
+	}
+	for scheduleID, chains := range actions {
+		for i := range chains {
+			if state, ok := current[chains[i].Latest.WorkflowID]; ok {
+				chains[i].Latest.Outcome = state.Outcome
+				chains[i].Latest.RunID = state.RunID
+				chains[i].Latest.EndedAt = state.EndedAt
+			}
+		}
+		actions[scheduleID] = chains
 	}
 
 	schedules := make([]Schedule, 0, len(states))
@@ -367,7 +387,7 @@ func (s *Service) Schedules(ctx context.Context, limit int) ([]Schedule, error) 
 
 // scheduleFrom assembles one schedule satellite from its state, the runs it fired
 // (newest first) and how many of its actions are in flight.
-func scheduleFrom(state ScheduleState, fired []Execution, runningActions int) Schedule {
+func scheduleFrom(state ScheduleState, fired []ExecutionChain, runningActions int) Schedule {
 	schedule := Schedule{
 		ID:             state.ID,
 		Spec:           state.Spec,
@@ -377,17 +397,18 @@ func scheduleFrom(state ScheduleState, fired []Execution, runningActions int) Sc
 		NextRunAt:      state.NextRunAt,
 	}
 	outcome := state.LastOutcome
-	for _, run := range fired {
+	for _, chain := range fired {
+		action := chain.Latest
 		if schedule.Label == "" {
-			schedule.Label = run.Label
+			schedule.Label = action.Label
 		}
 		if schedule.LastRunAt.IsZero() {
-			schedule.LastRunAt = run.StartedAt
+			schedule.LastRunAt = chain.StartedAt
 		}
 		// The status describes the most recent *completed* action, so an in-flight
 		// firing is skipped here; that it is running is said by runningActions.
-		if outcome == "" && !run.Running() {
-			outcome = run.Outcome
+		if outcome == "" && !action.Running() {
+			outcome = action.Outcome
 		}
 	}
 	schedule.Status = ScheduleStatus(state.Paused, runningActions, outcome)

@@ -85,36 +85,64 @@ func (p *Postgres) ListExecutionTrees(ctx context.Context, filter execstore.Chai
 	return out, nil
 }
 
-// ListScheduleExecutions returns the newest bounded action sample for every
-// requested schedule in one database read.
-func (p *Postgres) ListScheduleExecutions(ctx context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]execstore.Execution, error) {
-	out := make(map[string][]execstore.Execution, len(scheduleIDs))
+// ListScheduleActionChains returns the newest bounded action chains for every
+// requested schedule in one database read. The limit applies to workflow IDs before
+// all continue-as-new iterations for those actions are loaded.
+func (p *Postgres) ListScheduleActionChains(ctx context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]execstore.ExecutionChain, error) {
+	out := make(map[string][]execstore.ExecutionChain, len(scheduleIDs))
 	if len(scheduleIDs) == 0 {
 		return out, nil
 	}
 	limit := execstore.EffectiveLimit(perScheduleLimit, execstore.DefaultHistoryLimit)
-	query := `SELECT ` + executionColumns + ` FROM (
-	SELECT ` + executionColumns + `,
-		row_number() OVER (PARTITION BY schedule_id ORDER BY started_at DESC, run_id DESC) AS row_number
+	query := `WITH action_starts AS (
+	SELECT schedule_id, workflow_id, MIN(started_at) AS action_started
 	FROM executions
 	WHERE schedule_id = ANY($1::text[])
-) AS ranked
-WHERE row_number <= $2
-ORDER BY schedule_id, started_at DESC, run_id DESC`
+	GROUP BY schedule_id, workflow_id
+), selected AS (
+	SELECT schedule_id, workflow_id, action_started,
+		row_number() OVER (
+			PARTITION BY schedule_id
+			ORDER BY action_started DESC, workflow_id DESC
+		) AS action_number
+	FROM action_starts
+)
+SELECT e.run_id, e.workflow_id, e.kind, e.prompt, e.started_at, e.ended_at,
+	e.status, e.tokens, e.schedule_id, e.parent_workflow_id, e.detail
+FROM executions AS e
+JOIN selected
+	ON selected.schedule_id = e.schedule_id
+	AND selected.workflow_id = e.workflow_id
+WHERE selected.action_number <= $2
+ORDER BY selected.schedule_id, selected.action_number, e.started_at DESC, e.run_id DESC`
 	rows, err := p.pool.Query(ctx, query, scheduleIDs, limit)
 	if err != nil {
-		return nil, readError("read schedule executions", err)
+		return nil, readError("read schedule action chains", err)
 	}
 	defer rows.Close()
+	groups := make(map[string]map[string][]execstore.Execution, len(scheduleIDs))
+	orders := make(map[string][]string, len(scheduleIDs))
 	for rows.Next() {
 		execution, err := scanExecution(rows)
 		if err != nil {
 			return nil, err
 		}
-		out[execution.ScheduleID] = append(out[execution.ScheduleID], execution)
+		if groups[execution.ScheduleID] == nil {
+			groups[execution.ScheduleID] = map[string][]execstore.Execution{}
+		}
+		if _, known := groups[execution.ScheduleID][execution.WorkflowID]; !known {
+			orders[execution.ScheduleID] = append(orders[execution.ScheduleID], execution.WorkflowID)
+		}
+		groups[execution.ScheduleID][execution.WorkflowID] = append(
+			groups[execution.ScheduleID][execution.WorkflowID], execution)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, readError("read schedule executions", err)
+		return nil, readError("read schedule action chains", err)
+	}
+	for scheduleID, workflowIDs := range orders {
+		for _, workflowID := range workflowIDs {
+			out[scheduleID] = append(out[scheduleID], aggregateChain(groups[scheduleID][workflowID]))
+		}
 	}
 	return out, nil
 }

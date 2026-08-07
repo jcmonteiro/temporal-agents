@@ -28,6 +28,8 @@ type Store struct {
 	// saved holds the executions in write order, so a test can inspect the start
 	// write and the terminal write separately.
 	saved []execstore.Execution
+	// current holds the row view keyed by run ID, as the production upsert does.
+	current map[string]execstore.Execution
 	// plans holds the stored plans by handle.
 	plans map[string]execstore.Plan
 	// err, when set, fails every operation, standing in for a store outage.
@@ -47,7 +49,7 @@ var (
 )
 
 // New returns an empty store.
-func New() *Store { return &Store{} }
+func New() *Store { return &Store{current: map[string]execstore.Execution{}} }
 
 // Failing returns a store whose every operation fails with err, which is how a
 // test drives the "a start write must succeed" paths.
@@ -80,6 +82,13 @@ func (s *Store) SaveExecution(_ context.Context, e execstore.Execution) error {
 		return err
 	}
 	s.saved = append(s.saved, e)
+	if s.current == nil {
+		s.current = map[string]execstore.Execution{}
+	}
+	previous, exists := s.current[e.RunID]
+	if !exists || previous.Status == execstore.StatusRunning || e.Status != execstore.StatusRunning {
+		s.current[e.RunID] = e
+	}
 	return nil
 }
 
@@ -91,7 +100,7 @@ func (s *Store) ListExecutions(_ context.Context, _ execstore.Filter) ([]execsto
 	if err := s.outage(); err != nil {
 		return nil, err
 	}
-	return s.records(), nil
+	return s.currentRecords(), nil
 }
 
 // ListExecutionChains returns fully aggregated chains after identity selection.
@@ -101,7 +110,7 @@ func (s *Store) ListExecutionChains(_ context.Context, filter execstore.ChainFil
 	if err := s.outage(); err != nil {
 		return nil, err
 	}
-	return executionChains(s.saved, filter), nil
+	return executionChains(s.currentRecords(), filter), nil
 }
 
 // ListExecutionTrees returns selected root chains with their direct children.
@@ -111,11 +120,12 @@ func (s *Store) ListExecutionTrees(_ context.Context, filter execstore.ChainFilt
 	if err := s.outage(); err != nil {
 		return nil, err
 	}
-	chains := executionChains(s.saved, filter)
+	executions := s.currentRecords()
+	chains := executionChains(executions, filter)
 	trees := make([]execstore.ExecutionTree, 0, len(chains))
 	for _, chain := range chains {
 		tree := execstore.ExecutionTree{Chain: chain}
-		for _, execution := range s.saved {
+		for _, execution := range executions {
 			if execution.WorkflowID == chain.Latest.WorkflowID || execution.ParentWorkflowID == chain.Latest.WorkflowID {
 				tree.Executions = append(tree.Executions, execution)
 			}
@@ -125,25 +135,28 @@ func (s *Store) ListExecutionTrees(_ context.Context, filter execstore.ChainFilt
 	return trees, nil
 }
 
-// ListScheduleExecutions returns a bounded action sample for every schedule in one read.
-func (s *Store) ListScheduleExecutions(_ context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]execstore.Execution, error) {
+// ListScheduleActionChains returns a bounded action-chain sample for every schedule.
+func (s *Store) ListScheduleActionChains(_ context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]execstore.ExecutionChain, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.outage(); err != nil {
 		return nil, err
 	}
 	wanted := stringsOf(scheduleIDs)
-	out := make(map[string][]execstore.Execution, len(scheduleIDs))
-	for _, execution := range s.saved {
-		if wanted[execution.ScheduleID] {
-			out[execution.ScheduleID] = append(out[execution.ScheduleID], execution)
+	groups := make(map[string]map[string][]execstore.Execution, len(scheduleIDs))
+	for _, execution := range s.currentRecords() {
+		if !wanted[execution.ScheduleID] {
+			continue
 		}
+		if groups[execution.ScheduleID] == nil {
+			groups[execution.ScheduleID] = map[string][]execstore.Execution{}
+		}
+		groups[execution.ScheduleID][execution.WorkflowID] = append(
+			groups[execution.ScheduleID][execution.WorkflowID], execution)
 	}
-	for id := range out {
-		sort.SliceStable(out[id], func(i, j int) bool { return out[id][i].StartedAt.After(out[id][j].StartedAt) })
-		if perScheduleLimit > 0 && len(out[id]) > perScheduleLimit {
-			out[id] = out[id][:perScheduleLimit]
-		}
+	out := make(map[string][]execstore.ExecutionChain, len(scheduleIDs))
+	for scheduleID, actions := range groups {
+		out[scheduleID] = groupedExecutionChains(actions, perScheduleLimit)
 	}
 	return out, nil
 }
@@ -231,6 +244,15 @@ func (s *Store) records() []execstore.Execution {
 	return append([]execstore.Execution{}, s.saved...)
 }
 
+// currentRecords copies the upserted read view. The caller must hold mu.
+func (s *Store) currentRecords() []execstore.Execution {
+	out := make([]execstore.Execution, 0, len(s.current))
+	for _, execution := range s.current {
+		out = append(out, execution)
+	}
+	return out
+}
+
 func executionChains(executions []execstore.Execution, filter execstore.ChainFilter) []execstore.ExecutionChain {
 	kinds := make(map[execstore.Kind]bool, len(filter.Kinds))
 	for _, kind := range filter.Kinds {
@@ -250,6 +272,10 @@ func executionChains(executions []execstore.Execution, filter execstore.ChainFil
 		}
 		groups[execution.WorkflowID] = append(groups[execution.WorkflowID], execution)
 	}
+	return groupedExecutionChains(groups, filter.Limit)
+}
+
+func groupedExecutionChains(groups map[string][]execstore.Execution, limit int) []execstore.ExecutionChain {
 	chains := make([]execstore.ExecutionChain, 0, len(groups))
 	for _, group := range groups {
 		chain := execstore.ExecutionChain{Iterations: len(group)}
@@ -273,8 +299,8 @@ func executionChains(executions []execstore.Execution, filter execstore.ChainFil
 		}
 		return chains[i].StartedAt.After(chains[j].StartedAt)
 	})
-	if filter.Limit > 0 && len(chains) > filter.Limit {
-		chains = chains[:filter.Limit]
+	if limit > 0 && len(chains) > limit {
+		chains = chains[:limit]
 	}
 	return chains
 }

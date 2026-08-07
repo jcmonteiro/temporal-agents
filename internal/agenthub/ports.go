@@ -147,7 +147,7 @@ type FleetTree struct {
 type CollectionSource interface {
 	RunChains(ctx context.Context, query ChainQuery) ([]ExecutionChain, error)
 	FleetTrees(ctx context.Context, query ChainQuery) ([]FleetTree, error)
-	ScheduleActions(ctx context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]Execution, error)
+	ScheduleActionChains(ctx context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]ExecutionChain, error)
 }
 
 // PlanReference identifies the stored plan used by one fleet.
