@@ -19,6 +19,8 @@ import (
 const (
 	collectionLimit  = 200
 	maxResponseBytes = 2 << 20
+	maxOverviewPages = 1000
+	maxOverviewItems = maxOverviewPages * collectionLimit
 )
 
 // Client reads the versioned Agent Hub API.
@@ -133,7 +135,7 @@ func (c *Client) collection(ctx context.Context) ([]resource, error) {
 
 	var items []resource
 	seenURLs := map[string]bool{}
-	for {
+	for range maxOverviewPages {
 		if seenURLs[endpoint.String()] {
 			return nil, fmt.Errorf("Agent Hub %s pagination contains a cycle", name)
 		}
@@ -141,6 +143,9 @@ func (c *Client) collection(ctx context.Context) ([]resource, error) {
 		document, err := c.readCollectionPage(ctx, name, &endpoint)
 		if err != nil {
 			return nil, err
+		}
+		if len(items)+len(document.Items) > maxOverviewItems {
+			return nil, fmt.Errorf("Agent Hub %s response exceeds the item limit", name)
 		}
 		items = append(items, document.Items...)
 		if document.Next.Value == nil {
@@ -152,6 +157,7 @@ func (c *Client) collection(ctx context.Context) ([]resource, error) {
 		}
 		endpoint = *next
 	}
+	return nil, fmt.Errorf("Agent Hub %s pagination exceeds the page limit", name)
 }
 
 func (c *Client) readCollectionPage(ctx context.Context, name string, endpoint *url.URL) (collection, error) {

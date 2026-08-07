@@ -58,13 +58,22 @@ func TestClientOverviewReadsEveryActiveWorkPage(t *testing.T) {
 
 func TestHTTPServerAndClientShareTheActiveWorkContract(t *testing.T) {
 	executions := make([]agenthub.Execution, 0, 201)
+	want := make([]workoverview.Item, 0, 402)
 	for i := 0; i < 201; i++ {
+		id := fmt.Sprintf("run-%03d", i)
 		executions = append(executions, agenthubtest.Run(
-			fmt.Sprintf("run-%03d", i), "", agenthub.OutcomeRunning, time.Unix(int64(i), 0).UTC()))
+			id, "", agenthub.OutcomeRunning, time.Unix(int64(i), 0).UTC()))
+		want = append(want, workoverview.Item{
+			ID: id, Kind: workoverview.KindRun, Status: workoverview.StatusInProgress, Running: true,
+		})
 	}
 	schedules := make([]agenthub.ScheduleState, 0, 201)
 	for i := 0; i < 201; i++ {
-		schedules = append(schedules, agenthub.ScheduleState{ID: fmt.Sprintf("schedule-%03d", i)})
+		id := fmt.Sprintf("schedule-%03d", i)
+		schedules = append(schedules, agenthub.ScheduleState{ID: id})
+		want = append(want, workoverview.Item{
+			ID: id, Kind: workoverview.KindSchedule, Status: workoverview.StatusTodo,
+		})
 	}
 	source := agenthubtest.New().WithRunning(executions...).WithSchedules(schedules...)
 	service, err := agenthub.NewService(source.Dependencies(time.Unix(0, 0).UTC()))
@@ -81,10 +90,26 @@ func TestHTTPServerAndClientShareTheActiveWorkContract(t *testing.T) {
 	items, err := client.Overview(context.Background())
 
 	require.NoError(t, err)
-	require.Len(t, items, 402)
-	require.Equal(t, "run-000", items[0].ID)
-	require.Equal(t, workoverview.KindSchedule, items[len(items)-1].Kind)
-	require.Equal(t, "schedule-200", items[len(items)-1].ID)
+	require.Equal(t, want, items)
+}
+
+func TestClientOverviewStopsEndlessUniquePagination(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page := requests.Add(1)
+		_, _ = fmt.Fprintf(w,
+			`{"items":[],"count":0,"limit":200,"next":"/api/v1/active-work?cursor=page-%d&limit=200"}`,
+			page,
+		)
+	}))
+	defer server.Close()
+	client, err := New(server.URL+"/api/v1", "", server.Client())
+	require.NoError(t, err)
+
+	_, err = client.Overview(context.Background())
+
+	require.ErrorContains(t, err, "pagination exceeds the page limit")
+	require.Equal(t, int32(maxOverviewPages), requests.Load())
 }
 
 func TestClientOverviewReturnsTheAPIsProblemDetail(t *testing.T) {

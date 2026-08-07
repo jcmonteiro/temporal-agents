@@ -98,8 +98,9 @@ inspecting or changing its opaque `cursor`; `next` is `null` on the final page. 
 request reads at most one native Temporal execution page or one native schedule
 page. It does not load fleet trees or plan nodes. Continue-as-new changes the current
 run timestamp, but does not move the chain across these source-native pages. The CLI
-follows pages up to its published aggregate safety limits. Use `history` for the
-durable execution record.
+follows at most 1,000 pages and retains at most 200,000 items during one overview
+read. Its complete read also has a 35-second deadline. Use `history` for the durable
+execution record.
 
 All times are RFC 3339 UTC timestamps. Missing times are JSON `null`, not the year
 1. Successful GET responses carry a strong `ETag` and support `If-None-Match`.

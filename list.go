@@ -18,6 +18,7 @@ const (
 	defaultAgentHubAPIURL = "http://127.0.0.1:8973/api/v1"
 	agentHubAPIURLEnv     = "AGENT_HUB_API_URL"
 	cliHTTPTimeout        = 35 * time.Second
+	overviewTimeout       = 35 * time.Second
 )
 
 // listCmd reads the Agent Hub overview and prints the active top-level work.
@@ -43,7 +44,9 @@ func listRunning() {
 	if err != nil {
 		fatalf("%v", err)
 	}
-	if err := listCmd(context.Background(), os.Stdout, reader); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), overviewTimeout)
+	defer cancel()
+	if err := listCmd(ctx, os.Stdout, reader); err != nil {
 		fatalf("%v", err)
 	}
 }

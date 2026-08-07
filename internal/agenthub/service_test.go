@@ -233,6 +233,25 @@ func TestActiveWorkContinuesAfterASourcePageWithOnlyNestedWork(t *testing.T) {
 	}
 }
 
+func TestActiveWorkEndsAfterAnEmptySchedulePhase(t *testing.T) {
+	service := newService(t, agenthubtest.New())
+
+	executions, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1})
+	if err != nil {
+		t.Fatalf("ActiveWork(executions): %v", err)
+	}
+	if len(executions.Items) != 0 || len(executions.Next) == 0 {
+		t.Fatalf("execution phase = %+v, want an empty page with the schedule continuation", executions)
+	}
+	schedules, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1, Cursor: executions.Next})
+	if err != nil {
+		t.Fatalf("ActiveWork(schedules): %v", err)
+	}
+	if len(schedules.Items) != 0 || len(schedules.Next) != 0 {
+		t.Fatalf("schedule phase = %+v, want an empty final page", schedules)
+	}
+}
+
 func TestActiveWorkRejectsAForeignCursor(t *testing.T) {
 	_, err := newService(t, agenthubtest.New()).ActiveWork(context.Background(), agenthub.PageQuery{
 		Limit: 1, Cursor: []byte("fleet cursor"),
