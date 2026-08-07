@@ -19,6 +19,11 @@ prompts. The server accepts only loopback Host names, its concrete listener host
 names supplied with `--allow-host`. This blocks DNS-rebinding requests that use a
 hostile hostname.
 
+The CLI `list` command reads this API at the default versioned endpoint. Set
+`AGENT_HUB_API_URL` to a different `/api/v1` endpoint. If authentication is enabled,
+set `AGENT_HUB_AUTH_TOKEN`; the CLI sends it as a bearer token. The CLI refuses a
+non-loopback plaintext HTTP endpoint.
+
 A non-loopback bind requires TLS and bearer authentication. Set a random token in
 the environment; do not put a fixed token in a command-line argument. The token must
 contain at least 32 characters.

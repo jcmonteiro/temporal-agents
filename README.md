@@ -48,7 +48,8 @@ make setup          # optional: enable git hooks (gofmt on commit)
    temporal-agents history
    ```
 
-5. Optionally serve the Agent Hub REST API and a built `web/dist` bundle:
+5. Start the Agent Hub REST API before using `list`. It also serves a built
+   `web/dist` bundle when one exists:
 
    ```sh
    temporal-agents serve
@@ -56,7 +57,11 @@ make setup          # optional: enable git hooks (gofmt on commit)
    # OpenAPI:        http://127.0.0.1:8973/api/v1/openapi.json
    ```
 
-The CLI connects to `localhost:17233` by default. Override with `TEMPORAL_ADDRESS`.
+Workflow submission and `watch` connect to `localhost:17233` by default. Override
+that address with `TEMPORAL_ADDRESS`. The `list` command reads
+`http://127.0.0.1:8973/api/v1` instead. Override its versioned endpoint with
+`AGENT_HUB_API_URL`; when the API requires authentication, `list` sends the token
+from `AGENT_HUB_AUTH_TOKEN`. A non-loopback endpoint must use HTTPS.
 
 ### Durable execution history
 
@@ -82,7 +87,8 @@ clearly stayed down. What an exhausted retry costs then depends on which write i
 was — a workflow that cannot record its *start* does not run at all, while one that
 cannot record its *outcome* keeps its result and reports the bookkeeping failure
 (the row is left at `running`, so treat an hours-old `running` row as abandoned).
-`list` remains the live Temporal view; `history` is the durable one.
+`list` remains the live Agent Hub overview; `history` is the durable execution
+record.
 
 ## Commands
 
@@ -99,7 +105,7 @@ cannot record its *outcome* keeps its result and reports the bookkeeping failure
 | `fleet plan <list\|show>` | Review the stored plans. |
 | `fleet execute --plan-id <handle> [--summary]` | Orchestrate a stored plan: a develop workflow per node, run in dependency order. |
 | `watch <workflow-id>` | Stream a workflow's live Pi progress, then its result. |
-| `list` | List running workflows and schedules (fleet parents and per-node children included). |
+| `list` | Read the Agent Hub HTTP API and list active top-level fleets, runs, and schedules. |
 | `history [--kind <k>] [--limit <n>] [--workflow-id <id>] [--schedule-id <id>]` | List durably recorded executions, newest first. |
 | `serve [--addr <host:port>] [--web-dir <path>] [--allow-host <host>]... [--allow-origin <origin>]...` | Serve the versioned Agent Hub REST API and, optionally, an independently built SPA. |
 
@@ -109,8 +115,8 @@ Run any command with `--help` for details, e.g. `temporal-agents code develop --
 
 ### Agent Hub REST API
 
-`serve` adds a local API without changing worker or CLI command behavior. It exposes
-portable resources under `/api/v1`:
+`serve` adds a local API that is also the read boundary for the CLI's `list`
+command. It exposes portable resources under `/api/v1`:
 
 - `GET /api/v1/fleets` and `GET /api/v1/fleets/{id}`
 - `GET /api/v1/runs` and `GET /api/v1/runs/{id}`
