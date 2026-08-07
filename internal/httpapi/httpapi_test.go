@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +67,55 @@ func (v *viewStub) Run(_ context.Context, id string) (agenthub.Run, error) {
 
 func (v *viewStub) Schedules(context.Context, int) ([]agenthub.Schedule, error) {
 	return v.schedules, v.err
+}
+
+func (v *viewStub) ActiveWork(_ context.Context, query agenthub.PageQuery) (agenthub.Page[agenthub.ActiveWorkItem], error) {
+	if v.err != nil {
+		return agenthub.Page[agenthub.ActiveWorkItem]{}, v.err
+	}
+	var all []agenthub.ActiveWorkItem
+	for _, fleet := range v.fleets {
+		if fleet.Running {
+			all = append(all, agenthub.ActiveWorkItem{ID: fleet.ID, Type: agenthub.ActiveWorkFleet, Status: fleet.Status, Running: true})
+		}
+	}
+	for _, run := range v.runs {
+		if run.Running {
+			all = append(all, agenthub.ActiveWorkItem{ID: run.ID, Type: activeTypeFromRun(run.Type), Status: run.Status, Running: true})
+		}
+	}
+	for _, schedule := range v.schedules {
+		all = append(all, agenthub.ActiveWorkItem{ID: schedule.ID, Type: agenthub.ActiveWorkSchedule, Status: schedule.Status})
+	}
+	offset := 0
+	if len(query.Cursor) > 0 {
+		parsed, err := strconv.Atoi(string(query.Cursor))
+		if err != nil || parsed < 0 || parsed > len(all) {
+			return agenthub.Page[agenthub.ActiveWorkItem]{}, agenthub.ErrInvalid
+		}
+		offset = parsed
+	}
+	end := min(offset+query.Limit, len(all))
+	page := agenthub.Page[agenthub.ActiveWorkItem]{Items: append([]agenthub.ActiveWorkItem(nil), all[offset:end]...)}
+	if end < len(all) {
+		page.Next = []byte(strconv.Itoa(end))
+	}
+	return page, nil
+}
+
+func activeTypeFromRun(runType agenthub.RunType) agenthub.ActiveWorkType {
+	switch runType {
+	case agenthub.RunTypeDevelop:
+		return agenthub.ActiveWorkDevelop
+	case agenthub.RunTypeReview:
+		return agenthub.ActiveWorkReview
+	case agenthub.RunTypePilot:
+		return agenthub.ActiveWorkPilot
+	case agenthub.RunTypeFleetPlan:
+		return agenthub.ActiveWorkFleetPlan
+	default:
+		return agenthub.ActiveWorkRun
+	}
 }
 
 func (v *viewStub) Dismissals(context.Context) ([]agenthub.Dismissal, error) {
@@ -210,6 +261,89 @@ func TestFleetCollectionPublishesAPortableContract(t *testing.T) {
 	}
 	if fleet.Nodes != nil {
 		t.Errorf("collection carries %d nodes, want the graph only on the item resource", len(fleet.Nodes))
+	}
+}
+
+func TestActiveWorkPublishesAnAdditivePagedResource(t *testing.T) {
+	view := &viewStub{
+		fleets: []agenthub.Fleet{
+			{ID: "fleet-finished", Status: agenthub.StatusDone},
+			{ID: "fleet-running", Running: true, Status: agenthub.StatusInProgress},
+		},
+		runs: []agenthub.Run{{
+			ID: "review-running", Type: agenthub.RunTypeReview,
+			Running: true, Status: agenthub.StatusInProgress,
+		}},
+	}
+	server := newTestServer(t, view)
+
+	response := request(t, server, http.MethodGet, BasePath+"/active-work?limit=1", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+	}
+	var first activeWorkCollection
+	decodeResponse(t, response, &first)
+	if len(first.Items) != 1 || first.Items[0].ID != "fleet-running" || first.Items[0].Status != agenthub.StatusInProgress || !first.Items[0].Running || first.Next == nil {
+		t.Fatalf("first active-work page = %+v, want the in-progress fleet and a next link", first)
+	}
+
+	response = request(t, server, http.MethodGet, *first.Next, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("next status = %d: %s", response.Code, response.Body.String())
+	}
+	var second activeWorkCollection
+	decodeResponse(t, response, &second)
+	if len(second.Items) != 1 || second.Items[0].ID != "review-running" || second.Items[0].Type != agenthub.ActiveWorkReview || second.Next != nil {
+		t.Fatalf("second active-work page = %+v, want the final review run", second)
+	}
+}
+
+func TestActiveWorkRejectsMalformedAndForeignCursors(t *testing.T) {
+	server := newTestServer(t, &viewStub{})
+	for _, query := range []string{"cursor=", "cursor=%20"} {
+		empty := request(t, server, http.MethodGet, BasePath+"/active-work?"+query, nil)
+		requireProblem(t, empty, http.StatusBadRequest, codeInvalidRequest)
+	}
+
+	malformed := request(t, server, http.MethodGet, BasePath+"/active-work?cursor=not-base64!", nil)
+	requireProblem(t, malformed, http.StatusBadRequest, codeInvalidRequest)
+
+	malformedEncodingRequest := newRequest(http.MethodGet, BasePath+"/active-work", nil)
+	malformedEncodingRequest.URL.RawQuery = "cursor=%%%"
+	malformedEncoding := httptest.NewRecorder()
+	server.ServeHTTP(malformedEncoding, malformedEncodingRequest)
+	requireProblem(t, malformedEncoding, http.StatusBadRequest, codeInvalidRequest)
+
+	for _, query := range []string{
+		"cursor=YQ&cursor=Yg",
+		"limit=1&limit=2",
+	} {
+		repeated := request(t, server, http.MethodGet, BasePath+"/active-work?"+query, nil)
+		requireProblem(t, repeated, http.StatusBadRequest, codeInvalidRequest)
+	}
+
+	oldFleetCursor := base64.RawURLEncoding.EncodeToString([]byte("2026-08-06T12:00:00Z\nfleet-1"))
+	foreign := request(t, server, http.MethodGet, BasePath+"/active-work?cursor="+oldFleetCursor, nil)
+	requireProblem(t, foreign, http.StatusBadRequest, codeInvalidRequest)
+}
+
+func TestExistingV1FleetCollectionDoesNotGainActiveWorkFields(t *testing.T) {
+	view := &viewStub{fleets: []agenthub.Fleet{{
+		ID: "fleet-running", Running: true, Status: agenthub.StatusInProgress,
+	}}}
+	response := request(t, newTestServer(t, view), http.MethodGet, BasePath+"/fleets", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+	}
+	var document map[string]any
+	decodeResponse(t, response, &document)
+	if _, exists := document["next"]; exists {
+		t.Error("the existing fleet collection gained a next field")
+	}
+	items, _ := document["items"].([]any)
+	fleet, _ := items[0].(map[string]any)
+	if _, exists := fleet["running"]; exists {
+		t.Error("the existing fleet model gained a running field")
 	}
 }
 
@@ -415,7 +549,7 @@ func TestDismissalBodyIsStrictAndBounded(t *testing.T) {
 // TestActiveItemCannotBeDismissed pins that the server enforces the rule rather than
 // trusting a frontend to hide the affordance.
 func TestActiveItemCannotBeDismissed(t *testing.T) {
-	view := &viewStub{runs: []agenthub.Run{{ID: "run-1", Status: agenthub.StatusInProgress, Iterations: 1}}}
+	view := &viewStub{runs: []agenthub.Run{{ID: "run-1", Running: true, Status: agenthub.StatusInProgress, Iterations: 1}}}
 	server := newTestServer(t, view)
 	req := newRequest(http.MethodPost, BasePath+"/dismissals", strings.NewReader(`{"kind":"run","itemId":"run-1"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -669,6 +803,13 @@ func TestTheSpecificationUsesTheCoreVocabularies(t *testing.T) {
 		wantKinds = append(wantKinds, string(kind))
 	}
 	assertSameStrings(t, itemKind, wantKinds)
+
+	activeWorkType := schemaEnum(t, server.spec.schemas, "ActiveWorkType")
+	wantActiveTypes := make([]string, 0, len(agenthub.ActiveWorkTypes()))
+	for _, workType := range agenthub.ActiveWorkTypes() {
+		wantActiveTypes = append(wantActiveTypes, string(workType))
+	}
+	assertSameStrings(t, activeWorkType, wantActiveTypes)
 }
 
 // TestWellKnownCatalogPointsAtTheContract pins host-level discovery.

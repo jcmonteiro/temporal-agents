@@ -19,6 +19,11 @@ prompts. The server accepts only loopback Host names, its concrete listener host
 names supplied with `--allow-host`. This blocks DNS-rebinding requests that use a
 hostile hostname.
 
+The CLI `list` command reads this API at the default versioned endpoint. Set
+`AGENT_HUB_API_URL` to a different `/api/v1` endpoint. If authentication is enabled,
+set `AGENT_HUB_AUTH_TOKEN`; the CLI sends it as a bearer token. The CLI refuses a
+non-loopback plaintext HTTP endpoint.
+
 A non-loopback bind requires TLS and bearer authentication. Set a random token in
 the environment; do not put a fixed token in a command-line argument. The token must
 contain at least 32 characters.
@@ -73,6 +78,7 @@ move to it deliberately.
 
 | Method and path | Meaning |
 |---|---|
+| `GET /api/v1/active-work` | Paged active top-level fleets, runs, and schedules |
 | `GET /api/v1/fleets` | Running fleets and non-dismissed terminal fleets |
 | `GET /api/v1/fleets/{id}` | One fleet and its plan node graph |
 | `GET /api/v1/runs` | Running standalone chains and non-dismissed terminal chains |
@@ -82,8 +88,19 @@ move to it deliberately.
 | `POST /api/v1/dismissals` | Hide one finished fleet or run |
 | `DELETE /api/v1/dismissals/{id}` | Make the item visible again |
 
-Collections accept `limit` from 1 to 200 and default to 25. The API is an overview,
-not an execution history browser. Use `history` for the durable record.
+Collections accept `limit` from 1 to 200 and default to 25. Existing fleet, run,
+schedule, and dismissal collections keep their original v1 envelope with `items`,
+`count`, and `limit`.
+
+`/active-work` is an additive resource for complete active-work reads. Its
+`active-work-collection.v1` envelope also has `next`. Follow that URL without
+inspecting or changing its opaque `cursor`; `next` is `null` on the final page. Each
+request reads at most one native Temporal execution page or one native schedule
+page. It does not load fleet trees or plan nodes. Continue-as-new changes the current
+run timestamp, but does not move the chain across these source-native pages. The CLI
+follows at most 1,000 pages and retains at most 200,000 items during one overview
+read. Its complete read also has a 35-second deadline. Use `history` for the durable
+execution record.
 
 All times are RFC 3339 UTC timestamps. Missing times are JSON `null`, not the year
 1. Successful GET responses carry a strong `ETag` and support `If-None-Match`.
@@ -101,6 +118,12 @@ The detail resource reconciles the plan against child workflow IDs of the form
 `<fleet-id>-<node-id>`. Each node has its plan prompt, predecessor links, derived
 status, and child execution when it started. There are no cross-fleet edges and no
 fabricated owner, estimate, or description.
+
+In the active-work projection, `running` and `status` report only the parent fleet
+execution facts from the bounded Temporal page. A running fleet therefore has
+`in-progress` status. Node aggregation is available from the fleet collection and
+detail resources, which can load the complete fleet tree. The existing `fleet.v1`
+model is unchanged and does not add `running`.
 
 Fleet status is aggregated by the server. The first matching rule wins:
 
@@ -120,9 +143,11 @@ and never enter the numerator.
 ### Run model
 
 A run resource is a standalone execution **chain**. Its identity is the workflow ID,
-which is stable over continue-as-new. The latest iteration supplies status, the
-first known iteration supplies start time, and token usage is summed from each
-iteration's incremental count. A chain is never returned as one item per run ID.
+which is stable over continue-as-new. The active-work projection reports current
+liveness in `running`; the existing `run.v1` model is unchanged. The latest iteration
+supplies status, the first known iteration supplies start time, and token usage is
+summed from each iteration's incremental count. A chain is never returned as one
+item per run ID.
 
 Schedule-fired runs are represented by their schedule. Child workflows are
 represented by their parent. They are excluded from `/runs` to avoid showing the
@@ -138,7 +163,9 @@ A schedule resource is identified by schedule ID. Its status is:
 4. `todo` when no action has completed
 
 A schedule is recurring. It has no progress, no terminal state, and cannot be
-dismissed.
+dismissed. The lightweight active-work projection always sets schedule `running` to
+`false`. Its schedule status uses configuration and the last observed completed
+action. Use the schedule resource when reconciled current action liveness is needed.
 
 ### Status vocabulary
 

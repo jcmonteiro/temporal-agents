@@ -18,10 +18,9 @@ import (
 // owner, no estimate and no free-text description, because nothing in the system
 // knows them.
 
-// collection is the envelope every collection response uses. One envelope for all
-// of them means a consumer writes the "read a page" code once, and leaves room to
-// describe a page (its cap, how much of it came back) without changing an item's
-// shape.
+// collection is the original v1 envelope used by fleets, runs, schedules, and
+// dismissals. It stays separate from the additive paged active-work contract so
+// existing model names and required fields do not change in place.
 type collection[T any] struct {
 	// Items are the page's items, newest first.
 	Items []T `json:"items"`
@@ -39,6 +38,34 @@ func newCollection[T any](items []T, limit int) collection[T] {
 		items = []T{}
 	}
 	return collection[T]{Items: items, Count: len(items), Limit: limit}
+}
+
+// activeWorkCollection is the additive paged contract used by the CLI. It is a
+// separate model so existing v1 collection models do not gain required fields.
+type activeWorkCollection struct {
+	Items []activeWorkResource `json:"items"`
+	Count int                  `json:"count"`
+	Limit int                  `json:"limit"`
+	Next  *string              `json:"next"`
+}
+
+// activeWorkResource is one top-level unsettled execution or configured schedule.
+type activeWorkResource struct {
+	ID      string                  `json:"id"`
+	Type    agenthub.ActiveWorkType `json:"type"`
+	Status  agenthub.WorkStatus     `json:"status"`
+	Running bool                    `json:"running"`
+}
+
+func newActiveWorkCollection(items []activeWorkResource, limit int, next string) activeWorkCollection {
+	if items == nil {
+		items = []activeWorkResource{}
+	}
+	document := activeWorkCollection{Items: items, Count: len(items), Limit: limit}
+	if next != "" {
+		document.Next = &next
+	}
+	return document
 }
 
 // fleetResource is a fleet: an orchestrated plan, its aggregated status and its

@@ -249,6 +249,9 @@ func TestValidateDismissalTarget(t *testing.T) {
 	if err := ValidateItemID("run-1"); err != nil {
 		t.Fatalf("a workflow id must be addressable: %v", err)
 	}
+	if err := ValidateItemID(strings.Repeat("é", 200)); err != nil {
+		t.Fatalf("a schema-valid 200-code-point id must be addressable: %v", err)
+	}
 	cases := map[string]struct {
 		kind   ItemKind
 		itemID string
@@ -266,7 +269,10 @@ func TestValidateDismissalTarget(t *testing.T) {
 			}
 		})
 	}
-	for _, itemID := range []string{"", "run/1", "run%2f1", strings.Repeat("x", maxItemIDLength+1)} {
+	for _, itemID := range []string{
+		"", "run/1", "run%2f1", "run\x1b[2J", "run\u00851", "run\u00a01", "run\ufeff1",
+		strings.Repeat("x", maxItemIDLength+1),
+	} {
 		if err := ValidateItemID(itemID); err == nil {
 			t.Errorf("ValidateItemID(%q) = nil, want an error", itemID)
 		}

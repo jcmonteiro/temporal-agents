@@ -19,8 +19,8 @@ import (
 type openReader func(context.Context) (execstore.ExecutionReader, func(), error)
 
 // historyCmd lists the durably recorded executions. It is the counterpart to
-// `list`: `list` shows what Temporal is running right now, while `history` reads
-// the record that outlives Temporal's retention and a reset of its state.
+// `list`: `list` reads the current Agent Hub overview, while `history` reads the
+// record that outlives Temporal's retention and a reset of its state.
 // It returns its failures instead of exiting, so the whole command — including
 // the "DATABASE_URL is unset" contract — is reachable from a test; main turns the
 // error into the exit.
@@ -419,7 +419,7 @@ and is listed under its parent as "node (skipped)".
 A row stays "running" until its workflow settles, and every write is made by the
 workflow itself. A terminated workflow, or a worker that never comes back,
 therefore leaves its row at "running" for good: treat a "running" row that is
-hours old as abandoned and check "list" for the live Temporal view.
+hours old as abandoned and check "list" for the live Agent Hub view.
 
 FLAGS
   --kind <kind>        Keep one command type: run, develop, review, pilot, fleet,
@@ -436,6 +436,6 @@ EXAMPLES
   temporal-agents history --schedule-id schedule-9d0f…
 
 Requires DATABASE_URL (see the README's Run section). Use "list" for the live
-Temporal view of what is running right now.
+Agent Hub view of active top-level work.
 `)
 }

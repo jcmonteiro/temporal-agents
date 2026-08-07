@@ -277,11 +277,11 @@ func executionChains(executions []execstore.Execution, filter execstore.ChainFil
 		groups[execution.WorkflowID] = append(groups[execution.WorkflowID], execution)
 	}
 	chains := groupedExecutionChains(groups, 0)
+	required := stringsOf(filter.RequiredWorkflowIDs)
 	if filter.Limit <= 0 || len(chains) <= filter.Limit {
 		return chains
 	}
 	selected := append([]execstore.ExecutionChain(nil), chains[:filter.Limit]...)
-	required := stringsOf(filter.RequiredWorkflowIDs)
 	for _, chain := range chains[filter.Limit:] {
 		if required[chain.Latest.WorkflowID] {
 			selected = append(selected, chain)

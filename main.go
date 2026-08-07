@@ -16,7 +16,6 @@ import (
 	commonpb "go.temporal.io/api/common/v1"
 
 	"go.temporal.io/api/enums/v1"
-	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/contrib/sysinfo"
 	"go.temporal.io/sdk/converter"
@@ -105,7 +104,7 @@ COMMANDS
                                          Schedule a workflow (overlaps are skipped)
   template <subcommand>                  Manage and run saved templates
   watch <workflow-id>                    Stream a workflow's live Pi progress
-  list                                   List running workflows and schedules
+  list                                   List active work through the Agent Hub API
   history [--kind <kind>] [--limit <n>]  List durably recorded executions
   serve [--addr <host:port>]             Serve the Agent Hub REST API
 
@@ -127,6 +126,13 @@ EXAMPLES
 FLAGS
   --save <name>  Save the invocation as a reusable template (see 'template')
   --chain        Re-trigger the same workflow on each successful completion
+
+ENVIRONMENT
+  AGENT_HUB_API_URL     Versioned API endpoint used by list
+                        (default http://127.0.0.1:8973/api/v1)
+  AGENT_HUB_AUTH_TOKEN  Bearer token sent by list when authentication is enabled
+  TEMPORAL_ADDRESS      Temporal endpoint used by execution commands
+                        (default localhost:17233)
 
 See "temporal-agents schedule --help", "temporal-agents template --help", and
 "temporal-agents serve --help".
@@ -626,65 +632,9 @@ func parseSpec(spec string) client.ScheduleSpec {
 	return client.ScheduleSpec{CronExpressions: []string{spec}}
 }
 
-func listRunning() {
-	c := dial()
-	defer c.Close()
-	ctx := context.Background()
-
-	type row struct{ kind, id string }
-	var rows []row
-
-	// Running workflows (excluding the schedule client's internal executions is not needed here).
-	var next []byte
-	for {
-		resp, err := c.ListWorkflow(ctx, &workflowservice.ListWorkflowExecutionsRequest{
-			Query:         "ExecutionStatus='Running'",
-			NextPageToken: next,
-		})
-		if err != nil {
-			fatalf("Could not list workflows: %v", err)
-		}
-		for _, e := range resp.Executions {
-			rows = append(rows, row{classifyWorkflow(e.Execution.WorkflowId), e.Execution.WorkflowId})
-		}
-		next = resp.NextPageToken
-		if len(next) == 0 {
-			break
-		}
-	}
-
-	// Schedules.
-	iter, err := c.ScheduleClient().List(ctx, client.ScheduleListOptions{})
-	if err != nil {
-		fatalf("Could not list schedules: %v", err)
-	}
-	for iter.HasNext() {
-		s, err := iter.Next()
-		if err != nil {
-			fatalf("Could not list schedules: %v", err)
-		}
-		rows = append(rows, row{"schedule", s.ID})
-	}
-
-	if len(rows) == 0 {
-		fmt.Println("Nothing running.")
-		return
-	}
-
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(tw, "TYPE\tID")
-	fmt.Fprintln(tw, "────\t──")
-	for _, r := range rows {
-		fmt.Fprintf(tw, "%s\t%s\n", r.kind, r.id)
-	}
-	tw.Flush()
-	fmt.Printf("\n%d active\n", len(rows))
-}
-
-// classifyWorkflow labels a workflow row by its ID so `list` surfaces what each
-// running workflow is. The convention itself lives in the wfid package, because
-// the HTTP read API reconstructs a fleet's node tree from the very same rule: the
-// CLI label and the API's classification cannot be allowed to drift apart.
+// classifyWorkflow labels a workflow by its ID so watch can decode structured
+// results. The convention itself lives in the wfid package because the HTTP read
+// API reconstructs a fleet's node tree from the same rule.
 func classifyWorkflow(id string) string {
 	return string(wfid.Classify(id))
 }

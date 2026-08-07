@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"go.temporal.io/sdk/client"
+
 	"temporal-agents/internal/agenthub"
 	"temporal-agents/internal/agenthub/hubpg"
 	"temporal-agents/internal/agenthub/hubrecords"
@@ -281,7 +283,7 @@ func runAPIServer(options serveOptions) error {
 	if err != nil {
 		return err
 	}
-	schedules, err := hubtemporal.NewSchedules(orchestrator.ScheduleClient())
+	schedules, err := hubtemporal.NewSchedules(orchestrator.WorkflowService(), client.DefaultNamespace)
 	if err != nil {
 		return err
 	}

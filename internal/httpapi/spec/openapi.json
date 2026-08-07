@@ -3,7 +3,7 @@
   "info": {
     "title": "Temporal Agents API",
     "version": "1.0.0",
-    "description": "A versioned local API for observing agent work as fleets, standalone run chains, and schedules. The API exposes the work model rather than Temporal or database structures. It is read-only except for dismissing finished overview items. All times are RFC 3339 UTC timestamps. Collection reads are capped and newest first. A continue-as-new chain is one run identified by its stable workflow ID. The server binds to loopback by default because responses can contain workflow goals and prompts.",
+    "description": "A versioned local API for observing agent work as fleets, standalone run chains, schedules, and a paged active-work projection. The API exposes the work model rather than Temporal or database structures. It is read-only except for dismissing finished overview items. All times are RFC 3339 UTC timestamps. Existing collection reads are capped and newest first. The active-work resource uses opaque source-native cursor pagination. A continue-as-new chain is one item identified by its stable workflow ID. The server binds to loopback by default because responses can contain workflow goals and prompts.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -42,6 +42,10 @@
     {
       "name": "Dismissals",
       "description": "Durable operator view state over finished items. Dismissals never change workflow state."
+    },
+    {
+      "name": "Active Work",
+      "description": "A bounded paged projection of unsettled top-level executions and configured schedules."
     }
   ],
   "paths": {
@@ -695,7 +699,7 @@
             "type": "string",
             "minLength": 3,
             "maxLength": 261,
-            "pattern": "^(fleet|run):[^/?#%\\s]+$"
+            "pattern": "^(fleet|run):[^/?#%\\s\\u0000-\\u001F\\u007F-\\u009F]+$"
           }
         }
       ],
@@ -724,6 +728,57 @@
           },
           "503": {
             "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/v1/active-work": {
+      "get": {
+        "tags": [
+          "Active Work"
+        ],
+        "summary": "List active top-level work",
+        "description": "Returns unsettled top-level fleet and run chains, followed by configured schedules. Source-native opaque cursors keep each request bounded and keep continue-as-new chains stable between pages.",
+        "operationId": "listActiveWork",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One bounded active-work page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveWorkCollection"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
           },
           "default": {
             "$ref": "#/components/responses/InternalError"
@@ -772,6 +827,16 @@
         "description": "A problem code from the problem catalogue.",
         "schema": {
           "type": "string"
+        }
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "Opaque cursor from the previous active-work page next link.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
@@ -924,7 +989,7 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 255,
-        "pattern": "^[^/?#%\\s]+$",
+        "pattern": "^[^/?#%\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
         "description": "A stable workflow or schedule identity."
       },
       "ItemKind": {
@@ -1250,7 +1315,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "pattern": "^(fleet|run):[^/?#%\\s]+$"
+            "pattern": "^(fleet|run):[^/?#%\\s\\u0000-\\u001F\\u007F-\\u009F]+$"
           },
           "kind": {
             "type": "string",
@@ -1522,6 +1587,111 @@
           },
           "limits": {
             "type": "object"
+          }
+        }
+      },
+      "ActiveWorkType": {
+        "type": "string",
+        "enum": [
+          "fleet",
+          "run",
+          "develop",
+          "review",
+          "pilot",
+          "fleet-plan",
+          "schedule"
+        ]
+      },
+      "ActiveWork": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "type",
+          "status",
+          "running"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ItemID"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ActiveWorkType"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkStatus",
+            "description": "For an execution, the status from the bounded live page. For a schedule, the status from configuration and the last observed completed action."
+          },
+          "running": {
+            "type": "boolean",
+            "description": "Whether the top-level execution is unsettled. Schedule items are configuration and always use false."
+          }
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "type": {
+                "const": "schedule"
+              },
+              "running": {
+                "const": false
+              }
+            }
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "fleet",
+                  "run",
+                  "develop",
+                  "review",
+                  "pilot",
+                  "fleet-plan"
+                ]
+              },
+              "status": {
+                "const": "in-progress"
+              },
+              "running": {
+                "const": true
+              }
+            }
+          }
+        ]
+      },
+      "ActiveWorkCollection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "count",
+          "limit",
+          "next"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActiveWork"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uri-reference",
+            "description": "URL of the next active-work page, or null on the final page."
           }
         }
       }

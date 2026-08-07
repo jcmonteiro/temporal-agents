@@ -117,6 +117,150 @@ func TestFleetsAggregatesThePlanAgainstItsNodeExecutions(t *testing.T) {
 	}
 }
 
+func TestActiveWorkFleetStatusIsIndependentOfPageComposition(t *testing.T) {
+	fleetID := "fleet-" + uuidLike("page")
+	parent := agenthubtest.Fleet(fleetID, agenthub.OutcomeRunning, ago(time.Hour))
+	unrecordedChild := agenthubtest.Node(fleetID, "api", agenthub.OutcomeRunning, ago(time.Minute))
+	recorded := []agenthub.Execution{parent}
+	for i := 0; i < 500; i++ {
+		iteration := agenthubtest.Node(fleetID, "historical", agenthub.OutcomeSucceeded, ago(30*time.Minute))
+		iteration.RunID = fmt.Sprintf("historical-%03d", i)
+		recorded = append(recorded, iteration)
+	}
+	running := []agenthub.Execution{parent, unrecordedChild}
+	for i := 0; i < 300; i++ {
+		running = append(running, agenthubtest.Node(
+			fleetID, fmt.Sprintf("running-%03d", i), agenthub.OutcomeRunning, ago(time.Second)))
+	}
+	source := agenthubtest.New().
+		WithRecorded(recorded...).
+		WithRunning(running...).
+		WithPlan(fleetID, agenthub.Plan{Goal: "publish API", Nodes: []agenthub.PlanNode{{ID: "api"}}})
+	service := newService(t, source)
+
+	small, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1})
+	if err != nil {
+		t.Fatalf("ActiveWork(limit=1): %v", err)
+	}
+	large, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 2})
+	if err != nil {
+		t.Fatalf("ActiveWork(limit=2): %v", err)
+	}
+
+	if len(small.Items) != 1 || len(large.Items) != 1 {
+		t.Fatalf("active-work page sizes = %d/%d, want one top-level fleet in both", len(small.Items), len(large.Items))
+	}
+	if small.Items[0] != large.Items[0] {
+		t.Fatalf("fleet differs by page composition: limit=1 %+v, limit=2 %+v", small.Items[0], large.Items[0])
+	}
+	if got := small.Items[0]; got.Status != agenthub.StatusInProgress || !got.Running || got.Type != agenthub.ActiveWorkFleet {
+		t.Fatalf("active fleet = %+v, want parent facts fleet/in-progress/running", got)
+	}
+}
+
+func TestActiveWorkDoesNotDeriveScheduleLivenessFromRecentActions(t *testing.T) {
+	source := agenthubtest.New().WithSchedules(agenthub.ScheduleState{
+		ID: "schedule-eventual", RunningActions: 2, LastOutcome: agenthub.OutcomeSucceeded,
+	})
+	service := newService(t, source)
+
+	first, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1})
+	if err != nil {
+		t.Fatalf("ActiveWork(executions): %v", err)
+	}
+	page, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1, Cursor: first.Next})
+	if err != nil {
+		t.Fatalf("ActiveWork(schedules): %v", err)
+	}
+
+	if len(page.Items) != 1 {
+		t.Fatalf("got %d schedules, want 1", len(page.Items))
+	}
+	if got := page.Items[0]; got.Running || got.Status != agenthub.StatusDone {
+		t.Fatalf("active schedule = %+v, want no current liveness claim and the observed completed status", got)
+	}
+}
+
+func TestActiveWorkKeepsAContinueAsNewChainWhenItsTimestampChangesBetweenPages(t *testing.T) {
+	newer := agenthubtest.Run("run-new", "new", agenthub.OutcomeRunning, ago(time.Minute))
+	looping := agenthubtest.Run("run-looping", "looping", agenthub.OutcomeRunning, ago(time.Hour))
+	source := agenthubtest.New().WithRunning(newer, looping)
+	service := newService(t, source)
+
+	first, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1})
+	if err != nil {
+		t.Fatalf("first ActiveWork: %v", err)
+	}
+	if len(first.Items) != 1 || first.Items[0].ID != newer.WorkflowID || len(first.Next) == 0 {
+		t.Fatalf("first page = %+v, want run-new and a source cursor", first)
+	}
+
+	// A continue-as-new iteration changes Temporal's current-run start time. The
+	// chain must remain after the native cursor instead of moving around a timestamp
+	// cursor owned by this service.
+	looping.StartedAt = now.Add(time.Minute)
+	source.ReplaceRunning(newer, looping)
+	second, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1, Cursor: first.Next})
+	if err != nil {
+		t.Fatalf("second ActiveWork: %v", err)
+	}
+	if len(second.Items) != 1 || second.Items[0].ID != looping.WorkflowID {
+		t.Fatalf("second page = %+v, want the still-active looping chain", second)
+	}
+}
+
+func TestActiveWorkContinuesAfterASourcePageWithOnlyNestedWork(t *testing.T) {
+	fleetID := "fleet-" + uuidLike("nested")
+	source := agenthubtest.New().WithRunning(
+		agenthubtest.Node(fleetID, "node", agenthub.OutcomeRunning, ago(time.Minute)),
+		agenthubtest.Run("run-visible", "visible", agenthub.OutcomeRunning, ago(time.Hour)),
+	)
+	service := newService(t, source)
+
+	first, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1})
+	if err != nil {
+		t.Fatalf("first ActiveWork: %v", err)
+	}
+	if len(first.Items) != 0 || len(first.Next) == 0 {
+		t.Fatalf("first page = %+v, want an empty filtered page with a continuation", first)
+	}
+	second, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1, Cursor: first.Next})
+	if err != nil {
+		t.Fatalf("second ActiveWork: %v", err)
+	}
+	if len(second.Items) != 1 || second.Items[0].ID != "run-visible" {
+		t.Fatalf("second page = %+v, want the top-level run", second)
+	}
+}
+
+func TestActiveWorkEndsAfterAnEmptySchedulePhase(t *testing.T) {
+	service := newService(t, agenthubtest.New())
+
+	executions, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1})
+	if err != nil {
+		t.Fatalf("ActiveWork(executions): %v", err)
+	}
+	if len(executions.Items) != 0 || len(executions.Next) == 0 {
+		t.Fatalf("execution phase = %+v, want an empty page with the schedule continuation", executions)
+	}
+	schedules, err := service.ActiveWork(context.Background(), agenthub.PageQuery{Limit: 1, Cursor: executions.Next})
+	if err != nil {
+		t.Fatalf("ActiveWork(schedules): %v", err)
+	}
+	if len(schedules.Items) != 0 || len(schedules.Next) != 0 {
+		t.Fatalf("schedule phase = %+v, want an empty final page", schedules)
+	}
+}
+
+func TestActiveWorkRejectsAForeignCursor(t *testing.T) {
+	_, err := newService(t, agenthubtest.New()).ActiveWork(context.Background(), agenthub.PageQuery{
+		Limit: 1, Cursor: []byte("fleet cursor"),
+	})
+	if !errors.Is(err, agenthub.ErrInvalid) {
+		t.Fatalf("ActiveWork error = %v, want ErrInvalid", err)
+	}
+}
+
 // TestFleetsUsesTheRecordedBreakdownForSkippedAndBlockedNodes pins where the two
 // outcomes a child execution cannot express come from: a skipped node has no
 // execution at all, and a blocked one is a recoverable stop that needs a human.
@@ -554,10 +698,12 @@ func TestSchedulesTakeTheirLabelFromTheRunsTheyFired(t *testing.T) {
 // TestSchedulePausedWhileAnActionRuns pins the precedence of the schedule mapping
 // end to end, through the service rather than only the pure rule.
 func TestSchedulePausedWhileAnActionRuns(t *testing.T) {
-	source := agenthubtest.New().WithSchedules(agenthub.ScheduleState{
-		ID: "schedule-" + uuidLike("15"), Paused: true, RunningActions: 1,
-		LastOutcome: agenthub.OutcomeSucceeded,
-	})
+	scheduleID := "schedule-" + uuidLike("15")
+	action := agenthubtest.Run("run-"+uuidLike("20"), "daily digest", agenthub.OutcomeRunning, ago(time.Hour))
+	action.ScheduleID = scheduleID
+	source := agenthubtest.New().
+		WithRunning(action).
+		WithSchedules(agenthub.ScheduleState{ID: scheduleID, Paused: true})
 	schedules, err := newService(t, source).Schedules(context.Background(), 0)
 	if err != nil {
 		t.Fatalf("Schedules: %v", err)
@@ -583,6 +729,32 @@ func TestScheduledActionRecordedAsRunningButGoneFromTheOrchestrator(t *testing.T
 	}
 	if len(schedules) != 1 || schedules[0].Status != agenthub.StatusFailed {
 		t.Fatalf("schedules = %+v, want the stale action reported as failed", schedules)
+	}
+}
+
+// TestReconciledScheduleStateOverridesEventualListObservations pins that Temporal's
+// recent-action summary cannot keep a completed action running or replace its
+// reconciled terminal outcome.
+func TestReconciledScheduleStateOverridesEventualListObservations(t *testing.T) {
+	scheduleID := "schedule-" + uuidLike("18")
+	action := agenthubtest.Run("run-"+uuidLike("19"), "daily digest", agenthub.OutcomeRunning, ago(time.Hour))
+	action.ScheduleID = scheduleID
+	settled := action
+	settled.Outcome = agenthub.OutcomeSucceeded
+	settled.EndedAt = ago(30 * time.Minute)
+	source := agenthubtest.New().
+		WithRecorded(action).
+		WithExecutionState(settled).
+		WithSchedules(agenthub.ScheduleState{
+			ID: scheduleID, RunningActions: 1, LastOutcome: agenthub.OutcomeFailed,
+		})
+
+	schedules, err := newService(t, source).Schedules(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("Schedules: %v", err)
+	}
+	if len(schedules) != 1 || schedules[0].RunningActions != 0 || schedules[0].Status != agenthub.StatusDone {
+		t.Fatalf("schedules = %+v, want the reconciled completed action", schedules)
 	}
 }
 
@@ -621,10 +793,14 @@ func TestAnUnavailableDependencyIsReportedAsRetryable(t *testing.T) {
 	ctx := context.Background()
 
 	reads := map[string]func() error{
-		"fleets":     func() error { _, err := service.Fleets(ctx, 0); return err },
-		"fleet":      func() error { _, err := service.Fleet(ctx, "fleet-1"); return err },
-		"runs":       func() error { _, err := service.Runs(ctx, 0); return err },
-		"schedules":  func() error { _, err := service.Schedules(ctx, 0); return err },
+		"fleets":    func() error { _, err := service.Fleets(ctx, 0); return err },
+		"fleet":     func() error { _, err := service.Fleet(ctx, "fleet-1"); return err },
+		"runs":      func() error { _, err := service.Runs(ctx, 0); return err },
+		"schedules": func() error { _, err := service.Schedules(ctx, 0); return err },
+		"active work": func() error {
+			_, err := service.ActiveWork(ctx, agenthub.PageQuery{Limit: 1})
+			return err
+		},
 		"dismissals": func() error { _, err := service.Dismissals(ctx); return err },
 	}
 	for name, read := range reads {

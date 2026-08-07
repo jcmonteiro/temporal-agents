@@ -14,17 +14,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"go.temporal.io/api/enums/v1"
+	schedulepb "go.temporal.io/api/schedule/v1"
 	"go.temporal.io/api/serviceerror"
 	workflowpb "go.temporal.io/api/workflow/v1"
 	"go.temporal.io/api/workflowservice/v1"
-	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"temporal-agents/internal/agenthub"
 	"temporal-agents/internal/wfid"
@@ -52,12 +54,11 @@ type WorkflowClient interface {
 	DescribeWorkflowExecution(ctx context.Context, workflowID, runID string) (*workflowservice.DescribeWorkflowExecutionResponse, error)
 }
 
-// ScheduleLister is the slice of the schedule client this adapter needs: listing
-// is enough, because a list entry already carries whether a schedule is paused,
-// when it fires next and what it fired recently.
-type ScheduleLister interface {
-	// List returns an iterator over the configured schedules.
-	List(ctx context.Context, options client.ScheduleListOptions) (client.ScheduleListIterator, error)
+// ScheduleClient is the slice of Temporal's raw service needed for native-token
+// schedule paging. The SDK iterator hides this token, so it cannot implement a
+// bounded HTTP cursor without restarting the scan on every request.
+type ScheduleClient interface {
+	ListSchedules(ctx context.Context, request *workflowservice.ListSchedulesRequest, options ...grpc.CallOption) (*workflowservice.ListSchedulesResponse, error)
 }
 
 // Executions answers agenthub.ExecutionSource from the orchestrator.
@@ -67,7 +68,8 @@ type Executions struct {
 
 // Schedules answers agenthub.ScheduleSource from the orchestrator.
 type Schedules struct {
-	client ScheduleLister
+	client    ScheduleClient
+	namespace string
 }
 
 // Compile-time proof the adapters satisfy the ports they are injected as.
@@ -85,16 +87,19 @@ func NewExecutions(c WorkflowClient) (*Executions, error) {
 }
 
 // NewSchedules returns the schedule source.
-func NewSchedules(c ScheduleLister) (*Schedules, error) {
+func NewSchedules(c ScheduleClient, namespace string) (*Schedules, error) {
 	if c == nil {
 		return nil, errors.New("the schedule client is required")
 	}
-	return &Schedules{client: c}, nil
+	if strings.TrimSpace(namespace) == "" {
+		return nil, errors.New("the Temporal namespace is required")
+	}
+	return &Schedules{client: c, namespace: namespace}, nil
 }
 
 // RunningExecutions implements agenthub.ExecutionSource. It pages through the
-// visibility listing until the cap is reached, so one request can never turn into
-// an unbounded scan of a busy orchestrator.
+// visibility listing until the cap is reached, so no request can start an
+// unbounded orchestration scan.
 func (e *Executions) RunningExecutions(ctx context.Context, limit int) ([]agenthub.Execution, error) {
 	if limit <= 0 {
 		limit = agenthub.MaxLimit
@@ -104,6 +109,7 @@ func (e *Executions) RunningExecutions(ctx context.Context, limit int) ([]agenth
 	for {
 		resp, err := e.client.ListWorkflow(ctx, &workflowservice.ListWorkflowExecutionsRequest{
 			Query:         runningQuery,
+			PageSize:      int32(limit - len(out)),
 			NextPageToken: next,
 		})
 		if err != nil {
@@ -111,7 +117,7 @@ func (e *Executions) RunningExecutions(ctx context.Context, limit int) ([]agenth
 		}
 		for _, info := range resp.GetExecutions() {
 			out = append(out, executionFrom(info))
-			if len(out) == limit {
+			if limit > 0 && len(out) == limit {
 				return out, nil
 			}
 		}
@@ -120,6 +126,33 @@ func (e *Executions) RunningExecutions(ctx context.Context, limit int) ([]agenth
 			return out, nil
 		}
 	}
+}
+
+// RunningPage implements source-native paging with one Temporal visibility call.
+func (e *Executions) RunningPage(ctx context.Context, query agenthub.ExecutionPageQuery) (agenthub.ExecutionPage, error) {
+	resp, err := e.client.ListWorkflow(ctx, &workflowservice.ListWorkflowExecutionsRequest{
+		Query:         runningQuery,
+		PageSize:      int32(query.Limit),
+		NextPageToken: query.Cursor,
+	})
+	if err != nil {
+		var invalid *serviceerror.InvalidArgument
+		if errors.As(err, &invalid) {
+			return agenthub.ExecutionPage{}, fmt.Errorf("%w: cursor is invalid", agenthub.ErrInvalid)
+		}
+		return agenthub.ExecutionPage{}, fmt.Errorf("list a page of running executions: %w", err)
+	}
+	if len(resp.GetExecutions()) > query.Limit {
+		return agenthub.ExecutionPage{}, errors.New("the orchestration server returned more executions than requested")
+	}
+	page := agenthub.ExecutionPage{
+		Items: make([]agenthub.Execution, 0, len(resp.GetExecutions())),
+		Next:  append([]byte(nil), resp.GetNextPageToken()...),
+	}
+	for _, info := range resp.GetExecutions() {
+		page.Items = append(page.Items, executionFrom(info))
+	}
+	return page, nil
 }
 
 // Execution implements agenthub.ExecutionSource. An execution the orchestrator does
@@ -205,114 +238,237 @@ func (e *Executions) Executions(ctx context.Context, workflowIDs []string) (map[
 	return out, nil
 }
 
-// Schedules implements agenthub.ScheduleSource.
-//
-// RunningActions is deliberately left at zero: a list entry does not say whether an
-// action is in flight, and the reader already knows — it has the running executions,
-// each attributed to the schedule that fired it. Describing every schedule here to
-// re-derive that would cost a round trip per schedule for a fact already in hand.
+// Schedules implements the capped non-paged overview read. It follows short
+// source pages because Temporal's maximum page size is not a promised page size.
 func (s *Schedules) Schedules(ctx context.Context, limit int) ([]agenthub.ScheduleState, error) {
 	if limit <= 0 {
 		limit = agenthub.MaxLimit
 	}
-	iter, err := s.client.List(ctx, client.ScheduleListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("list the schedules: %w", err)
-	}
-	var out []agenthub.ScheduleState
-	for iter.HasNext() {
-		entry, err := iter.Next()
+	items := make([]agenthub.ScheduleState, 0, limit)
+	var cursor []byte
+	seen := make(map[string]bool)
+	for range maxScheduleCollectionPages {
+		key := string(cursor)
+		if seen[key] {
+			return nil, errors.New("schedule pagination contains a cycle")
+		}
+		seen[key] = true
+
+		page, err := s.SchedulePage(ctx, agenthub.SchedulePageQuery{
+			Limit:  limit - len(items),
+			Cursor: cursor,
+		})
 		if err != nil {
-			return nil, fmt.Errorf("read a schedule: %w", err)
+			return nil, err
 		}
-		if entry == nil {
-			continue
+		items = append(items, page.Items...)
+		if len(items) == limit || len(page.Next) == 0 {
+			return items, nil
 		}
-		out = append(out, scheduleStateFrom(entry))
-		if len(out) == limit {
-			break
-		}
+		cursor = page.Next
 	}
-	return out, nil
+	return nil, errors.New("schedule pagination exceeds the page limit")
 }
 
-// scheduleStateFrom translates a schedule list entry into the port's state type.
-func scheduleStateFrom(entry *client.ScheduleListEntry) agenthub.ScheduleState {
-	state := agenthub.ScheduleState{
-		ID:     entry.ID,
-		Spec:   describeSpec(entry.Spec),
-		Paused: entry.Paused,
+const (
+	maxScheduleCollectionPages = 1000
+	scheduleRetryAttempts      = 3
+	scheduleRetryDelay         = 25 * time.Millisecond
+)
+
+// SchedulePage implements source-native paging with one bounded Temporal service
+// call and bounded retries for transient raw-service failures.
+func (s *Schedules) SchedulePage(ctx context.Context, query agenthub.SchedulePageQuery) (agenthub.ScheduleStatePage, error) {
+	resp, err := s.listSchedules(ctx, &workflowservice.ListSchedulesRequest{
+		Namespace:       s.namespace,
+		MaximumPageSize: int32(query.Limit),
+		NextPageToken:   query.Cursor,
+	})
+	if err != nil {
+		var invalid *serviceerror.InvalidArgument
+		if errors.As(err, &invalid) {
+			return agenthub.ScheduleStatePage{}, fmt.Errorf("%w: cursor is invalid", agenthub.ErrInvalid)
+		}
+		return agenthub.ScheduleStatePage{}, fmt.Errorf("list a page of schedules: %w", err)
 	}
-	// RecentActions is sorted oldest first, so the last entry is the latest firing.
-	if n := len(entry.RecentActions); n > 0 {
-		last := entry.RecentActions[n-1]
-		state.LastRunAt = last.ActualTime
-		if state.LastRunAt.IsZero() {
-			state.LastRunAt = last.ScheduleTime
+	if len(resp.GetSchedules()) > query.Limit {
+		return agenthub.ScheduleStatePage{}, errors.New("the orchestration server returned more schedules than requested")
+	}
+	page := agenthub.ScheduleStatePage{
+		Items: make([]agenthub.ScheduleState, 0, len(resp.GetSchedules())),
+		Next:  append([]byte(nil), resp.GetNextPageToken()...),
+	}
+	for _, entry := range resp.GetSchedules() {
+		if entry != nil {
+			page.Items = append(page.Items, scheduleStateFrom(entry))
 		}
 	}
-	// NextActionTimes holds the upcoming firings; the earliest one is what an
-	// operator is waiting for.
-	if times := entry.NextActionTimes; len(times) > 0 {
-		sorted := append([]time.Time(nil), times...)
-		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Before(sorted[j]) })
-		state.NextRunAt = sorted[0]
+	return page, nil
+}
+
+func (s *Schedules) listSchedules(ctx context.Context, request *workflowservice.ListSchedulesRequest) (*workflowservice.ListSchedulesResponse, error) {
+	var lastErr error
+	for attempt := 0; attempt < scheduleRetryAttempts; attempt++ {
+		response, err := s.client.ListSchedules(ctx, request)
+		if err == nil {
+			return response, nil
+		}
+		lastErr = err
+		if !retryableScheduleError(err) || attempt == scheduleRetryAttempts-1 {
+			return nil, err
+		}
+		delay := scheduleRetryDelay << attempt
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil, lastErr
+}
+
+func retryableScheduleError(err error) bool {
+	var unavailable *serviceerror.Unavailable
+	var exhausted *serviceerror.ResourceExhausted
+	if errors.As(err, &unavailable) || errors.As(err, &exhausted) {
+		return true
+	}
+
+	switch status.Code(err) {
+	case codes.Unavailable, codes.ResourceExhausted:
+		return true
+	default:
+		return false
+	}
+}
+
+// scheduleStateFrom translates a raw schedule list entry into the port's state.
+func scheduleStateFrom(entry *schedulepb.ScheduleListEntry) agenthub.ScheduleState {
+	info := entry.GetInfo()
+	state := agenthub.ScheduleState{
+		ID:     entry.GetScheduleId(),
+		Spec:   describeScheduleSpec(info.GetSpec()),
+		Paused: info.GetPaused(),
+	}
+	actions := info.GetRecentActions()
+	if n := len(actions); n > 0 {
+		last := actions[n-1]
+		if actual := last.GetActualTime(); actual != nil {
+			state.LastRunAt = actual.AsTime()
+		} else if scheduled := last.GetScheduleTime(); scheduled != nil {
+			state.LastRunAt = scheduled.AsTime()
+		}
+	}
+	for i := len(actions) - 1; i >= 0; i-- {
+		outcome, known := scheduleActionOutcome(actions[i].GetStartWorkflowStatus())
+		if !known {
+			continue
+		}
+		if outcome == agenthub.OutcomeRunning {
+			state.RunningActions++
+			continue
+		}
+		if state.LastOutcome == "" {
+			state.LastOutcome = outcome
+		}
+	}
+	for _, future := range info.GetFutureActionTimes() {
+		if future == nil {
+			continue
+		}
+		candidate := future.AsTime()
+		if state.NextRunAt.IsZero() || candidate.Before(state.NextRunAt) {
+			state.NextRunAt = candidate
+		}
 	}
 	return state
 }
 
-// describeSpec renders when a schedule fires as the text it was configured with:
-// its cron expressions, or its interval, or — for a calendar-based schedule nothing
-// simpler describes — a compact rendering of the calendar fields. It returns "" when
-// there is nothing to say, so a consumer shows no claim rather than an invented one.
-func describeSpec(spec *client.ScheduleSpec) string {
+func scheduleActionOutcome(status enums.WorkflowExecutionStatus) (agenthub.ExecutionOutcome, bool) {
+	if status == enums.WORKFLOW_EXECUTION_STATUS_UNSPECIFIED {
+		return "", false
+	}
+	return outcomeFrom(status), true
+}
+
+func describeScheduleSpec(spec *schedulepb.ScheduleSpec) string {
 	if spec == nil {
 		return ""
 	}
-	if len(spec.CronExpressions) > 0 {
-		return strings.Join(spec.CronExpressions, ", ")
+	if cron := spec.GetCronString(); len(cron) > 0 {
+		return strings.Join(cron, ", ")
 	}
 	var parts []string
-	for _, interval := range spec.Intervals {
-		if interval.Every > 0 {
-			parts = append(parts, "every "+interval.Every.String())
+	for _, interval := range spec.GetInterval() {
+		if every := interval.GetInterval(); every != nil && every.AsDuration() > 0 {
+			parts = append(parts, "every "+every.AsDuration().String())
 		}
 	}
-	for _, calendar := range spec.Calendars {
-		if rendered := describeCalendar(calendar); rendered != "" {
+	for _, calendar := range spec.GetCalendar() {
+		fields := []struct {
+			name  string
+			value string
+		}{
+			{"minute", calendar.GetMinute()},
+			{"hour", calendar.GetHour()},
+			{"dayOfMonth", calendar.GetDayOfMonth()},
+			{"month", calendar.GetMonth()},
+			{"year", calendar.GetYear()},
+			{"dayOfWeek", calendar.GetDayOfWeek()},
+		}
+		var values []string
+		for _, field := range fields {
+			if field.value != "" {
+				values = append(values, field.name+"="+field.value)
+			}
+		}
+		if len(values) > 0 {
+			parts = append(parts, strings.Join(values, " "))
+		}
+	}
+	for _, calendar := range spec.GetStructuredCalendar() {
+		if rendered := describeStructuredCalendar(calendar); rendered != "" {
 			parts = append(parts, rendered)
 		}
 	}
 	return strings.Join(parts, ", ")
 }
 
-// describeCalendar renders the fields of a calendar spec that were actually set,
-// as "field=value" pairs, which says exactly as much as the schedule does.
-func describeCalendar(calendar client.ScheduleCalendarSpec) string {
+func describeStructuredCalendar(calendar *schedulepb.StructuredCalendarSpec) string {
+	if calendar == nil {
+		return ""
+	}
 	fields := []struct {
 		name   string
-		ranges []client.ScheduleRange
+		ranges []*schedulepb.Range
 	}{
-		{"minute", calendar.Minute},
-		{"hour", calendar.Hour},
-		{"dayOfMonth", calendar.DayOfMonth},
-		{"month", calendar.Month},
-		{"year", calendar.Year},
-		{"dayOfWeek", calendar.DayOfWeek},
+		{"minute", calendar.GetMinute()},
+		{"hour", calendar.GetHour()},
+		{"dayOfMonth", calendar.GetDayOfMonth()},
+		{"month", calendar.GetMonth()},
+		{"year", calendar.GetYear()},
+		{"dayOfWeek", calendar.GetDayOfWeek()},
 	}
 	var parts []string
 	for _, field := range fields {
 		if len(field.ranges) == 0 {
 			continue
 		}
-		var values []string
-		for _, r := range field.ranges {
-			value := fmt.Sprintf("%d", r.Start)
-			if r.End > r.Start {
-				value = fmt.Sprintf("%d-%d", r.Start, r.End)
+		values := make([]string, 0, len(field.ranges))
+		for _, item := range field.ranges {
+			value := fmt.Sprintf("%d", item.GetStart())
+			if item.GetEnd() > item.GetStart() {
+				value = fmt.Sprintf("%d-%d", item.GetStart(), item.GetEnd())
 			}
-			if r.Step > 1 {
-				value += fmt.Sprintf("/%d", r.Step)
+			if item.GetStep() > 1 {
+				value += fmt.Sprintf("/%d", item.GetStep())
 			}
 			values = append(values, value)
 		}

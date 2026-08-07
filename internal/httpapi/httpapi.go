@@ -74,6 +74,8 @@ type WorkView interface {
 	Run(ctx context.Context, id string) (agenthub.Run, error)
 	// Schedules returns the schedule satellites.
 	Schedules(ctx context.Context, limit int) ([]agenthub.Schedule, error)
+	// ActiveWork returns one bounded page of active top-level work.
+	ActiveWork(ctx context.Context, query agenthub.PageQuery) (agenthub.Page[agenthub.ActiveWorkItem], error)
 	// Dismissals returns the dismissals in force.
 	Dismissals(ctx context.Context) ([]agenthub.Dismissal, error)
 	// Dismiss hides a finished item from the overview.
@@ -248,6 +250,7 @@ func (s *Server) resources() []resource {
 		{pattern: s.basePath + "/problems", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleProblemIndex}},
 		{pattern: s.basePath + "/problems/{code}", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleProblemType}},
 		{pattern: s.basePath + "/health", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleHealth}},
+		{pattern: s.basePath + "/active-work", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleActiveWork}},
 		{pattern: s.basePath + "/fleets", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleFleets}},
 		{pattern: s.basePath + "/fleets/{id}", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleFleet}},
 		{pattern: s.basePath + "/runs", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleRuns}},
@@ -331,6 +334,27 @@ func (s *Server) dispatch(res resource) http.Handler {
 		}
 		handler(w, r)
 	})
+}
+
+// handleActiveWork answers the additive paged resource used by the CLI.
+func (s *Server) handleActiveWork(w http.ResponseWriter, r *http.Request) {
+	query, ok := s.activeWorkQuery(w, r)
+	if !ok {
+		return
+	}
+	page, err := s.view.ActiveWork(r.Context(), query)
+	if err != nil {
+		s.writeServiceProblem(w, r, err)
+		return
+	}
+	items := make([]activeWorkResource, 0, len(page.Items))
+	for _, item := range page.Items {
+		items = append(items, activeWorkResource{
+			ID: item.ID, Type: item.Type, Status: item.Status, Running: item.Running,
+		})
+	}
+	s.writeJSON(w, r, http.StatusOK, modelActiveWorkCollection,
+		newActiveWorkCollection(items, query.Limit, s.nextPage(r, page.Next)))
 }
 
 // handleFleets answers the fleet collection.

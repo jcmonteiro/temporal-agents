@@ -11,12 +11,15 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/time/rate"
+
+	"temporal-agents/internal/agenthub"
 )
 
 // The middlewares here are the API's security and operability posture, applied to
@@ -374,7 +377,19 @@ func isJSONMediaType(header string) bool {
 // the transport cannot accidentally offer a different paging contract than the one
 // the model publishes.
 func (s *Server) limitParam(w http.ResponseWriter, r *http.Request) (int, bool) {
-	raw := strings.TrimSpace(r.URL.Query().Get("limit"))
+	query, ok := s.parseQuery(w, r)
+	if !ok {
+		return 0, false
+	}
+	if len(query["limit"]) > 1 {
+		s.writeProblem(w, r, codeInvalidRequest, "query parameter is repeated")
+		return 0, false
+	}
+	return s.parseLimit(w, r, query.Get("limit"))
+}
+
+func (s *Server) parseLimit(w http.ResponseWriter, r *http.Request, parameter string) (int, bool) {
+	raw := strings.TrimSpace(parameter)
 	if raw == "" {
 		return validatedLimit(0)
 	}
@@ -389,6 +404,55 @@ func (s *Server) limitParam(w http.ResponseWriter, r *http.Request) (int, bool) 
 		return 0, false
 	}
 	return limit, true
+}
+
+func (s *Server) parseQuery(w http.ResponseWriter, r *http.Request) (url.Values, bool) {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		s.writeProblem(w, r, codeInvalidRequest, "query is invalid")
+		return nil, false
+	}
+	return query, true
+}
+
+const maxCursorBytes = 4 << 10
+
+func (s *Server) activeWorkQuery(w http.ResponseWriter, r *http.Request) (agenthub.PageQuery, bool) {
+	query, ok := s.parseQuery(w, r)
+	if !ok {
+		return agenthub.PageQuery{}, false
+	}
+	if len(query["limit"]) > 1 || len(query["cursor"]) > 1 {
+		s.writeProblem(w, r, codeInvalidRequest, "query parameter is repeated")
+		return agenthub.PageQuery{}, false
+	}
+	limit, ok := s.parseLimit(w, r, query.Get("limit"))
+	if !ok {
+		return agenthub.PageQuery{}, false
+	}
+	raw := strings.TrimSpace(query.Get("cursor"))
+	if raw == "" {
+		if query.Has("cursor") {
+			s.writeProblem(w, r, codeInvalidRequest, "cursor is invalid")
+			return agenthub.PageQuery{}, false
+		}
+		return agenthub.PageQuery{Limit: limit}, true
+	}
+	cursor, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil || len(cursor) == 0 || len(cursor) > maxCursorBytes {
+		s.writeProblem(w, r, codeInvalidRequest, "cursor is invalid")
+		return agenthub.PageQuery{}, false
+	}
+	return agenthub.PageQuery{Limit: limit, Cursor: cursor}, true
+}
+
+func (s *Server) nextPage(r *http.Request, cursor []byte) string {
+	if len(cursor) == 0 {
+		return ""
+	}
+	query := r.URL.Query()
+	query.Set("cursor", base64.RawURLEncoding.EncodeToString(cursor))
+	return r.URL.Path + "?" + query.Encode()
 }
 
 // newLimiter builds the process-wide rate limiter, or nil when rate limiting is

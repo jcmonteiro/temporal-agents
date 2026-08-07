@@ -169,6 +169,112 @@ func (s *Service) Fleets(ctx context.Context, limit int) ([]Fleet, error) {
 	return fleets, nil
 }
 
+const (
+	activeWorkCursorVersion   byte = 1
+	activeWorkExecutionsPhase byte = 'e'
+	activeWorkSchedulesPhase  byte = 's'
+)
+
+// ActiveWork returns one bounded source-native page of top-level active work.
+// Running executions are read before schedules. A page can be empty when one
+// Temporal page contains only child or schedule-fired executions; Next still lets
+// the caller continue without this request scanning another source page.
+func (s *Service) ActiveWork(ctx context.Context, query PageQuery) (Page[ActiveWorkItem], error) {
+	limit := resolveLimit(query.Limit)
+	phase, sourceCursor, err := decodeActiveWorkCursor(query.Cursor)
+	if err != nil {
+		return Page[ActiveWorkItem]{}, err
+	}
+	if phase == activeWorkSchedulesPhase {
+		return s.activeSchedulePage(ctx, limit, sourceCursor)
+	}
+
+	sourcePage, err := s.deps.Live.RunningPage(ctx, ExecutionPageQuery{Limit: limit, Cursor: sourceCursor})
+	if err != nil {
+		if errors.Is(err, ErrInvalid) {
+			return Page[ActiveWorkItem]{}, err
+		}
+		return Page[ActiveWorkItem]{}, unavailable("list a page of running executions", err)
+	}
+	items := make([]ActiveWorkItem, 0, len(sourcePage.Items))
+	for _, execution := range sourcePage.Items {
+		if !execution.Running() {
+			continue
+		}
+		switch {
+		case isFleet(execution):
+			items = append(items, ActiveWorkItem{
+				ID: execution.WorkflowID, Type: ActiveWorkFleet,
+				Status: execution.Outcome.WorkStatus(), Running: true,
+			})
+		case isRunSatellite(execution):
+			items = append(items, ActiveWorkItem{
+				ID: execution.WorkflowID, Type: activeWorkType(execution.Class),
+				Status: execution.Outcome.WorkStatus(), Running: true,
+			})
+		}
+	}
+	next := encodeActiveWorkCursor(activeWorkSchedulesPhase, nil)
+	if len(sourcePage.Next) > 0 {
+		next = encodeActiveWorkCursor(activeWorkExecutionsPhase, sourcePage.Next)
+	}
+	return Page[ActiveWorkItem]{Items: items, Next: next}, nil
+}
+
+func (s *Service) activeSchedulePage(ctx context.Context, limit int, cursor []byte) (Page[ActiveWorkItem], error) {
+	sourcePage, err := s.deps.Schedules.SchedulePage(ctx, SchedulePageQuery{Limit: limit, Cursor: cursor})
+	if err != nil {
+		if errors.Is(err, ErrInvalid) {
+			return Page[ActiveWorkItem]{}, err
+		}
+		return Page[ActiveWorkItem]{}, unavailable("list a page of schedules", err)
+	}
+	items := make([]ActiveWorkItem, 0, len(sourcePage.Items))
+	for _, state := range sourcePage.Items {
+		items = append(items, ActiveWorkItem{
+			ID: state.ID, Type: ActiveWorkSchedule,
+			Status: ScheduleStatus(state.Paused, 0, state.LastOutcome),
+		})
+	}
+	var next []byte
+	if len(sourcePage.Next) > 0 {
+		next = encodeActiveWorkCursor(activeWorkSchedulesPhase, sourcePage.Next)
+	}
+	return Page[ActiveWorkItem]{Items: items, Next: next}, nil
+}
+
+func decodeActiveWorkCursor(cursor []byte) (byte, []byte, error) {
+	if len(cursor) == 0 {
+		return activeWorkExecutionsPhase, nil, nil
+	}
+	if len(cursor) < 2 || cursor[0] != activeWorkCursorVersion ||
+		(cursor[1] != activeWorkExecutionsPhase && cursor[1] != activeWorkSchedulesPhase) {
+		return 0, nil, fmt.Errorf("%w: cursor is invalid", ErrInvalid)
+	}
+	return cursor[1], append([]byte(nil), cursor[2:]...), nil
+}
+
+func encodeActiveWorkCursor(phase byte, sourceCursor []byte) []byte {
+	cursor := make([]byte, 2, 2+len(sourceCursor))
+	cursor[0], cursor[1] = activeWorkCursorVersion, phase
+	return append(cursor, sourceCursor...)
+}
+
+func activeWorkType(class wfid.Class) ActiveWorkType {
+	switch class {
+	case wfid.ClassDevelop:
+		return ActiveWorkDevelop
+	case wfid.ClassReview:
+		return ActiveWorkReview
+	case wfid.ClassPilot:
+		return ActiveWorkPilot
+	case wfid.ClassFleetPlan:
+		return ActiveWorkFleetPlan
+	default:
+		return ActiveWorkRun
+	}
+}
+
 // Fleet returns one fleet with its whole node graph, or ErrNotFound. It is the
 // read behind a fleet's own view, and the one place the plan's edges are exposed.
 func (s *Service) Fleet(ctx context.Context, id string) (Fleet, error) {
@@ -338,6 +444,10 @@ func (s *Service) Schedules(ctx context.Context, limit int) ([]Schedule, error) 
 	if err != nil {
 		return nil, unavailable("list the schedules", err)
 	}
+	return s.schedulesFromStates(ctx, states)
+}
+
+func (s *Service) schedulesFromStates(ctx context.Context, states []ScheduleState) ([]Schedule, error) {
 	live, err := s.liveByWorkflowID(ctx)
 	if err != nil {
 		return nil, err
@@ -380,14 +490,12 @@ func (s *Service) Schedules(ctx context.Context, limit int) ([]Schedule, error) 
 
 	schedules := make([]Schedule, 0, len(states))
 	for _, state := range states {
-		// A schedule adapter may already know the running count. The live execution
-		// count is the same fact from another source, so use the larger observation
-		// rather than adding them and counting one action twice.
-		runningActions := max(state.RunningActions, running[state.ID])
-		schedules = append(schedules, scheduleFrom(state, actions[state.ID], runningActions))
-		if len(schedules) == limit {
-			break
-		}
+		// A source page can carry eventually consistent action observations. The
+		// established schedule resource derives current action state from the live
+		// and durable execution sources reconciled above.
+		state.RunningActions = 0
+		state.LastOutcome = ""
+		schedules = append(schedules, scheduleFrom(state, actions[state.ID], running[state.ID]))
 	}
 	return schedules, nil
 }
@@ -532,6 +640,7 @@ func (s *Service) plansFor(ctx context.Context, parents []resolvedChain) (map[st
 func (s *Service) buildFleet(ctx context.Context, parent resolvedChain, tree []Execution, live map[string]Execution, plan Plan) (Fleet, error) {
 	fleet := Fleet{
 		ID:        parent.WorkflowID,
+		Running:   parent.Running(),
 		Goal:      parent.Label,
 		PlanID:    parent.PlanID,
 		StartedAt: parent.StartedAt,
@@ -852,6 +961,7 @@ func newer(candidate, current Execution) bool {
 func runFrom(chain resolvedChain) Run {
 	return Run{
 		ID:         chain.WorkflowID,
+		Running:    chain.Running(),
 		Type:       runType(chain.Class),
 		Label:      chain.Label,
 		Status:     chain.Outcome.WorkStatus(),
@@ -915,7 +1025,11 @@ func isFleet(e Execution) bool { return e.Class == wfid.ClassFleet }
 // liveByWorkflowID indexes the in-flight executions by workflow ID, which is how
 // every read finds out whether a recorded execution is still running.
 func (s *Service) liveByWorkflowID(ctx context.Context) (map[string]Execution, error) {
-	running, err := s.deps.Live.RunningExecutions(ctx, liveLimit)
+	return s.liveByWorkflowIDWithLimit(ctx, liveLimit)
+}
+
+func (s *Service) liveByWorkflowIDWithLimit(ctx context.Context, limit int) (map[string]Execution, error) {
+	running, err := s.deps.Live.RunningExecutions(ctx, limit)
 	if err != nil {
 		return nil, unavailable("list the running executions", err)
 	}
