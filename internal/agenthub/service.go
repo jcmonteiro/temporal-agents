@@ -490,11 +490,12 @@ func (s *Service) schedulesFromStates(ctx context.Context, states []ScheduleStat
 
 	schedules := make([]Schedule, 0, len(states))
 	for _, state := range states {
-		// A schedule adapter may already know the running count. The live execution
-		// count is the same fact from another source, so use the larger observation
-		// rather than adding them and counting one action twice.
-		runningActions := max(state.RunningActions, running[state.ID])
-		schedules = append(schedules, scheduleFrom(state, actions[state.ID], runningActions))
+		// A source page can carry eventually consistent action observations. The
+		// established schedule resource derives current action state from the live
+		// and durable execution sources reconciled above.
+		state.RunningActions = 0
+		state.LastOutcome = ""
+		schedules = append(schedules, scheduleFrom(state, actions[state.ID], running[state.ID]))
 	}
 	return schedules, nil
 }

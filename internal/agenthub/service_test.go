@@ -698,10 +698,12 @@ func TestSchedulesTakeTheirLabelFromTheRunsTheyFired(t *testing.T) {
 // TestSchedulePausedWhileAnActionRuns pins the precedence of the schedule mapping
 // end to end, through the service rather than only the pure rule.
 func TestSchedulePausedWhileAnActionRuns(t *testing.T) {
-	source := agenthubtest.New().WithSchedules(agenthub.ScheduleState{
-		ID: "schedule-" + uuidLike("15"), Paused: true, RunningActions: 1,
-		LastOutcome: agenthub.OutcomeSucceeded,
-	})
+	scheduleID := "schedule-" + uuidLike("15")
+	action := agenthubtest.Run("run-"+uuidLike("20"), "daily digest", agenthub.OutcomeRunning, ago(time.Hour))
+	action.ScheduleID = scheduleID
+	source := agenthubtest.New().
+		WithRunning(action).
+		WithSchedules(agenthub.ScheduleState{ID: scheduleID, Paused: true})
 	schedules, err := newService(t, source).Schedules(context.Background(), 0)
 	if err != nil {
 		t.Fatalf("Schedules: %v", err)
@@ -727,6 +729,32 @@ func TestScheduledActionRecordedAsRunningButGoneFromTheOrchestrator(t *testing.T
 	}
 	if len(schedules) != 1 || schedules[0].Status != agenthub.StatusFailed {
 		t.Fatalf("schedules = %+v, want the stale action reported as failed", schedules)
+	}
+}
+
+// TestReconciledScheduleStateOverridesEventualListObservations pins that Temporal's
+// recent-action summary cannot keep a completed action running or replace its
+// reconciled terminal outcome.
+func TestReconciledScheduleStateOverridesEventualListObservations(t *testing.T) {
+	scheduleID := "schedule-" + uuidLike("18")
+	action := agenthubtest.Run("run-"+uuidLike("19"), "daily digest", agenthub.OutcomeRunning, ago(time.Hour))
+	action.ScheduleID = scheduleID
+	settled := action
+	settled.Outcome = agenthub.OutcomeSucceeded
+	settled.EndedAt = ago(30 * time.Minute)
+	source := agenthubtest.New().
+		WithRecorded(action).
+		WithExecutionState(settled).
+		WithSchedules(agenthub.ScheduleState{
+			ID: scheduleID, RunningActions: 1, LastOutcome: agenthub.OutcomeFailed,
+		})
+
+	schedules, err := newService(t, source).Schedules(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("Schedules: %v", err)
+	}
+	if len(schedules) != 1 || schedules[0].RunningActions != 0 || schedules[0].Status != agenthub.StatusDone {
+		t.Fatalf("schedules = %+v, want the reconciled completed action", schedules)
 	}
 }
 
