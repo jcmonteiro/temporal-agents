@@ -120,11 +120,6 @@ func (value *nullableString) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type problem struct {
-	Title  string `json:"title"`
-	Detail string `json:"detail"`
-}
-
 func (c *Client) collection(ctx context.Context) ([]resource, error) {
 	const name = "active-work"
 	endpoint := *c.baseURL
@@ -242,16 +237,8 @@ func (c *Client) nextPageURL(name string, current *url.URL, reference string) (*
 	return next, nil
 }
 
-func apiError(resourceName string, status int, body []byte) error {
-	var document problem
-	if err := json.Unmarshal(body, &document); err == nil {
-		message := strings.TrimSpace(document.Detail)
-		if message == "" {
-			message = strings.TrimSpace(document.Title)
-		}
-		if message != "" {
-			return fmt.Errorf("Agent Hub %s returned HTTP %d: %s", resourceName, status, message)
-		}
-	}
+func apiError(resourceName string, status int, _ []byte) error {
+	// Problem text is controlled by the remote endpoint and can contain terminal
+	// control sequences. Keep CLI-facing errors local and fixed.
 	return fmt.Errorf("Agent Hub %s returned HTTP %d", resourceName, status)
 }

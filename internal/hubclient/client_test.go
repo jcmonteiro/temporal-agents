@@ -2,6 +2,7 @@ package hubclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -112,21 +113,33 @@ func TestClientOverviewStopsEndlessUniquePagination(t *testing.T) {
 	require.Equal(t, int32(maxOverviewPages), requests.Load())
 }
 
-func TestClientOverviewReturnsTheAPIsProblemDetail(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/problem+json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte(`{"title":"Dependency unavailable","detail":"a source could not be reached"}`))
-	}))
-	defer server.Close()
+func TestClientOverviewDoesNotDisplayRemoteProblemText(t *testing.T) {
+	tests := map[string]string{
+		"ANSI escape":      "\x1b[2Jforged terminal output",
+		"embedded newline": "first line\nforged terminal output",
+		"bidi control":     "\u202eforged terminal output",
+		"oversized detail": strings.Repeat("x", 4096),
+	}
+	for name, detail := range tests {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/problem+json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"title":  detail,
+					"detail": detail,
+				})
+			}))
+			defer server.Close()
 
-	client, err := New(server.URL+"/api/v1", "", server.Client())
-	require.NoError(t, err)
+			client, err := New(server.URL+"/api/v1", "", server.Client())
+			require.NoError(t, err)
 
-	_, err = client.Overview(context.Background())
+			_, err = client.Overview(context.Background())
 
-	require.ErrorContains(t, err, "a source could not be reached")
-	require.ErrorContains(t, err, "503")
+			require.EqualError(t, err, "Agent Hub active-work returned HTTP 503")
+		})
+	}
 }
 
 func TestClientOverviewRejectsMalformedSuccessfulDocuments(t *testing.T) {
