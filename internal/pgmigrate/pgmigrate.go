@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io/fs"
 	"sort"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -38,6 +39,9 @@ const schemaMigrationsDDL = `CREATE TABLE IF NOT EXISTS schema_migrations (
 // It is shared across adapters on purpose — they migrate the same database, so they
 // must serialize with each other and not merely with their own kind.
 const lockID int64 = 8_060_926_014_071_701
+
+// unlockTimeout bounds cleanup after migration succeeds, fails, or is canceled.
+const unlockTimeout = 5 * time.Second
 
 // Apply applies every embedded migration under dir that has not been applied yet,
 // in filename order, and records each in the tracking table. It is idempotent:
@@ -70,15 +74,12 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, dir, namespace s
 	}
 	// The advisory lock is session-scoped, so it must be taken and released on one
 	// pinned connection rather than on the pool.
-	defer conn.Release()
+	locked := false
+	defer func() { releaseConnection(ctx, conn, locked) }()
 	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, lockID); err != nil {
 		return fmt.Errorf("take the migration lock: %w", err)
 	}
-	defer func() {
-		// Releasing is best-effort: the lock is session-scoped, so it is dropped anyway
-		// when the connection closes.
-		_, _ = conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, lockID)
-	}()
+	locked = true
 
 	if _, err := conn.Exec(ctx, schemaMigrationsDDL); err != nil {
 		return fmt.Errorf("create schema_migrations table: %w", err)
@@ -98,6 +99,25 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, dir, namespace s
 		}
 	}
 	return nil
+}
+
+// releaseConnection removes the session lock with a cleanup context that survives
+// caller cancellation. A connection that cannot prove it unlocked is closed rather
+// than returned to the pool with a lock still attached to its session.
+func releaseConnection(ctx context.Context, conn *pgxpool.Conn, locked bool) {
+	if !locked {
+		conn.Release()
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unlockTimeout)
+	defer cancel()
+	var unlocked bool
+	if err := conn.QueryRow(cleanupCtx, `SELECT pg_advisory_unlock($1)`, lockID).Scan(&unlocked); err == nil && unlocked {
+		conn.Release()
+		return
+	}
+	raw := conn.Hijack()
+	_ = raw.Close(cleanupCtx)
 }
 
 // recordedName is how a migration is tracked: namespaced when the caller gave a
