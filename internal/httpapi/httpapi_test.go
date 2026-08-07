@@ -300,6 +300,11 @@ func TestActiveWorkPublishesAnAdditivePagedResource(t *testing.T) {
 
 func TestActiveWorkRejectsMalformedAndForeignCursors(t *testing.T) {
 	server := newTestServer(t, &viewStub{})
+	for _, query := range []string{"cursor=", "cursor=%20"} {
+		empty := request(t, server, http.MethodGet, BasePath+"/active-work?"+query, nil)
+		requireProblem(t, empty, http.StatusBadRequest, codeInvalidRequest)
+	}
+
 	malformed := request(t, server, http.MethodGet, BasePath+"/active-work?cursor=not-base64!", nil)
 	requireProblem(t, malformed, http.StatusBadRequest, codeInvalidRequest)
 

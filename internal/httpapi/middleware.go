@@ -432,6 +432,10 @@ func (s *Server) activeWorkQuery(w http.ResponseWriter, r *http.Request) (agenth
 	}
 	raw := strings.TrimSpace(query.Get("cursor"))
 	if raw == "" {
+		if query.Has("cursor") {
+			s.writeProblem(w, r, codeInvalidRequest, "cursor is invalid")
+			return agenthub.PageQuery{}, false
+		}
 		return agenthub.PageQuery{Limit: limit}, true
 	}
 	cursor, err := base64.RawURLEncoding.DecodeString(raw)
