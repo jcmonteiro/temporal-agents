@@ -211,18 +211,15 @@ func validateCollection(name string, document collection) error {
 		return fmt.Errorf("Agent Hub %s response has an invalid next link", name)
 	}
 	for i, item := range document.Items {
-		if workoverview.ValidateID(item.ID) != nil || item.Type == "" || item.Status == "" || item.Running == nil {
-			return fmt.Errorf("Agent Hub %s item %d is incomplete or invalid", name, i)
+		if item.Running == nil {
+			return fmt.Errorf("Agent Hub %s item %d is incomplete", name, i)
 		}
-		if !workoverview.ValidStatus(workoverview.Status(item.Status)) {
-			return fmt.Errorf("Agent Hub %s item %d has unknown status %q", name, i, item.Status)
+		overviewItem := workoverview.Item{
+			ID: item.ID, Kind: workoverview.Kind(item.Type),
+			Status: workoverview.Status(item.Status), Running: *item.Running,
 		}
-		kind := workoverview.Kind(item.Type)
-		if !workoverview.ValidKind(kind) {
-			return fmt.Errorf("Agent Hub %s item %d has unknown type %q", name, i, item.Type)
-		}
-		if kind != workoverview.KindSchedule && !*item.Running {
-			return fmt.Errorf("Agent Hub %s item %d is not active", name, i)
+		if err := workoverview.ValidateItem(overviewItem); err != nil {
+			return fmt.Errorf("Agent Hub %s item %d is invalid: %w", name, i, err)
 		}
 	}
 	return nil

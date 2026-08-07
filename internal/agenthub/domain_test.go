@@ -249,6 +249,9 @@ func TestValidateDismissalTarget(t *testing.T) {
 	if err := ValidateItemID("run-1"); err != nil {
 		t.Fatalf("a workflow id must be addressable: %v", err)
 	}
+	if err := ValidateItemID(strings.Repeat("é", 200)); err != nil {
+		t.Fatalf("a schema-valid 200-code-point id must be addressable: %v", err)
+	}
 	cases := map[string]struct {
 		kind   ItemKind
 		itemID string

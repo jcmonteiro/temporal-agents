@@ -27,6 +27,11 @@ func listCmd(ctx context.Context, out io.Writer, reader workoverview.Reader) err
 	if err != nil {
 		return fmt.Errorf("could not list work through Agent Hub: %w", err)
 	}
+	for index, item := range items {
+		if err := workoverview.ValidateItem(item); err != nil {
+			return fmt.Errorf("could not list work through Agent Hub: item %d: %w", index, err)
+		}
+	}
 	if _, err := fmt.Fprint(out, formatActiveWork(items)); err != nil {
 		return fmt.Errorf("write active work: %w", err)
 	}

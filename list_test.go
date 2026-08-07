@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -41,6 +42,19 @@ func TestFormatActiveWorkReportsWhenNothingIsActive(t *testing.T) {
 	got := formatActiveWork([]workoverview.Item{{ID: "run-1", Kind: workoverview.KindRun, Status: workoverview.StatusFailed}})
 
 	require.Equal(t, "Nothing running.\n", got)
+}
+
+func TestListCmdRejectsInvalidItemsBeforeWriting(t *testing.T) {
+	var output bytes.Buffer
+	reader := overviewReaderStub{items: []workoverview.Item{{
+		ID: "run-safe\nforged", Kind: workoverview.KindRun,
+		Status: workoverview.StatusInProgress, Running: true,
+	}}}
+
+	err := listCmd(context.Background(), &output, reader)
+
+	require.ErrorContains(t, err, "invalid work item")
+	require.Empty(t, output.String())
 }
 
 func TestListCmdReturnsReaderFailuresWithCommandContext(t *testing.T) {

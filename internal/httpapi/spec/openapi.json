@@ -699,7 +699,7 @@
             "type": "string",
             "minLength": 3,
             "maxLength": 261,
-            "pattern": "^(fleet|run):[^/?#%\\s]+$"
+            "pattern": "^(fleet|run):[^/?#%\\s\\u0000-\\u001F\\u007F-\\u009F]+$"
           }
         }
       ],
@@ -989,7 +989,7 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 255,
-        "pattern": "^[^/?#%\\s\\u0000-\\u001F\\u007F]+$",
+        "pattern": "^[^/?#%\\s\\u0000-\\u001F\\u007F-\\u009F]+$",
         "description": "A stable workflow or schedule identity."
       },
       "ItemKind": {
@@ -1315,7 +1315,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "pattern": "^(fleet|run):[^/?#%\\s]+$"
+            "pattern": "^(fleet|run):[^/?#%\\s\\u0000-\\u001F\\u007F-\\u009F]+$"
           },
           "kind": {
             "type": "string",

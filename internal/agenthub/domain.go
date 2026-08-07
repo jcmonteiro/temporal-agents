@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 // ErrInvalid marks a failure caused by what was asked rather than by the state of
@@ -442,7 +443,7 @@ func ValidateItemID(itemID string) error {
 	if strings.TrimSpace(itemID) == "" {
 		return fmt.Errorf("%w: the item id is required", ErrInvalid)
 	}
-	if len(itemID) > maxItemIDLength {
+	if !utf8.ValidString(itemID) || utf8.RuneCountInString(itemID) > maxItemIDLength {
 		return fmt.Errorf("%w: the item id must be at most %d characters", ErrInvalid, maxItemIDLength)
 	}
 	if strings.ContainsAny(itemID, "/?#% \t\n\r") || strings.IndexFunc(itemID, unicode.IsControl) >= 0 {

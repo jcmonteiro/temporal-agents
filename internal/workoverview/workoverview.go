@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 const maxIDLength = 255
@@ -13,8 +14,8 @@ const maxIDLength = 255
 // ValidateID checks the application contract before an adapter writes an item ID
 // to a terminal or uses it as one URL path segment.
 func ValidateID(id string) error {
-	if id == "" || len(id) > maxIDLength || strings.ContainsAny(id, "/?#% \t\r\n") ||
-		strings.IndexFunc(id, unicode.IsControl) >= 0 {
+	if id == "" || !utf8.ValidString(id) || utf8.RuneCountInString(id) > maxIDLength ||
+		strings.ContainsAny(id, "/?#% \t\r\n") || strings.IndexFunc(id, unicode.IsControl) >= 0 {
 		return errors.New("invalid work item ID")
 	}
 	return nil
@@ -73,6 +74,17 @@ type Item struct {
 	Kind    Kind
 	Status  Status
 	Running bool
+}
+
+// ValidateItem checks the complete active-work contract at the application
+// boundary. Execution items must be running, while schedules are recurring
+// configuration and do not claim current action liveness.
+func ValidateItem(item Item) error {
+	if ValidateID(item.ID) != nil || !ValidKind(item.Kind) || !ValidStatus(item.Status) ||
+		(item.Kind == KindSchedule && item.Running) || (item.Kind != KindSchedule && !item.Running) {
+		return errors.New("invalid work item")
+	}
+	return nil
 }
 
 // Reader is the driven port used by commands that show active work.
