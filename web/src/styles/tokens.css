@@ -1,0 +1,103 @@
+/* Design tokens. IB §2: all color/spacing/typography values are CSS custom
+   properties on a single root scope, never hard-coded in components. Switching
+   theme is a matter of toggling the [data-theme] attribute — no component
+   changes. */
+
+/* Non-color tokens shared by every theme. */
+:root {
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* Typography */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-size-xs: 11px;
+  --font-size-sm: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+}
+
+:root[data-theme="dark"] {
+  /* Surfaces */
+  --color-bg: #0b0d12;
+  --color-surface: #12151c;
+  --color-surface-2: #171b24;
+  --color-border: #262c38;
+  --color-border-strong: #364052;
+
+  /* Text */
+  --color-text: #e6eaf2;
+  --color-text-muted: #9099ad;
+  --color-text-subtle: #626b80;
+
+  /* Accent */
+  --color-accent: #7aa2ff;
+
+  /* Status colors (one per status; consumed by legend + orbit dots) */
+  --status-todo: #6b7280;
+  --status-in-progress: #4b8bff;
+  --status-paused: #f59e0b;
+  --status-waiting-input: #eab308;
+  --status-waiting: #a78bfa;
+  --status-done: #22c55e;
+  --status-failed: #ef4444;
+
+  /* Starfield */
+  --star-color: #2a3141;
+
+  /* Canvas backdrop (center → edge) and central body glow. */
+  --canvas-glow: #131824;
+  --planet-glow: #3a4a68;
+
+  /* Orbit ring guide line — clearly visible against the canvas. */
+  --orbit-ring: #4a5468;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  /* Surfaces */
+  --color-bg: #ffffff;
+  --color-surface: #ffffff;
+  --color-surface-2: #f4f6fa;
+  --color-border: #e2e6ee;
+  --color-border-strong: #c3cad8;
+
+  /* Text */
+  --color-text: #1b2130;
+  --color-text-muted: #5a6478;
+  --color-text-subtle: #8b93a5;
+
+  /* Accent */
+  --color-accent: #3b6fe0;
+
+  /* Status colors — slightly deeper for contrast on white. */
+  --status-todo: #6b7280;
+  --status-in-progress: #2f6fe0;
+  --status-paused: #d97706;
+  --status-waiting-input: #ca8a04;
+  --status-waiting: #7c5cd6;
+  --status-done: #16a34a;
+  --status-failed: #dc2626;
+
+  /* Starfield — faint gray specks on white. */
+  --star-color: #dfe3ec;
+
+  /* Canvas backdrop and central body glow. */
+  --canvas-glow: #f2f5fb;
+  --planet-glow: #c9d6ef;
+
+  /* Orbit ring guide line — mid-gray so it reads clearly on white. */
+  --orbit-ring: #9aa4b8;
+
+  color-scheme: light;
+}
