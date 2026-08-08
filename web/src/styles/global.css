@@ -1,0 +1,42 @@
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-md);
+  color: var(--color-text);
+  background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+/* Satellites are focusable <g> elements. Suppress the browser's default
+   rectangular focus box and show a circular ring only for keyboard focus. */
+.satellite {
+  outline: none;
+}
+
+.satellite-focus {
+  opacity: 0;
+}
+
+.satellite:focus-visible .satellite-focus {
+  opacity: 1;
+}
+
+/* The selected satellite already shows its accent selection ring, so the
+   keyboard focus ring would only double it up. Suppress it while selected. */
+.satellite[data-selected] .satellite-focus {
+  opacity: 0;
+}

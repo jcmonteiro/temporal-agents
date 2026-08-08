@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent Hub — Overview (prototype)</title>
+  <style>
+    /* ---------- design tokens (single scope, dark by default) ---------- */
+    :root[data-theme="dark"] {
+      --bg: #0b0f1a;
+      --bg-elev: #111827;
+      --bg-elev-2: #1a2233;
+      --border: #26314a;
+      --text: #e6ecf5;
+      --text-dim: #8a94a8;
+      --text-mute: #5c6577;
+      --accent: #7aa2ff;
+      --focus: #ffcf6b;
+
+      /* seven status colors, one token each */
+      --status-todo: #6b7a99;
+      --status-in-progress: #4aa3ff;
+      --status-paused: #b58aff;
+      --status-waiting-input: #ffcf6b;
+      --status-waiting: #7a8fa8;
+      --status-done: #4ade80;
+      --status-failed: #ef4d5e;
+
+      --radius-sm: 4px;
+      --radius: 8px;
+      --radius-lg: 12px;
+
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; }
+
+    button { font: inherit; color: inherit; }
+    a { color: var(--accent); }
+
+    /* ---------- shell ---------- */
+    .app {
+      display: grid;
+      grid-template-rows: 48px 1fr;
+      grid-template-columns: 220px 1fr;
+      grid-template-areas: "topbar topbar" "nav main";
+      height: 100vh;
+    }
+
+    .topbar {
+      grid-area: topbar;
+      display: flex; align-items: center; gap: 16px;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-elev);
+    }
+    .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; letter-spacing: 0.2px; }
+    .brand .mark {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: radial-gradient(circle at 30% 30%, #6ea8ff, #23407a 70%, #0d1a33);
+      box-shadow: 0 0 12px rgba(122,162,255,0.35);
+    }
+    .topbar .search {
+      flex: 1; max-width: 480px;
+      background: var(--bg-elev-2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 6px 10px; color: var(--text-dim);
+    }
+    .topbar .icons { display: flex; gap: 10px; align-items: center; margin-left: auto; }
+    .icon-btn {
+      width: 32px; height: 32px; border-radius: 50%;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: transparent; border: 1px solid transparent; color: var(--text-dim); cursor: default;
+    }
+    .icon-btn:hover { border-color: var(--border); color: var(--text); }
+    .avatar {
+      width: 28px; height: 28px; border-radius: 50%;
+      background: linear-gradient(135deg, #4a5b80, #2a3350);
+      border: 1px solid var(--border);
+    }
+
+    /* ---------- left nav ---------- */
+    nav.left {
+      grid-area: nav;
+      border-right: 1px solid var(--border);
+      background: var(--bg-elev);
+      padding: 12px 8px;
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 12px; border-radius: var(--radius);
+      color: var(--text-dim); cursor: default;
+      border: 1px solid transparent;
+    }
+    .nav-item .glyph {
+      width: 16px; height: 16px; display: inline-block;
+      background: currentColor; opacity: 0.75;
+      mask-size: contain; -webkit-mask-size: contain;
+    }
+    .nav-item[aria-current="page"] {
+      background: var(--bg-elev-2); color: var(--text);
+      border-color: var(--border);
+    }
+    .nav-item:hover { color: var(--text); }
+    .nav-sep { height: 1px; background: var(--border); margin: 8px 4px; }
+
+    /* ---------- main area ---------- */
+    main {
+      grid-area: main;
+      display: grid;
+      grid-template-columns: 1fr 320px;
+      min-width: 0;
+    }
+    .canvas-wrap {
+      position: relative;
+      overflow: hidden;
+      background:
+        radial-gradient(ellipse at 30% 20%, rgba(122,162,255,0.06), transparent 50%),
+        radial-gradient(ellipse at 80% 80%, rgba(180,120,255,0.05), transparent 50%),
+        #05080f;
+    }
+    /* starfield */
+    .stars {
+      position: absolute; inset: 0; pointer-events: none;
+      background-image:
+        radial-gradient(1px 1px at 20% 30%, #fff8, transparent 50%),
+        radial-gradient(1px 1px at 70% 60%, #fff5, transparent 50%),
+        radial-gradient(1.5px 1.5px at 40% 80%, #fff9, transparent 50%),
+        radial-gradient(1px 1px at 90% 15%, #fff6, transparent 50%),
+        radial-gradient(1px 1px at 10% 70%, #fff4, transparent 50%),
+        radial-gradient(1.5px 1.5px at 55% 40%, #fff8, transparent 50%),
+        radial-gradient(1px 1px at 33% 55%, #fff5, transparent 50%),
+        radial-gradient(1px 1px at 66% 25%, #fff7, transparent 50%);
+      opacity: 0.5;
+    }
+
+    svg.orbit { width: 100%; height: 100%; display: block; }
+    .orbit-ring { fill: none; stroke: rgba(255,255,255,0.06); stroke-dasharray: 2 4; }
+    .planet {
+      fill: url(#planetGradient);
+      filter: drop-shadow(0 0 18px rgba(122,162,255,0.35));
+    }
+    .satellite {
+      cursor: pointer;
+    }
+    .satellite .dot { stroke: #05080f; stroke-width: 2px; transition: r 120ms; }
+    .satellite:hover .dot { r: 11; }
+    .satellite.selected .dot {
+      stroke: var(--focus); stroke-width: 2.5px;
+      filter: drop-shadow(0 0 6px var(--focus));
+    }
+    .satellite text {
+      fill: var(--text); font-size: 11px; pointer-events: none;
+      paint-order: stroke; stroke: #05080fcc; stroke-width: 3px;
+    }
+    .satellite .kind {
+      fill: var(--text-mute); font-size: 9px; letter-spacing: 0.5px; text-transform: uppercase;
+    }
+
+    /* zoom / recenter controls */
+    .controls {
+      position: absolute; bottom: 16px; left: 16px;
+      display: flex; align-items: center; gap: 6px;
+      background: var(--bg-elev); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 4px;
+    }
+    .controls button {
+      background: transparent; border: 0; color: var(--text-dim);
+      width: 28px; height: 28px; border-radius: var(--radius-sm);
+      cursor: pointer; font-size: 16px; line-height: 1;
+    }
+    .controls button:hover { background: var(--bg-elev-2); color: var(--text); }
+    .zoom-pct { min-width: 44px; text-align: center; color: var(--text-dim); font-variant-numeric: tabular-nums; font-size: 12px; }
+
+    /* status pill top-right of canvas */
+    .feed-status {
+      position: absolute; top: 12px; right: 12px;
+      background: var(--bg-elev); border: 1px solid var(--border);
+      border-radius: 999px; padding: 4px 10px; font-size: 12px; color: var(--text-dim);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .feed-status .live-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--status-in-progress);
+      box-shadow: 0 0 6px currentColor;
+    }
+    .feed-status[data-mode="fixtures"] .live-dot { background: var(--status-waiting-input); }
+    .feed-status[data-mode="error"] .live-dot { background: var(--status-failed); }
+
+    /* ---------- right rail ---------- */
+    aside.rail {
+      border-left: 1px solid var(--border);
+      background: var(--bg-elev);
+      padding: 16px;
+      overflow: auto;
+      display: flex; flex-direction: column; gap: 16px;
+      min-width: 0;
+    }
+    .card {
+      background: var(--bg-elev-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+    }
+    .card h3 {
+      margin: 0 0 10px; font-size: 11px; letter-spacing: 0.8px;
+      text-transform: uppercase; color: var(--text-mute); font-weight: 600;
+    }
+    .legend { display: flex; flex-direction: column; gap: 6px; }
+    .legend .row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); }
+    .legend .swatch { width: 10px; height: 10px; border-radius: 50%; }
+
+    .selected-empty { color: var(--text-mute); font-style: italic; font-size: 12px; }
+    .kv { display: grid; grid-template-columns: 84px 1fr; gap: 6px 8px; font-size: 12px; }
+    .kv dt { color: var(--text-mute); }
+    .kv dd { margin: 0; color: var(--text); word-break: break-word; }
+    .selected-label { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+    .selected-kind {
+      display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
+      color: var(--text-mute); border: 1px solid var(--border); border-radius: 999px;
+      padding: 2px 8px; margin-bottom: 8px;
+    }
+
+    .progress {
+      height: 6px; border-radius: 999px; background: #0a0f1c; overflow: hidden; margin-top: 6px;
+    }
+    .progress > span {
+      display: block; height: 100%; background: var(--status-done); transition: width 200ms;
+    }
+
+    .upnext-list { display: flex; flex-direction: column; gap: 6px; }
+    .upnext-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 8px; border-radius: var(--radius-sm);
+      background: #0a0f1c; border: 1px solid transparent; font-size: 12px;
+    }
+    .upnext-item .swatch { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .upnext-item .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .upnext-empty { color: var(--text-mute); font-style: italic; font-size: 12px; }
+
+    /* status colored dot helper */
+    .status-todo { background: var(--status-todo); color: var(--status-todo); }
+    .status-in-progress { background: var(--status-in-progress); color: var(--status-in-progress); }
+    .status-paused { background: var(--status-paused); color: var(--status-paused); }
+    .status-waiting-input { background: var(--status-waiting-input); color: var(--status-waiting-input); }
+    .status-waiting { background: var(--status-waiting); color: var(--status-waiting); }
+    .status-done { background: var(--status-done); color: var(--status-done); }
+    .status-failed { background: var(--status-failed); color: var(--status-failed); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><span class="mark"></span><span>Agent Hub</span></div>
+      <div class="search">Search…</div>
+      <div class="icons">
+        <div class="icon-btn" title="Notifications">🔔</div>
+        <div class="avatar" aria-hidden="true"></div>
+      </div>
+    </header>
+
+    <nav class="left" aria-label="Primary">
+      <div class="nav-item" aria-current="page">◐ Overview</div>
+      <div class="nav-item">▲ Fleets</div>
+      <div class="nav-item">▶ Workflows</div>
+      <div class="nav-item">☰ Templates</div>
+      <div class="nav-item">◔ Insights</div>
+      <div class="nav-sep"></div>
+      <div class="nav-item">⚙ Settings</div>
+      <div class="nav-item">? Help</div>
+    </nav>
+
+    <main>
+      <div class="canvas-wrap" id="canvas">
+        <div class="stars"></div>
+        <div class="feed-status" id="feed-status" data-mode="loading">
+          <span class="live-dot"></span><span id="feed-status-label">connecting…</span>
+        </div>
+        <svg class="orbit" id="orbit" viewBox="0 0 1000 700" preserveAspectRatio="xMidYMid meet">
+          <defs>
+            <radialGradient id="planetGradient" cx="35%" cy="35%">
+              <stop offset="0%" stop-color="#8fb6ff" />
+              <stop offset="55%" stop-color="#3a5a9a" />
+              <stop offset="100%" stop-color="#0b1a36" />
+            </radialGradient>
+          </defs>
+          <g id="orbit-view"></g>
+        </svg>
+        <div class="controls">
+          <button id="zoom-out" aria-label="Zoom out">−</button>
+          <div class="zoom-pct" id="zoom-pct">100%</div>
+          <button id="zoom-in" aria-label="Zoom in">+</button>
+          <button id="recenter" aria-label="Recenter" title="Recenter">⊙</button>
+        </div>
+      </div>
+
+      <aside class="rail" aria-label="Details">
+        <section class="card">
+          <h3>State</h3>
+          <div class="legend" id="legend"></div>
+        </section>
+
+        <section class="card">
+          <h3>Selected</h3>
+          <div id="selected">
+            <div class="selected-empty">Select an item in the orbit to see its details.</div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h3>Up next</h3>
+          <div id="upnext" class="upnext-list">
+            <div class="upnext-empty">Nothing waiting.</div>
+          </div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <script>
+    // ------------------------------------------------------------------
+    // Domain (mirrors internal/agenthub WorkStatus + ItemKind vocabulary)
+    // ------------------------------------------------------------------
+    const STATUSES = [
+      { id: "todo",          label: "To do" },
+      { id: "in-progress",   label: "In progress" },
+      { id: "paused",        label: "Paused" },
+      { id: "waiting-input", label: "Waiting input" },
+      { id: "waiting",       label: "Waiting" },
+      { id: "done",          label: "Done" },
+      { id: "failed",        label: "Failed" },
+    ];
+
+    // ------------------------------------------------------------------
+    // Fixtures — used when /api/v1 is not reachable, so the prototype
+    // stands on its own. Shape mirrors internal/httpapi/dto.go.
+    // ------------------------------------------------------------------
+    const FIXTURES = {
+      fleets: {
+        items: [
+          { id: "fleet-onboarding", kind: "fleet", label: "Refresh onboarding flow", status: "in-progress",
+            progress: { done: 3, total: 7, fraction: 0.428 },
+            upNext: [
+              { id: "wire-events",    label: "wire-events",    status: "todo" },
+              { id: "verify-copy",    label: "verify-copy",    status: "waiting" },
+            ]
+          },
+          { id: "fleet-billing", kind: "fleet", label: "Rework billing invoices", status: "waiting-input",
+            progress: { done: 2, total: 5, fraction: 0.4 },
+            upNext: [{ id: "confirm-tax", label: "confirm-tax", status: "todo" }]
+          },
+          { id: "fleet-search", kind: "fleet", label: "Improve semantic search", status: "done",
+            progress: { done: 4, total: 4, fraction: 1 }, upNext: []
+          },
+        ]
+      },
+      runs: {
+        items: [
+          { id: "run-nightly-index",  kind: "run", type: "schedule", label: "nightly-index-rebuild", status: "in-progress" },
+          { id: "run-fix-typo",       kind: "run", type: "run",      label: "fix typo in footer",     status: "done" },
+          { id: "run-lint-report",    kind: "run", type: "run",      label: "generate lint report",   status: "failed" },
+          { id: "run-refactor-auth",  kind: "run", type: "develop",  label: "refactor auth session",  status: "in-progress" },
+        ]
+      },
+      schedules: {
+        items: [
+          { id: "sched-daily-digest",  kind: "schedule", label: "daily digest",        status: "todo",    paused: false },
+          { id: "sched-hourly-scan",   kind: "schedule", label: "hourly repo scan",    status: "paused",  paused: true  },
+        ]
+      }
+    };
+
+    // ------------------------------------------------------------------
+    // Data client — hits /api/v1 (Vite proxy in the real app; direct in
+    // this static prototype). Falls back to fixtures so the demo works
+    // even without a backend running.
+    // ------------------------------------------------------------------
+    async function fetchJSON(path) {
+      const res = await fetch(path, { headers: { accept: "application/json" } });
+      if (!res.ok) throw new Error(path + " → HTTP " + res.status);
+      return res.json();
+    }
+
+    async function loadWorkItems() {
+      try {
+        const [fleets, runs, schedules] = await Promise.all([
+          fetchJSON("/api/v1/fleets"),
+          fetchJSON("/api/v1/runs"),
+          fetchJSON("/api/v1/schedules"),
+        ]);
+        return { mode: "live", fleets, runs, schedules };
+      } catch (err) {
+        console.warn("live feed unavailable, using fixtures:", err.message);
+        return { mode: "fixtures", ...FIXTURES };
+      }
+    }
+
+    function mergeItems({ fleets, runs, schedules }) {
+      const out = [];
+      (fleets?.items ?? []).forEach(f => out.push({
+        id: f.id, kind: "fleet", label: f.label, status: f.status,
+        progress: f.progress, upNext: f.upNext ?? [], _raw: f,
+      }));
+      (runs?.items ?? []).forEach(r => out.push({
+        id: r.id, kind: "run", label: r.label, status: r.status,
+        type: r.type, _raw: r,
+      }));
+      (schedules?.items ?? []).forEach(s => out.push({
+        id: s.id, kind: "schedule", label: s.label, status: s.status,
+        paused: s.paused, _raw: s,
+      }));
+      return out;
+    }
+
+    // ------------------------------------------------------------------
+    // Layout — deterministic orbit placement. Same input → same layout.
+    // Splits items across concentric rings so nothing overlaps.
+    // ------------------------------------------------------------------
+    const CENTER = { x: 500, y: 350 };
+    const RINGS  = [140, 220, 300, 380];
+
+    function orbitLayout(items) {
+      // Sort for stable, meaningful placement: fleets first, then runs, then schedules.
+      const kindOrder = { fleet: 0, run: 1, schedule: 2 };
+      const sorted = [...items].sort((a, b) => {
+        const k = (kindOrder[a.kind] ?? 9) - (kindOrder[b.kind] ?? 9);
+        return k !== 0 ? k : a.id.localeCompare(b.id);
+      });
+
+      // Fill rings so each ring holds ~min(capacity, remaining). Capacity grows with radius.
+      const capacityFor = r => Math.max(4, Math.floor((2 * Math.PI * r) / 90));
+      const positions = [];
+      let idx = 0;
+      let ring = 0;
+      while (idx < sorted.length) {
+        const radius = RINGS[Math.min(ring, RINGS.length - 1)];
+        const cap = capacityFor(radius);
+        const take = Math.min(cap, sorted.length - idx);
+        // Offset every other ring by half-slot so labels don't collide radially.
+        const angleOffset = (ring % 2) * (Math.PI / take);
+        for (let i = 0; i < take; i++) {
+          const a = angleOffset + (i * 2 * Math.PI) / take;
+          positions.push({
+            item: sorted[idx + i],
+            ring,
+            radius,
+            angle: a,
+            x: CENTER.x + radius * Math.cos(a),
+            y: CENTER.y + radius * Math.sin(a),
+          });
+        }
+        idx += take;
+        ring++;
+      }
+      return positions;
+    }
+
+    // ------------------------------------------------------------------
+    // Rendering
+    // ------------------------------------------------------------------
+    const state = {
+      items: [],
+      positions: [],
+      selectedId: null,
+      zoom: 1,
+    };
+
+    function statusColor(status) {
+      return getComputedStyle(document.documentElement).getPropertyValue("--status-" + status).trim() || "#888";
+    }
+
+    function renderLegend() {
+      const el = document.getElementById("legend");
+      el.innerHTML = STATUSES.map(s => `
+        <div class="row">
+          <span class="swatch status-${s.id}"></span>
+          <span>${s.label}</span>
+        </div>
+      `).join("");
+    }
+
+    function renderOrbit() {
+      const g = document.getElementById("orbit-view");
+      const rings = [...new Set(state.positions.map(p => p.radius))]
+        .map(r => `<circle class="orbit-ring" cx="${CENTER.x}" cy="${CENTER.y}" r="${r}" />`)
+        .join("");
+      const planet = `<circle class="planet" cx="${CENTER.x}" cy="${CENTER.y}" r="34" />`;
+      const sats = state.positions.map(p => {
+        const isSel = p.item.id === state.selectedId;
+        // put label on outside of orbit, offset by angle
+        const labelR = p.radius + 22;
+        const lx = CENTER.x + labelR * Math.cos(p.angle);
+        const ly = CENTER.y + labelR * Math.sin(p.angle);
+        const anchor = Math.cos(p.angle) > 0.2 ? "start" : Math.cos(p.angle) < -0.2 ? "end" : "middle";
+        const short = p.item.label.length > 22 ? p.item.label.slice(0, 21) + "…" : p.item.label;
+        return `
+          <g class="satellite ${isSel ? "selected" : ""}" data-id="${p.item.id}" tabindex="0"
+             role="button" aria-label="${escapeAttr(p.item.label)} — ${p.item.status}">
+            <circle class="dot" cx="${p.x}" cy="${p.y}" r="9" fill="${statusColor(p.item.status)}"></circle>
+            <text x="${lx}" y="${ly}" text-anchor="${anchor}" dominant-baseline="middle">${escapeHtml(short)}</text>
+            <text class="kind" x="${lx}" y="${ly + 12}" text-anchor="${anchor}" dominant-baseline="middle">${p.item.kind}</text>
+          </g>
+        `;
+      }).join("");
+
+      // Apply zoom via viewBox transform on <g>
+      const cx = CENTER.x, cy = CENTER.y;
+      g.setAttribute("transform", `translate(${cx} ${cy}) scale(${state.zoom}) translate(${-cx} ${-cy})`);
+      g.innerHTML = rings + planet + sats;
+
+      // wire click / keyboard
+      g.querySelectorAll(".satellite").forEach(el => {
+        el.addEventListener("click", () => selectItem(el.dataset.id));
+        el.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectItem(el.dataset.id); }
+        });
+      });
+    }
+
+    function renderSelected() {
+      const el = document.getElementById("selected");
+      const item = state.items.find(i => i.id === state.selectedId);
+      if (!item) {
+        el.innerHTML = `<div class="selected-empty">Select an item in the orbit to see its details.</div>`;
+        return;
+      }
+      const statusLabel = STATUSES.find(s => s.id === item.status)?.label ?? item.status;
+      const progressHtml = item.progress
+        ? `
+          <dt>Progress</dt>
+          <dd>
+            ${item.progress.done} / ${item.progress.total}
+            <div class="progress"><span style="width:${Math.round((item.progress.fraction ?? 0) * 100)}%"></span></div>
+          </dd>`
+        : "";
+      const typeHtml = item.type ? `<dt>Type</dt><dd>${escapeHtml(item.type)}</dd>` : "";
+      const pausedHtml = item.paused !== undefined ? `<dt>Paused</dt><dd>${item.paused ? "yes" : "no"}</dd>` : "";
+
+      el.innerHTML = `
+        <span class="selected-kind">${item.kind}</span>
+        <div class="selected-label">${escapeHtml(item.label)}</div>
+        <dl class="kv">
+          <dt>Status</dt>
+          <dd>
+            <span class="swatch status-${item.status}" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle;"></span>
+            ${statusLabel}
+          </dd>
+          <dt>ID</dt><dd style="font-family: var(--mono); font-size: 11px; color: var(--text-dim)">${escapeHtml(item.id)}</dd>
+          ${typeHtml}
+          ${pausedHtml}
+          ${progressHtml}
+        </dl>
+      `;
+    }
+
+    function renderUpNext() {
+      const el = document.getElementById("upnext");
+      // Aggregate up-next across all fleets, then append `todo` runs / schedules that haven't started.
+      const rows = [];
+      state.items.forEach(it => {
+        if (it.kind === "fleet" && it.upNext?.length) {
+          it.upNext.forEach(n => rows.push({
+            label: `${it.label} → ${n.label}`,
+            status: n.status
+          }));
+        }
+      });
+      state.items.forEach(it => {
+        if (it.kind !== "fleet" && (it.status === "todo" || it.status === "waiting")) {
+          rows.push({ label: it.label, status: it.status });
+        }
+      });
+      if (rows.length === 0) {
+        el.innerHTML = `<div class="upnext-empty">Nothing waiting.</div>`;
+        return;
+      }
+      el.innerHTML = rows.slice(0, 8).map(r => `
+        <div class="upnext-item">
+          <span class="swatch status-${r.status}"></span>
+          <span class="label" title="${escapeAttr(r.label)}">${escapeHtml(r.label)}</span>
+        </div>
+      `).join("");
+    }
+
+    function selectItem(id) {
+      state.selectedId = state.selectedId === id ? null : id;
+      renderOrbit();
+      renderSelected();
+    }
+
+    function setFeedStatus(mode, label) {
+      const el = document.getElementById("feed-status");
+      el.dataset.mode = mode;
+      document.getElementById("feed-status-label").textContent = label;
+    }
+
+    function setZoom(z) {
+      state.zoom = Math.max(0.4, Math.min(2.5, z));
+      document.getElementById("zoom-pct").textContent = Math.round(state.zoom * 100) + "%";
+      renderOrbit();
+    }
+
+    // ------------------------------------------------------------------
+    // Tiny helpers
+    // ------------------------------------------------------------------
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    }
+    function escapeAttr(s) { return escapeHtml(s); }
+
+    // ------------------------------------------------------------------
+    // Bootstrap
+    // ------------------------------------------------------------------
+    (async function main() {
+      renderLegend();
+      setFeedStatus("loading", "connecting…");
+
+      const data = await loadWorkItems();
+      state.items = mergeItems(data);
+      state.positions = orbitLayout(state.items);
+
+      if (data.mode === "live") {
+        setFeedStatus("live", `live · ${state.items.length} items`);
+      } else {
+        setFeedStatus("fixtures", `fixtures · ${state.items.length} items (no /api/v1)`);
+      }
+
+      renderOrbit();
+      renderSelected();
+      renderUpNext();
+
+      document.getElementById("zoom-in").addEventListener("click", () => setZoom(state.zoom + 0.15));
+      document.getElementById("zoom-out").addEventListener("click", () => setZoom(state.zoom - 0.15));
+      document.getElementById("recenter").addEventListener("click", () => setZoom(1));
+
+      // Poll every 5s so the feed stays live-ish. Only when we're on the live feed.
+      if (data.mode === "live") {
+        setInterval(async () => {
+          try {
+            const fresh = await loadWorkItems();
+            if (fresh.mode !== "live") { setFeedStatus("error", "feed lost"); return; }
+            state.items = mergeItems(fresh);
+            state.positions = orbitLayout(state.items);
+            setFeedStatus("live", `live · ${state.items.length} items`);
+            renderOrbit(); renderSelected(); renderUpNext();
+          } catch (e) { setFeedStatus("error", "feed error"); }
+        }, 5000);
+      }
+    })();
+  </script>
+</body>
+</html>
