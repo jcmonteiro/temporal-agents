@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -110,6 +111,70 @@ func TestBuildPlanPrompt_IncludesGoalAndForbidsCodeChanges(t *testing.T) {
 	require.Contains(t, p, "add multi-tenant support")
 	require.Contains(t, p, "Do NOT make any code changes")
 	require.Contains(t, p, `"dependsOn"`)
+}
+
+// The two ways a plan document has been observed to go wrong are an omitted
+// "dependsOn" (which silently turns a layered plan into a flat fan-out no
+// validation can catch, because a fully parallel plan is legal) and an invented
+// extra key (which the strict decoder refuses outright). Both are spelled out as
+// rules, so the prompt states them rather than leaving them to be inferred from
+// the shape block.
+func TestBuildPlanPrompt_DemandsDependsOnEverywhereAndNoExtraKeys(t *testing.T) {
+	p := BuildPlanPrompt("add multi-tenant support")
+	require.Contains(t, p, `Include "dependsOn" on EVERY node`)
+	require.Contains(t, p, "never leave the key out")
+	require.Contains(t, p, "Output exactly the keys shown")
+	require.Contains(t, p, "Any other key makes the plan unusable")
+	require.Contains(t, p, "Nothing downstream can recover an edge you leave out")
+}
+
+// A schema shown only as a shape leaves the value types, the JSON escaping of a
+// long prompt string, and the place for commentary unsaid. The last one matters
+// most: an agent with something to qualify and nowhere to put it invents a key,
+// which is how the observed run emitted "dependsOnNote".
+func TestBuildPlanPrompt_DeclaresTypesEscapingAndWhereCommentaryGoes(t *testing.T) {
+	p := BuildPlanPrompt("add multi-tenant support")
+	require.Contains(t, p, `"dependsOn" is an array of strings`)
+	require.Contains(t, p, `write ["core"], not "core"`)
+	require.Contains(t, p, "There is no field for commentary")
+	require.Contains(t, p, `escape a newline as \n`)
+	require.Contains(t, p, "List DIRECT prerequisites only")
+	// The shape block shows one node; the contract has to say that is not the
+	// expected node count.
+	require.Contains(t, p, "non-empty array of objects, one per slice")
+}
+
+func TestBuildPlanPrompt_RequiresTheAgentToValidateAndRepairItsExactAnswer(t *testing.T) {
+	p := BuildPlanPrompt("add multi-tenant support")
+	require.Contains(t, p, "MUST validate your exact candidate")
+	require.Contains(t, p, `temporal-agents fleet plan validate "$candidate"`)
+	require.Contains(t, p, "If validation fails, correct the candidate and run the command again")
+	require.Contains(t, p, "Do not finish until validation exits successfully")
+	require.Contains(t, p, "output the exact JSON that passed validation")
+	require.Contains(t, p, "Do not include the validator output")
+}
+
+func TestBuildPlanPrompt_ExampleIsAPlanTheParserAccepts(t *testing.T) {
+	p := BuildPlanPrompt("add multi-tenant support")
+
+	// The example is the compact object embedded in the prompt.
+	var example string
+	for _, line := range strings.Split(p, "\n") {
+		if strings.HasPrefix(line, `{"goal":`) {
+			example = line
+		}
+	}
+	require.NotEmpty(t, example, "the prompt must carry a worked example object")
+
+	// An example the parser would reject teaches the wrong schema, so it goes
+	// through the same gate as real agent output.
+	plan, err := ParsePlan(example)
+	require.NoError(t, err)
+	require.NoError(t, ValidatePlan(plan))
+	// It shows both dependency shapes: an explicit empty list and a real edge.
+	require.Len(t, plan.Nodes, 2)
+	require.Contains(t, example, `"dependsOn":[]`)
+	require.Equal(t, []string{"pricing-domain"}, plan.Nodes[1].DependsOn)
 }
 
 func TestParsePlan_BareJSON(t *testing.T) {

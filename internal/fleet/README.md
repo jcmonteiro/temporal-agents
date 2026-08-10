@@ -84,7 +84,17 @@ flowchart TD
   fails non-retryably (`PlanningMutatedRepo`) so a plan is never returned from a
   run that escaped the sandbox.
 - The agent step is not retried (`MaximumAttempts: 1`): a re-run would produce a
-  different graph.
+  different graph. That is precisely why the prompt makes the agent validate its
+  own candidate **before** it answers: `BuildPlanPrompt` instructs it to write the
+  exact candidate to a temporary file inside the sandbox and run
+  `temporal-agents fleet plan validate <file>`, repairing and repeating until the
+  command succeeds. The command applies the same `ParsePlan` + `ValidatePlan` gate
+  this activity applies, so a schema mistake becomes an in-session repair instead
+  of a lost planning run.
+- Self-validation is a cost reduction, not a guarantee. Nothing forces the agent to
+  call the command, so the activity's gate stays authoritative. It also cannot
+  catch a *dropped edge*: a fully parallel plan is valid, so the validator reports
+  it ("24 nodes, 0 dependencies") rather than refusing it.
 
 ---
 

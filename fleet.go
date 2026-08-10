@@ -50,8 +50,8 @@ func fleetPlanCmd(args []string) {
 		fleetPlanHelp(os.Stdout)
 		return
 	}
-	// The first word decides, exactly: "list", "ls" and "show" are subcommands and
-	// nothing else is. Inferring the intent from the shape of the remaining arguments
+	// The first word decides, exactly: "list", "ls", "show" and "validate" are
+	// subcommands and nothing else is. Inferring the intent from the shape of the remaining arguments
 	// instead would turn a mistyped read-only command ("fleet plan show --name foo")
 	// into a prompt, and so into a paid, hour-budget planning run that writes a stored
 	// plan — a precise refusal is worth more than a guess. The cost is that a goal
@@ -60,6 +60,11 @@ func fleetPlanCmd(args []string) {
 		switch args[0] {
 		case "list", "ls":
 			fleetPlanList(parseFleetPlanListFlags(args[1:]))
+			return
+		case "validate":
+			if err := runFleetPlanValidate(args[1:], os.Stdin, os.Stdout); err != nil {
+				fatalf("%v", err)
+			}
 			return
 		case "show":
 			if len(args) < 2 {
@@ -346,6 +351,58 @@ func planReadError(handle string, err error) string {
 	return fmt.Sprintf("Could not read fleet plan %s: %v", handle, err)
 }
 
+// validateFleetPlan applies the same parse-and-validate gate as GeneratePlan to a
+// candidate document and reports a small success summary. It is the functional
+// core behind `fleet plan validate`: the command needs no Temporal client, store or
+// repository because a planning agent must be able to call it inside its isolated
+// sandbox before it returns its final answer.
+//
+// ParsePlan is used rather than a second decoder so in-session validation cannot
+// drift from the activity that judges the final answer. The read is capped at the
+// same size as a stored plan; accepting something the authoritative store must
+// refuse would make a successful self-check misleading.
+// runFleetPlanValidate resolves the candidate source for `fleet plan validate`.
+// A path is convenient for the planning agent, which writes its exact candidate
+// to a temporary file in the disposable sandbox; "-" keeps the command useful in
+// a shell pipeline. The source is the only I/O this adapter owns.
+func runFleetPlanValidate(args []string, stdin io.Reader, stdout io.Writer) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: temporal-agents fleet plan validate <file|->")
+	}
+	if args[0] == "-" {
+		return validateFleetPlan(stdin, stdout)
+	}
+	file, err := os.Open(args[0])
+	if err != nil {
+		return fmt.Errorf("open plan %s: %w", args[0], err)
+	}
+	defer file.Close()
+	return validateFleetPlan(file, stdout)
+}
+
+func validateFleetPlan(r io.Reader, w io.Writer) error {
+	document, err := io.ReadAll(io.LimitReader(r, execstore.MaxPlanDocument+1))
+	if err != nil {
+		return fmt.Errorf("read plan: %w", err)
+	}
+	if len(document) > execstore.MaxPlanDocument {
+		return fmt.Errorf("read plan: document exceeds %d bytes", execstore.MaxPlanDocument)
+	}
+	plan, err := fleet.ParsePlan(string(document))
+	if err != nil {
+		return fmt.Errorf("parse plan: %w", err)
+	}
+	if err := fleet.ValidatePlan(plan); err != nil {
+		return fmt.Errorf("validate plan: %w", err)
+	}
+	dependencies := 0
+	for _, node := range plan.Nodes {
+		dependencies += len(node.DependsOn)
+	}
+	fmt.Fprintf(w, "valid fleet plan: %d nodes, %d dependencies\n", len(plan.Nodes), dependencies)
+	return nil
+}
+
 // decodePlan decodes a stored plan document into the fleet's own plan type,
 // strictly: an unknown field means the stored document does not match the plan
 // schema this binary understands, which must fail loudly rather than silently drop
@@ -438,6 +495,7 @@ USAGE
   temporal-agents fleet plan "<prompt>" [--name <name>]
   temporal-agents fleet plan list [--limit <n>]
   temporal-agents fleet plan show <handle>
+  temporal-agents fleet plan validate <file|->
   temporal-agents fleet execute --plan-id <handle> [--summary]
 
 SUBCOMMANDS
@@ -445,6 +503,7 @@ SUBCOMMANDS
                   stored under a printed handle for you to review and approve.
   plan list       List the stored plans.
   plan show       Print one stored plan.
+  plan validate   Validate a candidate plan file without Postgres or Temporal.
   execute         Orchestrate a stored plan: run a develop workflow per node in
                   dependency order and aggregate the results.
 
@@ -464,13 +523,20 @@ review it and then execute it by that handle. There is no plan file.
 The handle is the only way to select a plan. --name is display-only metadata for
 the listing: nothing keeps a name unique, so it could not resolve a plan.
 
-"list", "ls" and "show" are read as subcommands, so a goal cannot be worded as
-exactly one of them; say "plan a listing of …" instead.
+"list", "ls", "show" and "validate" are read as subcommands, so a goal cannot
+be worded as exactly one of them; say "plan a listing of …" instead.
 
 USAGE
   temporal-agents fleet plan "<prompt>" [--name <name>]
   temporal-agents fleet plan list [--limit <n>]
   temporal-agents fleet plan show <handle>
+  temporal-agents fleet plan validate <file|->
+
+VALIDATION
+  Validate a candidate JSON file with the same parser and graph rules that fleet
+  planning applies to agent output. Use "-" to read standard input.
+  The command does not read or write Postgres, and never dials Temporal, so the
+  planning agent can call it from inside its sandbox before it answers.
 
 FLAGS
   --name <name>   Label shown next to the plan in "fleet plan list"
@@ -482,6 +548,8 @@ EXAMPLES
   temporal-agents fleet plan list
   temporal-agents fleet plan list --limit 50
   temporal-agents fleet plan show plan-1a2b3c4d5e6f
+  temporal-agents fleet plan validate ./candidate.json
+  cat candidate.json | temporal-agents fleet plan validate -
 `)
 }
 
