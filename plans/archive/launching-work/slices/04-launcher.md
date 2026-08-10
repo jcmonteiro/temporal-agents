@@ -10,17 +10,17 @@ with a link to the conflicting run.
 
 ## Tasks
 
-- [ ] Add the launcher to the place page only (never the overview): choose the kind,
+- [x] Add the launcher to the place page only (never the overview): choose the kind,
       supply the instruction where the kind needs one, and expose only the options
       that change the shape of the work.
-- [ ] Generate the request identity in the client per submission attempt, so retries
+- [x] Generate the request identity in the client per submission attempt, so retries
       reuse it.
-- [ ] Disable and indicate progress during submission; on success navigate to the run
+- [x] Disable and indicate progress during submission; on success navigate to the run
       page; on refusal render the problem inline, with the conflicting run linked.
-- [ ] Show the place's directory as context, non-editable.
-- [ ] Handle the read-path delay: the run page shows a starting state rather than an
+- [x] Show the place's directory as context, non-editable.
+- [x] Handle the read-path delay: the run page shows a starting state rather than an
       error while the run is not yet listed.
-- [ ] Component tests: one submission per double click, navigation on success,
+- [x] Component tests: one submission per double click, navigation on success,
       refusal rendering with link, options limited to the intended set, and no way to
       type a directory.
 

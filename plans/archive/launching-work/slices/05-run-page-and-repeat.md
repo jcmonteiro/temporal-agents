@@ -10,14 +10,14 @@ with a clear message rather than running somewhere else.
 
 ## Tasks
 
-- [ ] Fill the run page from the existing read path plus provenance: state, place
+- [x] Fill the run page from the existing read path plus provenance: state, place
       with link, instruction, iterations, token usage, timestamps, initiator,
       instruction key/scope/version.
-- [ ] Add repeat: submit the recorded kind, instruction, options, and place, with a
+- [x] Add repeat: submit the recorded kind, instruction, options, and place, with a
       fresh request identity; invent nothing the record does not hold.
-- [ ] Refuse a repeat whose place is no longer registered, and say why.
-- [ ] Apply the same conflict refusal and idempotency behaviour as the launcher.
-- [ ] Component tests: page renders each fact including provenance, repeat submits the
+- [x] Refuse a repeat whose place is no longer registered, and say why.
+- [x] Apply the same conflict refusal and idempotency behaviour as the launcher.
+- [x] Component tests: page renders each fact including provenance, repeat submits the
       recorded values, a missing place refuses, a double click repeats once.
 
 ## Done when

@@ -196,9 +196,19 @@ command. It exposes portable resources under `/api/v1`:
 
 - `GET /api/v1/active-work` (bounded cursor pages used by `list`)
 - `GET /api/v1/fleets` and `GET /api/v1/fleets/{id}`
-- `GET /api/v1/runs` and `GET /api/v1/runs/{id}`
+- `GET|POST /api/v1/runs` and `GET /api/v1/runs/{id}`
 - `GET /api/v1/schedules`
 - `GET|POST /api/v1/dismissals` and `DELETE /api/v1/dismissals/{id}`
+- `GET|POST /api/v1/places`
+
+Work is also *started* here, which is the one thing the API does that changes
+anything outside itself. A start names a place and never a path: the server resolves
+the working tree from the places it knows — the ones an operator registered through
+`/api/v1/places`, and the ones it has watched work run in — so the registry is the
+allowlist of where an agent may run. One caller-supplied request identity always
+names one execution, so a double click, a retried request or a reload ends with one
+run, and a start into a place something is already running in is refused naming the
+work in the way, because two loops in one working tree commit over each other.
 
 The server joins live Temporal state with the durable execution and plan record.
 Finished items remain visible until dismissed. A dismissal is Postgres-backed view

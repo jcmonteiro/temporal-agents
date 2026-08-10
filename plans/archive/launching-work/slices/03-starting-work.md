@@ -10,21 +10,21 @@ request naming a path instead of a place is rejected by the contract.
 
 ## Tasks
 
-- [ ] Add the start port in the core, separate from every read port, with the
+- [x] Add the start port in the core, separate from every read port, with the
       supported kinds and their meaningful options only.
-- [ ] Resolve the working directory from the registry; the contract has no path
+- [x] Resolve the working directory from the registry; the contract has no path
       field.
-- [ ] Mint identities so the same caller request identity maps to the same execution,
+- [x] Mint identities so the same caller request identity maps to the same execution,
       and a repeat returns the existing run rather than starting or failing.
-- [ ] Implement the concurrency rule in the core: refuse a second conflicting writing
+- [x] Implement the concurrency rule in the core: refuse a second conflicting writing
       loop for the same place, with a problem document naming the conflicting run.
-- [ ] Record the starting principal and the resolved place on the run.
-- [ ] Add the transport route with authentication and the mutation request rules;
+- [x] Record the starting principal and the resolved place on the run.
+- [x] Add the transport route with authentication and the mutation request rules;
       answer with the created run and where to find it.
-- [ ] Unit tests (fakes, no orchestrator): kind and option validation, idempotent
+- [x] Unit tests (fakes, no orchestrator): kind and option validation, idempotent
       repeat, conflict refusal, unknown place refusal, path field absent from the
       contract.
-- [ ] Adapter tests against the orchestrator's test facilities: the submitted input
+- [x] Adapter tests against the orchestrator's test facilities: the submitted input
       matches what the CLI would submit for the same request.
 
 ## Done when

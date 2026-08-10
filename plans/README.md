@@ -21,7 +21,6 @@ feature in hand adds noise, not accuracy.
 | Plan | Covers | Status |
 |---|---|---|
 | [`active/prompts`](./active/prompts/) | stored, scoped, versioned agent instructions with provenance | foundation slices delivered; configuration surface planned |
-| [`active/launching-work`](./active/launching-work/) | start and repeat agent work from the hub | planned |
 | [`active/steering`](./active/steering/) | a review round waits for the operator, who guides it | planned |
 
 Order and dependencies live in `ROADMAP.md`.
