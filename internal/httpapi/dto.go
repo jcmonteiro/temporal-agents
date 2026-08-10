@@ -18,9 +18,10 @@ import (
 // owner, no estimate and no free-text description, because nothing in the system
 // knows them.
 
-// collection is the original v1 envelope used by fleets, runs, schedules, and
-// dismissals. It stays separate from the additive paged active-work contract so
-// existing model names and required fields do not change in place.
+// collection is the original v1 envelope used by dismissals: the items, how many
+// there are, and the cap that was applied. It stays separate from the additive paged
+// active-work contract so existing model names and required fields do not change in
+// place.
 type collection[T any] struct {
 	// Items are the page's items, newest first.
 	Items []T `json:"items"`
@@ -29,11 +30,6 @@ type collection[T any] struct {
 	// Limit is the cap that was applied, whether the caller asked for it or it is
 	// the default.
 	Limit int `json:"limit"`
-	// Locations is the flat registry of the places the page's items refer to, closed
-	// under ancestry and ordered parents-first. It is absent from the one collection
-	// whose items are not work and therefore have no place (dismissals), which is why
-	// it is built by a constructor of its own rather than by every caller.
-	Locations []locationResource `json:"locations,omitempty"`
 }
 
 // newCollection wraps items in the envelope, normalising a nil slice to an empty
@@ -45,14 +41,37 @@ func newCollection[T any](items []T, limit int) collection[T] {
 	return collection[T]{Items: items, Count: len(items), Limit: limit}
 }
 
-// newLocatedCollection is newCollection for a collection of work: it publishes the
-// registry every item's locationId resolves against. The registry always carries at
-// least the unknown place, so the field is never dropped from a response that
-// promises it.
-func newLocatedCollection[T any](items []T, limit int, registry agenthub.LocationRegistry) collection[T] {
-	document := newCollection(items, limit)
-	document.Locations = locationsFrom(registry)
-	return document
+// locatedCollection is the envelope for a collection of work: the same page, plus the
+// registry every item's locationId resolves against.
+//
+// It is a type of its own rather than an optional field on collection because the
+// published schema marks locations required here and does not have it at all on
+// dismissals (whose items are not work and therefore have no place). One shared
+// struct would need `omitempty`, and the response would then satisfy its own schema
+// only by way of an invariant three layers away.
+type locatedCollection[T any] struct {
+	// Items are the page's items, newest first.
+	Items []T `json:"items"`
+	// Count is how many items this page carries.
+	Count int `json:"count"`
+	// Limit is the cap that was applied.
+	Limit int `json:"limit"`
+	// Locations is the flat registry of the places the page's items refer to, closed
+	// under ancestry and ordered parents-first. It carries no `omitempty`: the field is
+	// required, and an empty page still publishes the unknown place.
+	Locations []locationResource `json:"locations"`
+}
+
+// newLocatedCollection is newCollection for a collection of work. The registry always
+// carries at least the unknown place (see agenthub.NewLocationRegistry), so a page
+// with no items still publishes a registry rather than an empty or absent one.
+func newLocatedCollection[T any](items []T, limit int, registry agenthub.LocationRegistry) locatedCollection[T] {
+	if items == nil {
+		items = []T{}
+	}
+	return locatedCollection[T]{
+		Items: items, Count: len(items), Limit: limit, Locations: locationsFrom(registry),
+	}
 }
 
 // activeWorkCollection is the additive paged contract used by the CLI. It is a
@@ -314,10 +333,17 @@ type dismissalRequest struct {
 	ItemID string `json:"itemId"`
 }
 
-// fleetFrom projects a fleet onto its representation. withNodes is false for a
-// collection, where carrying every plan's whole graph would make an overview read
-// grow with the size of the plans rather than with the number of fleets.
-func fleetFrom(fleet agenthub.Fleet, withNodes bool) fleetResource {
+// fleetFrom projects a fleet onto its representation and reports the places that
+// representation refers to. withNodes is false for a collection, where carrying every
+// plan's whole graph would make an overview read grow with the size of the plans
+// rather than with the number of fleets.
+//
+// The places are returned rather than gathered again by the caller: UpNext() derives
+// and copies its answer on every call, and the nodes projected here are exactly the
+// nodes whose locations the response refers to. In a collection the caller hands them
+// all to one registry; the single-fleet representation carries its own.
+func fleetFrom(fleet agenthub.Fleet, withNodes bool) (fleetResource, []agenthub.Location) {
+	upNext := fleet.UpNext()
 	resource := fleetResource{
 		ID:          fleet.ID,
 		Kind:        agenthub.KindFleet,
@@ -329,29 +355,24 @@ func fleetFrom(fleet agenthub.Fleet, withNodes bool) fleetResource {
 		EndedAt:     timestamp(fleet.EndedAt),
 		Dismissible: fleet.Dismissible(),
 		LocationID:  fleet.Location.ID(),
-		UpNext:      nodesFrom(fleet.UpNext()),
+		UpNext:      nodesFrom(upNext),
 	}
+	// The whole graph contains the up-next nodes, so the single-fleet representation
+	// refers to the graph's places and nothing besides.
+	referred := upNext
 	if withNodes {
 		resource.Nodes = nodesFrom(fleet.Nodes)
-		resource.Locations = locationsFrom(agenthub.NewLocationRegistry(fleetLocations(fleet, true)...))
+		referred = fleet.Nodes
 	}
-	return resource
-}
-
-// fleetLocations lists the places one fleet representation refers to, so the registry
-// published beside it is closed over exactly what it publishes. The up-next nodes are
-// part of every representation; the whole graph only of the single-fleet one.
-func fleetLocations(fleet agenthub.Fleet, withNodes bool) []agenthub.Location {
-	locations := []agenthub.Location{fleet.Location}
-	for _, node := range fleet.UpNext() {
+	locations := make([]agenthub.Location, 0, len(referred)+1)
+	locations = append(locations, fleet.Location)
+	for _, node := range referred {
 		locations = append(locations, node.Location)
 	}
 	if withNodes {
-		for _, node := range fleet.Nodes {
-			locations = append(locations, node.Location)
-		}
+		resource.Locations = locationsFrom(agenthub.NewLocationRegistry(locations...))
 	}
-	return locations
+	return resource, locations
 }
 
 // nodesFrom projects plan nodes onto their representation, preserving order.

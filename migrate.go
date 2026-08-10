@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"text/tabwriter"
 
 	"temporal-agents/internal/agenthub/hubpg"
 	"temporal-agents/internal/execstore/execpg"
-	"temporal-agents/internal/pgmigrate"
+	"temporal-agents/internal/schema"
 )
 
 // Schema application is a deliberate step, not something a starting process does on
@@ -35,11 +36,15 @@ const devAutoMigrateEnv = "TEMPORAL_AGENTS_DEV_AUTO_MIGRATE"
 // contextSchema is what a bounded context's adapter must offer for its schema to be
 // managed from here: apply it, report what it is at, and release its connections.
 // Both Postgres adapters satisfy it.
+//
+// The port is stated here, at the consumer, and in terms no adapter owns: what a
+// schema is at is a fact about a deployment, so nothing in this interface names
+// Postgres or a driver.
 type contextSchema interface {
 	// Migrate applies every migration this build carries that is not applied yet.
 	Migrate(ctx context.Context) error
 	// SchemaState reports what the database is at and what this build requires.
-	SchemaState(ctx context.Context) (pgmigrate.State, error)
+	SchemaState(ctx context.Context) (schema.State, error)
 	// Close releases the adapter's connections.
 	Close()
 }
@@ -162,44 +167,55 @@ func migrateSchemas(ctx context.Context, dsn string, contexts []schemaContext, o
 
 // migrateOne applies one context's schema and renders what it did.
 func migrateOne(ctx context.Context, dsn string, target schemaContext) (string, error) {
-	schema, err := target.open(ctx, dsn)
+	adapter, err := target.open(ctx, dsn)
 	if err != nil {
 		return "", fmt.Errorf("could not reach the %s schema: %w", target.name, err)
 	}
-	defer schema.Close()
+	defer adapter.Close()
 
-	before, err := schema.SchemaState(ctx)
+	before, err := readSchemaState(ctx, adapter, target)
 	if err != nil {
-		return "", fmt.Errorf("could not read the %s schema version: %w", target.name, err)
+		return "", err
 	}
 	migrateCtx, cancel := context.WithTimeout(ctx, storeMigrateTimeout)
 	defer cancel()
-	if err := schema.Migrate(migrateCtx); err != nil {
+	if err := adapter.Migrate(migrateCtx); err != nil {
 		return "", fmt.Errorf("could not apply the %s schema: %w", target.name, err)
 	}
-	after, err := schema.SchemaState(ctx)
+	after, err := readSchemaState(ctx, adapter, target)
 	if err != nil {
-		return "", fmt.Errorf("could not read the %s schema version: %w", target.name, err)
+		return "", err
 	}
+	// The count is what was missing when this invocation started, and the wording says
+	// only that those migrations are now applied: two invocations at once serialize on
+	// the database, so the one that loses the race would otherwise report as its own
+	// work migrations the winner applied.
 	applied := "already up to date"
 	if count := len(before.Missing); count > 0 {
-		applied = fmt.Sprintf("applied %d migration(s)", count)
+		applied = fmt.Sprintf("brought %d migration(s) up to date", count)
 	}
 	return fmt.Sprintf("%s\t%s\tschema %s", target.name, applied, after.Version()), nil
+}
+
+// readSchemaState reads one context's state under the same bound as connecting to it:
+// reading a version is a single round trip, and a process that hangs on it is a
+// process that never reports why it did not start.
+func readSchemaState(ctx context.Context, adapter contextSchema, target schemaContext) (schema.State, error) {
+	readCtx, cancel := context.WithTimeout(ctx, storeConnectTimeout)
+	defer cancel()
+	state, err := adapter.SchemaState(readCtx)
+	if err != nil {
+		return schema.State{}, fmt.Errorf("could not read the %s schema version: %w", target.name, err)
+	}
+	return state, nil
 }
 
 // verifySchemas checks every listed context's schema and refuses a database older
 // than this build. The failure names the context, both versions, and the command that
 // fixes it: a startup failure an operator cannot act on is only half a check.
 //
-// It applies nothing. That is the point of splitting migrate from start — except in
-// the explicit development mode, where it says loudly what it is doing.
-func verifySchemas(ctx context.Context, dsn string, contexts []schemaContext, out io.Writer) error {
-	if devAutoMigrateEnabled() {
-		fmt.Fprintf(out, "warning: %s is set — applying migrations at startup. Never do this outside development.\n",
-			devAutoMigrateEnv)
-		return migrateSchemas(ctx, dsn, contexts, out)
-	}
+// It applies nothing. That is the point of splitting migrate from start.
+func verifySchemas(ctx context.Context, dsn string, contexts []schemaContext) error {
 	for _, target := range contexts {
 		if err := verifyOne(ctx, dsn, target); err != nil {
 			return err
@@ -210,22 +226,22 @@ func verifySchemas(ctx context.Context, dsn string, contexts []schemaContext, ou
 
 // verifyOne verifies one context's schema.
 func verifyOne(ctx context.Context, dsn string, target schemaContext) error {
-	schema, err := target.open(ctx, dsn)
+	adapter, err := target.open(ctx, dsn)
 	if err != nil {
 		return fmt.Errorf("could not reach the %s schema: %w", target.name, err)
 	}
-	defer schema.Close()
+	defer adapter.Close()
 
-	state, err := schema.SchemaState(ctx)
+	state, err := readSchemaState(ctx, adapter, target)
 	if err != nil {
-		return fmt.Errorf("could not read the %s schema version: %w", target.name, err)
+		return err
 	}
 	if state.UpToDate() {
 		return nil
 	}
 	return fmt.Errorf("%w: the %s schema is at %s, this build requires %s (%d migration(s) missing: %s). "+
 		"Run 'temporal-agents migrate' first",
-		pgmigrate.ErrStale, target.name, state.Version(), state.RequiredVersion(),
+		schema.ErrStale, target.name, state.Version(), state.RequiredVersion(),
 		len(state.Missing), strings.Join(state.Missing, ", "))
 }
 
@@ -245,10 +261,37 @@ func devAutoMigrateEnabled() bool {
 // requireCurrentSchema is what a starting process calls: verify, or fail with the
 // remedy in the message. It is separate from verifySchemas so the error a process
 // exits on is reported once, in one voice.
-func requireCurrentSchema(ctx context.Context, contexts []schemaContext, out io.Writer) error {
+//
+// A starting process reports through its logger, not to stdout: the development
+// mode's warning is the one line an operator most needs to find in an aggregator, and
+// a line printed beside the structured log is a line nothing indexes. The `migrate`
+// command keeps a plain writer, because its report is genuinely a CLI report.
+func requireCurrentSchema(ctx context.Context, contexts []schemaContext, logger *slog.Logger) error {
 	dsn, err := databaseURL()
 	if err != nil {
 		return err
 	}
-	return verifySchemas(ctx, dsn, contexts, out)
+	if devAutoMigrateEnabled() {
+		logger.Warn("applying migrations at startup because the development mode is on — "+
+			"never do this outside development", "env", devAutoMigrateEnv)
+		return migrateSchemas(ctx, dsn, contexts, schemaReportLog{logger: logger})
+	}
+	return verifySchemas(ctx, dsn, contexts)
+}
+
+// schemaReportLog turns the migrate report into log records, so the development
+// mode's output travels with everything else a starting process says.
+type schemaReportLog struct {
+	logger *slog.Logger
+}
+
+// Write logs each non-empty line of the report. The tabwriter writes the whole report
+// in one call, so the lines are split here rather than assumed.
+func (l schemaReportLog) Write(report []byte) (int, error) {
+	for _, line := range strings.Split(string(report), "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			l.logger.Info("applied a schema at startup", "report", trimmed)
+		}
+	}
+	return len(report), nil
 }

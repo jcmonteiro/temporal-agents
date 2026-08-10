@@ -206,6 +206,13 @@ func (s *Server) schemaDocument(model string) (map[string]any, bool) {
 func rewriteRefs(value any) any {
 	switch typed := value.(type) {
 	case map[string]any:
+		// A discriminator is only a discriminator inside a union. A schema with a
+		// *property* called "discriminator" is an ordinary schema, and rewriting it as a
+		// mapping would corrupt it.
+		_, isUnion := typed["oneOf"]
+		if _, isAnyOf := typed["anyOf"]; isAnyOf {
+			isUnion = true
+		}
 		out := make(map[string]any, len(typed))
 		for key, nested := range typed {
 			switch {
@@ -215,7 +222,7 @@ func rewriteRefs(value any) any {
 					continue
 				}
 				out[key] = rewriteRefs(nested)
-			case key == "discriminator":
+			case key == "discriminator" && isUnion:
 				out[key] = rewriteDiscriminator(nested)
 			default:
 				out[key] = rewriteRefs(nested)

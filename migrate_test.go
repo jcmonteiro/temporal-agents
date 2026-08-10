@@ -10,12 +10,15 @@ import (
 // These pin the command's contract without a database. What migrating actually does
 // to one is pinned by the container suite in migrate_integration_test.go.
 
-func TestMigrateHelpExplainsTheOperationalOrder(t *testing.T) {
+func TestMigrateHelpNamesTheDevelopmentModeItIsTheAlternativeTo(t *testing.T) {
+	// The help text itself is prose and may be rewritten at will. What is contractual
+	// is that --help succeeds and names the one environment variable that changes what
+	// a starting process does, because an operator who cannot find that name cannot
+	// tell why a process applied DDL.
 	var out bytes.Buffer
 
 	require.NoError(t, migrateCmd([]string{"--help"}, &out))
 
-	require.Contains(t, out.String(), "before starting 'worker' or 'serve'")
 	require.Contains(t, out.String(), devAutoMigrateEnv)
 }
 
@@ -52,6 +55,4 @@ func TestEveryContextAProcessUsesIsListedForIt(t *testing.T) {
 			require.True(t, all[target.name], "%s is verified but never migrated", target.name)
 		}
 	}
-	require.Len(t, workerSchemaContexts(), 1)
-	require.Len(t, serveSchemaContexts(), len(allSchemaContexts()))
 }

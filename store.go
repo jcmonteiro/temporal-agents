@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -89,7 +90,7 @@ func openExecutionReader(ctx context.Context) (execstore.ExecutionReader, func()
 // apply DDL, and a schema change happens at a moment an operator chose (see
 // migrate.go).
 func openVerifiedStore(ctx context.Context) *execpg.Postgres {
-	if err := requireCurrentSchema(ctx, workerSchemaContexts(), os.Stdout); err != nil {
+	if err := requireCurrentSchema(ctx, workerSchemaContexts(), slog.Default()); err != nil {
 		fatalf("%v", err)
 	}
 	store, err := openStore(ctx)

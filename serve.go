@@ -257,7 +257,7 @@ func runAPIServer(options serveOptions) error {
 	// so the API server can never create a table the worker owns, and a stale database
 	// stops the server here instead of surfacing as a failed read later (see
 	// migrate.go).
-	if err := requireCurrentSchema(ctx, serveSchemaContexts(), os.Stdout); err != nil {
+	if err := requireCurrentSchema(ctx, serveSchemaContexts(), slog.Default()); err != nil {
 		return err
 	}
 

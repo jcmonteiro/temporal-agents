@@ -82,13 +82,17 @@ is fixed: **`migrate` first, then `worker` and `serve`**.
   process is only stopped by the contexts it actually uses: a stale dismissal
   schema stops `serve`, not `worker`.
 - For local iteration only, `TEMPORAL_AGENTS_DEV_AUTO_MIGRATE=1` lets `worker` and
-  `serve` apply migrations at startup instead of refusing. It is opt-in, prints a
-  warning on every start, and must never be set outside development.
+  `serve` apply migrations at startup instead of refusing. It is opt-in, warns
+  through the process's log on every start, and must never be set outside
+  development.
+- `history` only reads the record, so it verifies nothing: run against a database
+  the migrate step has not reached, it reports the database's own error instead of
+  a schema failure.
 
 ```sh
 $ temporal-agents migrate
-execution-store  applied 4 migration(s)  schema 0004_execution_first_run_id.sql
-agent-hub        applied 1 migration(s)  schema 0001_dismissals.sql
+execution-store  brought 4 migration(s) up to date  schema 0004_execution_first_run_id.sql
+agent-hub        brought 1 migration(s) up to date  schema 0001_dismissals.sql
 ```
 
 Workflow submission and `watch` connect to `localhost:17233` by default. Override

@@ -4,21 +4,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
-	"log"
-	"net/url"
+	"log/slog"
 	"os"
-	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
-	"temporal-agents/internal/pgmigrate"
+	"temporal-agents/internal/pgtest"
+	"temporal-agents/internal/schema"
 )
 
 // Schema application is an operational contract — one deliberate step, and two
@@ -28,91 +23,46 @@ import (
 // applying twice changes nothing, and that two invocations at once do not corrupt
 // each other.
 //
-// The database is brought up by testcontainers-go, so `go test ./...` runs the suite
-// with no setup and no compose service. It needs a working Docker (or compatible)
-// daemon; when there is none the suite fails rather than skips, because a suite that
-// quietly skips itself reports green while exercising none of the above.
+// The database is brought up by pgtest, and therefore by testcontainers-go, so `go
+// test ./...` runs the suite with no setup and no compose service. It needs a working
+// Docker (or compatible) daemon; when there is none the suite fails rather than skips,
+// because a suite that quietly skips itself reports green while exercising none of the
+// above.
+//
+// TestMain covers the whole root package, but the container is only started by a test
+// that asks for a database, so the package's pure tests still need no daemon.
 
-// postgresImage pins the same Postgres, by the same digest, that the compose stack
-// runs, so the suite migrates the database the tool actually uses.
-const postgresImage = "postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317"
+func TestMain(m *testing.M) { os.Exit(pgtest.Run(m)) }
 
-// adminDatabase is the container's initial database. It is only where CREATE
-// DATABASE is issued from.
-const adminDatabase = "postgres"
-
-// container is the throwaway Postgres the suite shares, started on first use. Each
-// test then gets a database of its own inside it, which isolates it completely for a
-// few milliseconds and cannot leak state in either direction.
-var (
-	container     *postgres.PostgresContainer
-	containerOnce sync.Once
-)
-
-func TestMain(m *testing.M) {
-	code := m.Run()
-	// os.Exit skips deferred calls, so the container is stopped explicitly — when a
-	// test asked for one at all. The package's pure tests need no Docker daemon.
-	if container != nil {
-		if err := testcontainers.TerminateContainer(container); err != nil {
-			log.Printf("could not terminate the throwaway Postgres: %v", err)
-		}
-	}
-	os.Exit(code)
-}
-
-// sharedContainer returns the suite's Postgres, starting it on first use.
-func sharedContainer(t *testing.T) *postgres.PostgresContainer {
-	t.Helper()
-	containerOnce.Do(func() {
-		ctr, err := postgres.Run(context.Background(), postgresImage,
-			postgres.WithDatabase(adminDatabase),
-			postgres.WithUsername("postgres"),
-			postgres.WithPassword("postgres"),
-			postgres.BasicWaitStrategies())
-		if err != nil {
-			log.Fatalf("could not start the throwaway Postgres for the migration suite "+
-				"(is a Docker daemon running?): %v", err)
-		}
-		container = ctr
-	})
-	return container
-}
-
-// dbSeq numbers the per-test databases. A counter keeps the names short, unique and
-// always valid, which a test name would not be.
-var dbSeq atomic.Int64
-
-// newTestDatabase creates an empty database on the shared container and returns its
-// DSN. An empty database is a genuinely stale one: it is at no version at all.
+// newTestDatabase gives the calling test an empty database of its own. An empty
+// database is a genuinely stale one: it is at no version at all.
 func newTestDatabase(t *testing.T) string {
 	t.Helper()
-	ctx := context.Background()
-	adminDSN, err := sharedContainer(t).ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
+	return pgtest.NewDatabase(t)
+}
 
-	admin, err := pgx.Connect(ctx, adminDSN)
-	require.NoError(t, err)
-	defer func() { _ = admin.Close(ctx) }()
-	name := fmt.Sprintf("migrate_%d", dbSeq.Add(1))
-	// The name is generated here, not taken from input, so quoting it is enough.
-	_, err = admin.Exec(ctx, `CREATE DATABASE "`+name+`"`)
-	require.NoError(t, err)
+// startupLog is the logger a starting process reports its schema check through,
+// together with what it wrote: the development mode's warning is a log record, not a
+// line on stdout, so that is what a test reads.
+func startupLog() (*slog.Logger, *bytes.Buffer) {
+	var written bytes.Buffer
+	return slog.New(slog.NewTextHandler(&written, nil)), &written
+}
 
-	u, err := url.Parse(adminDSN)
-	require.NoError(t, err)
-	u.Path = "/" + name
-	return u.String()
+// discardLog is the logger for the checks whose output is not what is under test.
+func discardLog() *slog.Logger {
+	logger, _ := startupLog()
+	return logger
 }
 
 // schemaStateOf reads one context's state through its own adapter, which is the same
 // read the command and the startup verification use.
-func schemaStateOf(t *testing.T, dsn string, target schemaContext) pgmigrate.State {
+func schemaStateOf(t *testing.T, dsn string, target schemaContext) schema.State {
 	t.Helper()
-	schema, err := target.open(context.Background(), dsn)
+	adapter, err := target.open(context.Background(), dsn)
 	require.NoError(t, err)
-	defer schema.Close()
-	state, err := schema.SchemaState(context.Background())
+	defer adapter.Close()
+	state, err := adapter.SchemaState(context.Background())
 	require.NoError(t, err)
 	return state
 }
@@ -166,7 +116,7 @@ func TestMigrateBringsAFreshDatabaseUpAndReportsEveryContextsVersion(t *testing.
 		require.Contains(t, report, target.name, "the report names every context")
 		require.Contains(t, report, state.Version(), "the report names %s's resulting version", target.name)
 	}
-	require.Contains(t, report, "applied")
+	require.Contains(t, report, "up to date", "the report says what the run did")
 
 	// Each context's migrations stay its own: they are recorded under its own
 	// namespace, so no context can be confused with, or blocked by, another's.
@@ -183,11 +133,10 @@ func TestBothProcessesRefuseADatabaseWithNoSchemaAtAll(t *testing.T) {
 		"worker": workerSchemaContexts(),
 		"serve":  serveSchemaContexts(),
 	} {
-		var out bytes.Buffer
-		err := requireCurrentSchema(context.Background(), contexts, &out)
+		err := requireCurrentSchema(context.Background(), contexts, discardLog())
 
 		require.Error(t, err, "%s started against an unmigrated database", name)
-		require.ErrorIs(t, err, pgmigrate.ErrStale)
+		require.ErrorIs(t, err, schema.ErrStale)
 		require.Contains(t, err.Error(), "temporal-agents migrate", "%s's failure carries the remedy", name)
 		require.Contains(t, err.Error(), "none", "%s's failure names the version the database is at", name)
 		require.Empty(t, recordedMigrations(t, dsn), "%s applied DDL while verifying", name)
@@ -206,9 +155,9 @@ func TestBothProcessesRefuseADatabaseMissingThisBuildsNewestMigration(t *testing
 		"worker": workerSchemaContexts(),
 		"serve":  serveSchemaContexts(),
 	} {
-		err := requireCurrentSchema(context.Background(), contexts, &bytes.Buffer{})
+		err := requireCurrentSchema(context.Background(), contexts, discardLog())
 
-		require.ErrorIs(t, err, pgmigrate.ErrStale, "%s started against a stale database", name)
+		require.ErrorIs(t, err, schema.ErrStale, "%s started against a stale database", name)
 		require.Contains(t, err.Error(), executionStoreSchema.name)
 		require.Contains(t, err.Error(), newest, "%s's failure names the missing migration", name)
 		require.Contains(t, err.Error(), "temporal-agents migrate")
@@ -224,10 +173,10 @@ func TestAContextAProcessDoesNotUseIsNotThatProcessesDependency(t *testing.T) {
 	// still start; the API server owns them, so it must not.
 	forgetMigration(t, dsn, "agenthub/"+schemaStateOf(t, dsn, agentHubSchema).RequiredVersion())
 
-	require.NoError(t, requireCurrentSchema(context.Background(), workerSchemaContexts(), &bytes.Buffer{}))
+	require.NoError(t, requireCurrentSchema(context.Background(), workerSchemaContexts(), discardLog()))
 	require.ErrorIs(t,
-		requireCurrentSchema(context.Background(), serveSchemaContexts(), &bytes.Buffer{}),
-		pgmigrate.ErrStale)
+		requireCurrentSchema(context.Background(), serveSchemaContexts(), discardLog()),
+		schema.ErrStale)
 }
 
 func TestMigratingAnUpToDateDatabaseChangesNothing(t *testing.T) {
@@ -240,8 +189,8 @@ func TestMigratingAnUpToDateDatabaseChangesNothing(t *testing.T) {
 
 	require.Equal(t, first, recordedMigrations(t, dsn), "a second migrate changed the applied set")
 	require.Contains(t, out.String(), "already up to date")
-	require.NotContains(t, out.String(), "applied")
-	require.NoError(t, requireCurrentSchema(context.Background(), allSchemaContexts(), &bytes.Buffer{}),
+	require.NotContains(t, out.String(), "brought", "a no-op run reported work it did not do")
+	require.NoError(t, requireCurrentSchema(context.Background(), allSchemaContexts(), discardLog()),
 		"an up-to-date database is accepted by a starting process")
 }
 
@@ -288,11 +237,13 @@ func TestTheDevelopmentModeIsTheOnlyWayAStartingProcessAppliesDDL(t *testing.T) 
 	t.Setenv(databaseURLEnv, dsn)
 	t.Setenv(devAutoMigrateEnv, "1")
 
-	var out bytes.Buffer
-	require.NoError(t, requireCurrentSchema(context.Background(), serveSchemaContexts(), &out))
+	logger, written := startupLog()
+	require.NoError(t, requireCurrentSchema(context.Background(), serveSchemaContexts(), logger))
 
-	require.Contains(t, out.String(), devAutoMigrateEnv, "the development mode announces itself")
-	require.Contains(t, strings.ToLower(out.String()), "warning")
+	// A starting process announces this through its logger, so the one line an
+	// operator must be able to find is in the log an aggregator indexes.
+	require.Contains(t, written.String(), devAutoMigrateEnv, "the development mode announces itself")
+	require.Contains(t, written.String(), "WARN", "the announcement is not a warning")
 	require.True(t, schemaStateOf(t, dsn, executionStoreSchema).UpToDate())
 }
 
@@ -301,5 +252,5 @@ func TestMigrateReportsAnUnreachableDatabaseInsteadOfPanicking(t *testing.T) {
 		allSchemaContexts(), &bytes.Buffer{})
 
 	require.Error(t, err)
-	require.False(t, errors.Is(err, pgmigrate.ErrStale), "an unreachable database is not a stale one")
+	require.False(t, errors.Is(err, schema.ErrStale), "an unreachable database is not a stale one")
 }

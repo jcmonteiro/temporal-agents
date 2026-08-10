@@ -396,7 +396,7 @@ func TestRunChainsAndSchedulesUseUniformDiscriminators(t *testing.T) {
 	server := newTestServer(t, view)
 
 	runs := request(t, server, http.MethodGet, BasePath+"/runs", nil)
-	var runCollection collection[runResource]
+	var runCollection locatedCollection[runResource]
 	decodeResponse(t, runs, &runCollection)
 	if len(runCollection.Items) != 1 {
 		t.Fatalf("runs = %d, want 1", len(runCollection.Items))
@@ -407,7 +407,7 @@ func TestRunChainsAndSchedulesUseUniformDiscriminators(t *testing.T) {
 	}
 
 	schedules := request(t, server, http.MethodGet, BasePath+"/schedules", nil)
-	var scheduleCollection collection[scheduleResource]
+	var scheduleCollection locatedCollection[scheduleResource]
 	decodeResponse(t, schedules, &scheduleCollection)
 	if len(scheduleCollection.Items) != 1 {
 		t.Fatalf("schedules = %d, want 1", len(scheduleCollection.Items))
@@ -1109,6 +1109,31 @@ func TestEveryWorkCollectionPublishesTheRegistryAndAResolvableReference(t *testi
 		}
 		if document.Items[0]["locationId"] != "unknown" {
 			t.Errorf("%s: item locationId = %v, want the unknown place", path, document.Items[0]["locationId"])
+		}
+	}
+}
+
+func TestAWorkCollectionWithNoItemsStillPublishesTheRegistryItsSchemaRequires(t *testing.T) {
+	// locations is required on all three located collections, so it must be present on
+	// an empty page too: a consumer that resolves a reference against the registry must
+	// never have to tell "no places" apart from "no field".
+	server := newTestServer(t, &viewStub{})
+
+	for _, path := range []string{"/fleets", "/runs", "/schedules"} {
+		response := request(t, server, http.MethodGet, BasePath+path, nil)
+		var document map[string]json.RawMessage
+		decodeResponse(t, response, &document)
+
+		raw, present := document["locations"]
+		if !present {
+			t.Fatalf("%s: an empty page dropped the locations its schema requires", path)
+		}
+		var locations []locationResource
+		if err := json.Unmarshal(raw, &locations); err != nil {
+			t.Fatalf("%s: locations is not a registry: %v", path, err)
+		}
+		if len(locations) != 1 || locations[0].ID != "unknown" {
+			t.Errorf("%s: locations = %+v, want exactly the unknown place", path, locations)
 		}
 	}
 }

@@ -144,6 +144,8 @@ ENVIRONMENT
 
 The schema is applied by 'temporal-agents migrate'. Run it before 'worker' or
 'serve': both verify the schema at startup and refuse to run against an older one.
+'history' only reads, so it does not verify: against a database the migrate step has
+not reached it reports the database's own error rather than a schema failure.
 
 See "temporal-agents schedule --help", "temporal-agents template --help", and
 "temporal-agents serve --help".

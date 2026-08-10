@@ -5,6 +5,7 @@ import (
 	"embed"
 
 	"temporal-agents/internal/pgmigrate"
+	"temporal-agents/internal/schema"
 )
 
 // migrationFS holds the schema as embedded SQL files, applied in filename order.
@@ -45,7 +46,7 @@ func (p *Postgres) Migrate(ctx context.Context) error {
 // without changing anything. It is the read behind the explicit migrate step and
 // behind the startup verification a worker and the API server run: a process that
 // only verifies must not be able to apply DDL by accident.
-func (p *Postgres) SchemaState(ctx context.Context) (pgmigrate.State, error) {
+func (p *Postgres) SchemaState(ctx context.Context) (schema.State, error) {
 	return pgmigrate.Inspect(ctx, p.pool, migrationFS, migrationDir, migrationNamespace)
 }
 

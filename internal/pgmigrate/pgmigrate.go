@@ -22,6 +22,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"temporal-agents/internal/schema"
 )
 
 // schemaMigrationsDDL creates the tracking table that makes applying migrations
@@ -178,69 +180,21 @@ func applyMigration(ctx context.Context, conn *pgxpool.Conn, name, body string) 
 	return nil
 }
 
-// ErrStale reports a database whose schema is older than the migrations the running
-// binary carries. It is the failure a process verifies for at startup, so a stale
-// schema stops a process before it takes work rather than at its first missing
-// column.
-var ErrStale = errors.New("the schema is out of date")
-
-// State is what one namespace's schema is at, and what the running binary requires
-// of it. It is a value, computed by Inspect, so the decision "migrate, refuse, or
-// proceed" is taken by the caller rather than hidden inside the runner.
-type State struct {
-	// Namespace is the namespace the state was read for (see Apply).
-	Namespace string
-	// Applied are the migrations recorded as applied for this namespace, by their
-	// filename (the namespace prefix is stripped), in apply order.
-	Applied []string
-	// Required are the migrations the running binary carries, in apply order.
-	Required []string
-	// Missing are the required migrations that are not recorded as applied, in apply
-	// order. It is empty exactly when the schema is at or ahead of what is required.
-	Missing []string
-}
-
-// noVersion is what a database that has never been migrated reports as its version.
-// It is a word rather than an empty string so an operator reading the report is told
-// "none" instead of nothing at all.
-const noVersion = "none"
-
-// Version is the newest migration recorded for this namespace, or "none" when the
-// namespace has never been migrated. A database migrated by a newer binary reports
-// that newer version, which is why this reads the record rather than the embedded
-// files.
-func (s State) Version() string {
-	if len(s.Applied) == 0 {
-		return noVersion
-	}
-	return s.Applied[len(s.Applied)-1]
-}
-
-// RequiredVersion is the newest migration the running binary carries, or "none" when
-// it carries none.
-func (s State) RequiredVersion() string {
-	if len(s.Required) == 0 {
-		return noVersion
-	}
-	return s.Required[len(s.Required)-1]
-}
-
-// UpToDate reports whether every required migration is recorded as applied. A
-// database that is ahead (migrated by a newer binary) is up to date: this binary can
-// read everything it knows about.
-func (s State) UpToDate() bool { return len(s.Missing) == 0 }
-
 // Inspect reports what the database is at for one namespace, without changing
 // anything. A database with no tracking table at all is not an error: it is a
 // database at version "none", which is exactly what a fresh one is.
-func Inspect(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, dir, namespace string) (State, error) {
+//
+// The answer is a schema.State: what a schema is at is a fact about a deployment, not
+// about Postgres, so a process that verifies a schema can state the port it needs
+// without naming this package.
+func Inspect(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, dir, namespace string) (schema.State, error) {
 	required, err := Names(fsys, dir)
 	if err != nil {
-		return State{}, err
+		return schema.State{}, err
 	}
 	recorded, err := recordedNames(ctx, pool)
 	if err != nil {
-		return State{}, err
+		return schema.State{}, err
 	}
 	return newState(namespace, required, recorded), nil
 }
@@ -248,8 +202,8 @@ func Inspect(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, dir, namespace
 // newState decides the state from the two lists it is given. It is a free function so
 // the rule "applied, missing, and the version they imply" is unit testable without a
 // database.
-func newState(namespace string, required []string, recorded map[string]bool) State {
-	state := State{Namespace: namespace, Required: required}
+func newState(namespace string, required []string, recorded map[string]bool) schema.State {
+	state := schema.State{Namespace: namespace, Required: required}
 	for name := range recorded {
 		owned, ok := ownedName(namespace, name)
 		if ok {
@@ -268,6 +222,11 @@ func newState(namespace string, required []string, recorded map[string]bool) Sta
 // ownedName reports whether a recorded name belongs to this namespace, and what its
 // filename is. The empty namespace owns exactly the un-namespaced rows, which is what
 // keeps an adapter that migrated before namespacing existed readable.
+//
+// Exactly one adapter may pass an empty namespace, because the empty namespace claims
+// every un-namespaced row: a second one would silently share a namespace with the
+// first and report the other's migrations as its own. See execpg's
+// migrationNamespace, which is that adapter.
 func ownedName(namespace, recorded string) (string, bool) {
 	if namespace == "" {
 		return recorded, !strings.Contains(recorded, "/")

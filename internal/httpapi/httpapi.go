@@ -375,8 +375,9 @@ func (s *Server) handleFleets(w http.ResponseWriter, r *http.Request) {
 	items := make([]fleetResource, 0, len(fleets))
 	var locations []agenthub.Location
 	for _, fleet := range fleets {
-		items = append(items, fleetFrom(fleet, false))
-		locations = append(locations, fleetLocations(fleet, false)...)
+		resource, referred := fleetFrom(fleet, false)
+		items = append(items, resource)
+		locations = append(locations, referred...)
 	}
 	s.writeJSON(w, r, http.StatusOK, modelFleetCollection,
 		newLocatedCollection(items, limit, agenthub.NewLocationRegistry(locations...)))
@@ -389,7 +390,8 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 		s.writeServiceProblem(w, r, err)
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, modelFleet, fleetFrom(fleet, true))
+	resource, _ := fleetFrom(fleet, true)
+	s.writeJSON(w, r, http.StatusOK, modelFleet, resource)
 }
 
 // handleRuns answers the run collection.
@@ -554,6 +556,13 @@ func (s *Server) writeServiceProblem(w http.ResponseWriter, r *http.Request, err
 			"only an item that has finished can be dismissed")
 	case errors.Is(err, agenthub.ErrInvalid):
 		s.writeProblem(w, r, codeInvalidRequest, err.Error())
+	case errors.Is(err, agenthub.ErrInvalidLocation):
+		// A location is built from a recorded fact, never from the request, so this is a
+		// defect here rather than something a consumer can fix. The message names the
+		// recorded place, so it goes to the log and not into the problem document.
+		s.logger.Error("a recorded place could not be expressed as a location",
+			"requestId", requestIDFrom(r.Context()), "path", r.URL.EscapedPath(), "error", err.Error())
+		s.writeProblem(w, r, codeInternal, "")
 	case errors.Is(err, context.DeadlineExceeded):
 		s.writeProblem(w, r, codeTimeout, "the request exceeded the server's time budget")
 	case errors.Is(err, agenthub.ErrUnavailable):

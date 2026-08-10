@@ -190,8 +190,12 @@ the places it refers to:
   name from a path.
 - The registry is **flat**, **closed under ancestry** (every referenced place plus
   all of its ancestors), holds each place exactly once, and is ordered
-  **parents-first** with a deterministic order. A client builds the tree in one
-  pass, and the response's entity tag stays stable for an unchanged read.
+  **parents-first** with a deterministic order. The set and its order come from the
+  places alone, never from the order the server happened to collect them in, so a
+  client builds the tree in one pass and the response's entity tag stays stable for
+  an unchanged read.
+- The fleet, run, and schedule collections always carry `locations`, even when
+  `items` is empty: the unknown place is always in the registry.
 - On the paged active-work model the reference and the registry are **optional**
   members, so an existing consumer decodes the payload unchanged.
 

@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"temporal-agents/internal/schema"
 )
 
 // The rule these tests pin — what a database is at, and what is still missing from
@@ -14,7 +16,7 @@ import (
 func TestAFreshDatabaseIsAtNoVersionAndMissesEverything(t *testing.T) {
 	state := newState("agenthub", []string{"0001_a.sql", "0002_b.sql"}, map[string]bool{})
 
-	require.Equal(t, noVersion, state.Version())
+	require.Equal(t, schema.NoVersion, state.Version())
 	require.Equal(t, "0002_b.sql", state.RequiredVersion())
 	require.Equal(t, []string{"0001_a.sql", "0002_b.sql"}, state.Missing)
 	require.False(t, state.UpToDate())

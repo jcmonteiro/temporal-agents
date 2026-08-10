@@ -51,6 +51,8 @@ func TestAVariantReportsOnlyItsOwnFields(t *testing.T) {
 }
 
 func TestConstructionRefusesADirectoryThatIsNotAnAbsoluteCleanedPath(t *testing.T) {
+	// Subtests rather than one loop with require: every violating case is reported,
+	// instead of one arbitrary case per run.
 	for name, directory := range map[string]string{
 		"relative":     "work/pricing",
 		"undotted":     "/srv/work/../work/pricing",
@@ -59,9 +61,22 @@ func TestConstructionRefusesADirectoryThatIsNotAnAbsoluteCleanedPath(t *testing.
 		"padded":       " /srv/work ",
 		"control char": "/srv/work\n/pricing",
 	} {
-		_, err := agenthub.NewDirectoryLocation(directory, nil)
-		require.ErrorIs(t, err, agenthub.ErrInvalid, "%s directory %q was accepted", name, directory)
+		t.Run(name, func(t *testing.T) {
+			_, err := agenthub.NewDirectoryLocation(directory, nil)
+			require.ErrorIs(t, err, agenthub.ErrInvalidLocation, "directory %q was accepted", directory)
+		})
 	}
+}
+
+func TestARecordedPlaceTheSystemCannotExpressIsNotARequestFailure(t *testing.T) {
+	// A location is built from a fact the system recorded, never from what a consumer
+	// asked for, so refusing one must not tell a consumer to change its request (the
+	// transport answers ErrInvalid with the message itself, which would also publish
+	// the recorded path).
+	_, err := agenthub.NewDirectoryLocation("srv/work/pricing", nil)
+
+	require.ErrorIs(t, err, agenthub.ErrInvalidLocation)
+	require.NotErrorIs(t, err, agenthub.ErrInvalid)
 }
 
 func TestConstructionRefusesARefThatIsEmptyOrUnbounded(t *testing.T) {
@@ -75,8 +90,10 @@ func TestConstructionRefusesARefThatIsEmptyOrUnbounded(t *testing.T) {
 		"oversized": string(oversized),
 		"control":   "acme\u0000pricing",
 	} {
-		_, err := agenthub.NewRemoteLocation(ref, nil)
-		require.ErrorIs(t, err, agenthub.ErrInvalid, "%s ref was accepted", name)
+		t.Run(name, func(t *testing.T) {
+			_, err := agenthub.NewRemoteLocation(ref, nil)
+			require.ErrorIs(t, err, agenthub.ErrInvalidLocation, "the ref was accepted")
+		})
 	}
 }
 
@@ -85,7 +102,7 @@ func TestTheUnknownPlaceCanNeverBeAnAncestor(t *testing.T) {
 
 	_, err := agenthub.NewDirectoryLocation("/srv/work", &unknown)
 
-	require.ErrorIs(t, err, agenthub.ErrInvalid,
+	require.ErrorIs(t, err, agenthub.ErrInvalidLocation,
 		"the unknown place became a parent, which would hang every known place under it")
 }
 
@@ -162,6 +179,29 @@ func TestARegistryIsOrderedParentsFirstAndIndependentOfInputOrder(t *testing.T) 
 	}
 }
 
+func TestAPlaceReferencedWithAndWithoutItsAncestryIsPublishedTheSameWayEitherOrder(t *testing.T) {
+	// A place's identity is its natural key, not its parent, so the same directory can
+	// be referenced by one source that knows its repository and by another that does
+	// not. If arrival order decided which value is published, the same facts would
+	// render as two different payloads — a different parent, a different depth, a
+	// different order, and therefore a different entity tag.
+	repository, err := agenthub.NewDirectoryLocation("/srv/repos/pricing", nil)
+	require.NoError(t, err)
+	withAncestry, err := agenthub.NewDirectoryLocation("/srv/work/pricing", &repository)
+	require.NoError(t, err)
+	withoutAncestry, err := agenthub.NewDirectoryLocation("/srv/work/pricing", nil)
+	require.NoError(t, err)
+
+	first := agenthub.NewLocationRegistry(withAncestry, withoutAncestry)
+	second := agenthub.NewLocationRegistry(withoutAncestry, withAncestry)
+
+	require.Equal(t, registryIDs(first), registryIDs(second), "the published set depends on the caller's order")
+	require.Equal(t, registryParents(first), registryParents(second),
+		"the same place is published with two different ancestries")
+	require.Equal(t, repository.ID(), registryParents(first)[withAncestry.ID()],
+		"the better-known ancestry was dropped, orphaning the repository")
+}
+
 func TestARegistryOfTheSamePlacesIsAlwaysTheSameSequence(t *testing.T) {
 	// The API computes entity tags over response bytes, so the order must come from
 	// the set alone and never from map iteration.
@@ -199,6 +239,20 @@ func registryIDs(registry agenthub.LocationRegistry) []string {
 		ids = append(ids, location.ID())
 	}
 	return ids
+}
+
+// registryParents renders which place each published place hangs under, with "" for a
+// root. It is what shows that the tree a client draws is the same tree.
+func registryParents(registry agenthub.LocationRegistry) map[string]string {
+	parents := make(map[string]string, registry.Len())
+	for _, location := range registry.Locations() {
+		if parent, ok := location.Parent(); ok {
+			parents[location.ID()] = parent.ID()
+			continue
+		}
+		parents[location.ID()] = ""
+	}
+	return parents
 }
 
 // indexOf reports where an id appears, or -1.

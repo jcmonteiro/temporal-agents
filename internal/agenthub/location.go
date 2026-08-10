@@ -3,6 +3,7 @@ package agenthub
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"path"
 	"sort"
@@ -26,6 +27,17 @@ import (
 // Nothing here knows about git, SQL, or a filesystem. A location is built from facts
 // the system recorded, handed in as values, exactly as execution outcomes already
 // are.
+
+// ErrInvalidLocation marks a recorded place the system cannot express: a directory
+// that is not an absolute cleaned path, a ref that is empty or unbounded, the unknown
+// place used as an ancestor.
+//
+// It is a sentinel of its own rather than ErrInvalid because a location is never
+// built from a request: it is built from a fact the system recorded. Answering a
+// consumer "change your request" for a directory it never sent — and echoing that
+// directory back to it — would name the wrong culprit and leak a server path. This is
+// a defect here, so the transport reports it as one.
+var ErrInvalidLocation = errors.New("invalid location")
 
 // LocationKind discriminates the union. It is the wire discriminator too, so a
 // consumer switches on one field.
@@ -99,11 +111,11 @@ func NewDirectoryLocation(directory string, parent *Location) (Location, error) 
 		return Location{}, err
 	}
 	if !strings.HasPrefix(directory, "/") {
-		return Location{}, fmt.Errorf("%w: the location directory %q must be absolute", ErrInvalid, directory)
+		return Location{}, fmt.Errorf("%w: the location directory %q must be absolute", ErrInvalidLocation, directory)
 	}
 	if path.Clean(directory) != directory {
 		return Location{}, fmt.Errorf("%w: the location directory %q must be cleaned (%q)",
-			ErrInvalid, directory, path.Clean(directory))
+			ErrInvalidLocation, directory, path.Clean(directory))
 	}
 	validParent, err := validateLocationParent(parent)
 	if err != nil {
@@ -133,19 +145,19 @@ func NewRemoteLocation(ref string, parent *Location) (Location, error) {
 // safely logged.
 func validateLocationText(field, value string, maxLength int) error {
 	if value == "" {
-		return fmt.Errorf("%w: the location %s is required", ErrInvalid, field)
+		return fmt.Errorf("%w: the location %s is required", ErrInvalidLocation, field)
 	}
 	if strings.TrimSpace(value) != value {
-		return fmt.Errorf("%w: the location %s %q must not be padded with whitespace", ErrInvalid, field, value)
+		return fmt.Errorf("%w: the location %s %q must not be padded with whitespace", ErrInvalidLocation, field, value)
 	}
 	if !utf8.ValidString(value) {
-		return fmt.Errorf("%w: the location %s is not valid text", ErrInvalid, field)
+		return fmt.Errorf("%w: the location %s is not valid text", ErrInvalidLocation, field)
 	}
 	if utf8.RuneCountInString(value) > maxLength {
-		return fmt.Errorf("%w: the location %s must be at most %d characters", ErrInvalid, field, maxLength)
+		return fmt.Errorf("%w: the location %s must be at most %d characters", ErrInvalidLocation, field, maxLength)
 	}
 	if strings.IndexFunc(value, unicode.IsControl) >= 0 {
-		return fmt.Errorf("%w: the location %s contains control characters", ErrInvalid, field)
+		return fmt.Errorf("%w: the location %s contains control characters", ErrInvalidLocation, field)
 	}
 	return nil
 }
@@ -157,7 +169,7 @@ func validateLocationParent(parent *Location) (*Location, error) {
 		return nil, nil
 	}
 	if parent.Kind() == LocationUnknown {
-		return nil, fmt.Errorf("%w: the unknown location is a root and cannot be a parent", ErrInvalid)
+		return nil, fmt.Errorf("%w: the unknown location is a root and cannot be a parent", ErrInvalidLocation)
 	}
 	copied := *parent
 	return &copied, nil
@@ -249,6 +261,19 @@ func (l Location) depth() int {
 	return depth
 }
 
+// ancestry renders the chain of ids from this place's parent upwards. Identity
+// deliberately excludes the parent (see ID), so this is what tells two values of the
+// *same* place with different ancestries apart, and it is a value derived from the
+// locations alone — never from the order a caller supplied them in.
+func (l Location) ancestry() string {
+	var chain strings.Builder
+	for current, ok := l.Parent(); ok; current, ok = current.Parent() {
+		chain.WriteString(current.ID())
+		chain.WriteByte('/')
+	}
+	return chain.String()
+}
+
 // LocationRegistry is the flat set of places one response refers to: every referenced
 // location plus all of its ancestors, each exactly once, ordered so a parent always
 // precedes its children.
@@ -261,37 +286,87 @@ type LocationRegistry struct {
 	// registry cannot be assembled by a struct literal that skips the closure or the
 	// ordering.
 	locations []Location
+	// index is where each id sits in locations, so resolving a reference costs no
+	// digest at all. It is built beside the slice and never afterwards.
+	index map[string]int
+}
+
+// placed is one candidate entry with everything the registry decides on precomputed.
+// The id is a digest and the depth is an ancestry walk, so computing them once per
+// place instead of twice per comparison keeps a sort of n places to n digests.
+type placed struct {
+	location Location
+	id       string
+	depth    int
+	ancestry string
+}
+
+// place decorates a location with what ordering and deduplication need.
+func place(location Location) placed {
+	return placed{
+		location: location,
+		id:       location.ID(),
+		depth:    location.depth(),
+		ancestry: location.ancestry(),
+	}
+}
+
+// betterKnownThan reports whether this entry is the one to publish when two entries
+// share an id. The deeper ancestry wins, and equal depths are settled by comparing
+// the ancestries themselves, so the winner is a function of the two values and of
+// nothing else.
+func (p placed) betterKnownThan(other placed) bool {
+	if p.depth != other.depth {
+		return p.depth > other.depth
+	}
+	return p.ancestry < other.ancestry
 }
 
 // NewLocationRegistry builds the registry for the locations a response refers to.
 //
 // It closes the set under ancestry, removes duplicates by identity, and orders it
-// parents-first. The order is fully determined by the set (depth, then id), never by
-// the order the caller supplied or by a map iteration — the API computes entity tags
-// over response bytes, so an unstable order would silently break conditional
-// requests.
+// parents-first. Both the set and its order are fully determined by the locations
+// handed in, never by the order the caller supplied them in or by a map iteration —
+// the API computes entity tags over response bytes, so anything that let the same
+// facts render as two different payloads would silently break conditional requests.
+//
+// Deduplication needs a rule of its own for that to hold. A location's identity is
+// its variant and its natural key, deliberately not its parent, so the same place can
+// arrive both with and without its ancestry (two recorders, one directory). Keeping
+// whichever arrived last would make the payload depend on the caller's order, so the
+// better-known ancestry wins instead.
 //
 // The unknown place is always present: every item whose place was never recorded
 // refers to it, and it is a real place an operator sees rather than an absence.
 func NewLocationRegistry(referenced ...Location) LocationRegistry {
-	byID := map[string]Location{unknownLocationID: UnknownLocation()}
+	byID := map[string]placed{unknownLocationID: place(UnknownLocation())}
 	for _, location := range referenced {
 		for current, ok := location, true; ok; current, ok = current.Parent() {
-			byID[current.ID()] = current
+			candidate := place(current)
+			if existing, seen := byID[candidate.id]; seen && !candidate.betterKnownThan(existing) {
+				continue
+			}
+			byID[candidate.id] = candidate
 		}
 	}
-	locations := make([]Location, 0, len(byID))
-	for _, location := range byID {
-		locations = append(locations, location)
+	entries := make([]placed, 0, len(byID))
+	for _, entry := range byID {
+		entries = append(entries, entry)
 	}
-	sort.Slice(locations, func(i, j int) bool {
-		left, right := locations[i], locations[j]
-		if leftDepth, rightDepth := left.depth(), right.depth(); leftDepth != rightDepth {
-			return leftDepth < rightDepth
+	sort.Slice(entries, func(i, j int) bool {
+		left, right := entries[i], entries[j]
+		if left.depth != right.depth {
+			return left.depth < right.depth
 		}
-		return left.ID() < right.ID()
+		return left.id < right.id
 	})
-	return LocationRegistry{locations: locations}
+	locations := make([]Location, 0, len(entries))
+	index := make(map[string]int, len(entries))
+	for position, entry := range entries {
+		locations = append(locations, entry.location)
+		index[entry.id] = position
+	}
+	return LocationRegistry{locations: locations, index: index}
 }
 
 // Locations returns the closure in publication order. The slice is a copy, so a
@@ -307,10 +382,6 @@ func (r LocationRegistry) Len() int { return len(r.locations) }
 // Contains reports whether an id is in the registry, which is what makes "every
 // reference resolves" assertable.
 func (r LocationRegistry) Contains(id string) bool {
-	for _, location := range r.locations {
-		if location.ID() == id {
-			return true
-		}
-	}
-	return false
+	_, ok := r.index[id]
+	return ok
 }
