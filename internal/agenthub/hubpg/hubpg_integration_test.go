@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"temporal-agents/internal/agenthub"
+	"temporal-agents/internal/pgtest"
 )
 
 // TestOpenRejectsAnEmptyDSN pins the fail-fast contract: the server must not start
@@ -112,7 +113,7 @@ func TestUndismissReportsWhetherItRemovedAnything(t *testing.T) {
 // tracking table exist for.
 func TestTwoServersShareOneSchema(t *testing.T) {
 	ctx := context.Background()
-	dsn := newTestDatabase(t)
+	dsn := pgtest.NewDatabase(t)
 	first := openTestStore(t, dsn)
 	require.NoError(t, first.Migrate(ctx))
 	second := openTestStore(t, dsn)

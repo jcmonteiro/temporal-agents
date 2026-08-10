@@ -76,16 +76,16 @@ func (v *viewStub) ActiveWork(_ context.Context, query agenthub.PageQuery) (agen
 	var all []agenthub.ActiveWorkItem
 	for _, fleet := range v.fleets {
 		if fleet.Running {
-			all = append(all, agenthub.ActiveWorkItem{ID: fleet.ID, Type: agenthub.ActiveWorkFleet, Status: fleet.Status, Running: true})
+			all = append(all, agenthub.ActiveWorkItem{ID: fleet.ID, Type: agenthub.ActiveWorkFleet, Status: fleet.Status, Running: true, Location: fleet.Location})
 		}
 	}
 	for _, run := range v.runs {
 		if run.Running {
-			all = append(all, agenthub.ActiveWorkItem{ID: run.ID, Type: activeTypeFromRun(run.Type), Status: run.Status, Running: true})
+			all = append(all, agenthub.ActiveWorkItem{ID: run.ID, Type: activeTypeFromRun(run.Type), Status: run.Status, Running: true, Location: run.Location})
 		}
 	}
 	for _, schedule := range v.schedules {
-		all = append(all, agenthub.ActiveWorkItem{ID: schedule.ID, Type: agenthub.ActiveWorkSchedule, Status: schedule.Status})
+		all = append(all, agenthub.ActiveWorkItem{ID: schedule.ID, Type: agenthub.ActiveWorkSchedule, Status: schedule.Status, Location: schedule.Location})
 	}
 	offset := 0
 	if len(query.Cursor) > 0 {
@@ -396,7 +396,7 @@ func TestRunChainsAndSchedulesUseUniformDiscriminators(t *testing.T) {
 	server := newTestServer(t, view)
 
 	runs := request(t, server, http.MethodGet, BasePath+"/runs", nil)
-	var runCollection collection[runResource]
+	var runCollection locatedCollection[runResource]
 	decodeResponse(t, runs, &runCollection)
 	if len(runCollection.Items) != 1 {
 		t.Fatalf("runs = %d, want 1", len(runCollection.Items))
@@ -407,7 +407,7 @@ func TestRunChainsAndSchedulesUseUniformDiscriminators(t *testing.T) {
 	}
 
 	schedules := request(t, server, http.MethodGet, BasePath+"/schedules", nil)
-	var scheduleCollection collection[scheduleResource]
+	var scheduleCollection locatedCollection[scheduleResource]
 	decodeResponse(t, schedules, &scheduleCollection)
 	if len(scheduleCollection.Items) != 1 {
 		t.Fatalf("schedules = %d, want 1", len(scheduleCollection.Items))
@@ -556,6 +556,38 @@ func TestActiveItemCannotBeDismissed(t *testing.T) {
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, req)
 	requireProblem(t, response, http.StatusConflict, codeNotDismissible)
+}
+
+func TestARecordedPlaceThatCannotBeExpressedIsReportedAsADefectHere(t *testing.T) {
+	// A location is built from a fact the system recorded, never from the request, so a
+	// consumer can do nothing about one that is invalid and must not be told to change
+	// its request. The recorded path would also be a server path: it belongs in the log
+	// an operator reads, not in a document a consumer receives.
+	cause := errors.Join(agenthub.ErrInvalidLocation,
+		errors.New(`the location directory "srv/work/pricing" must be absolute`))
+	var logged bytes.Buffer
+	server := newTestServer(t, &viewStub{err: cause}, func(options *Options) {
+		options.Logger = slog.New(slog.NewTextHandler(&logged, nil))
+	})
+
+	response := request(t, server, http.MethodGet, BasePath+"/runs", nil)
+
+	problem := requireProblem(t, response, http.StatusInternalServerError, codeInternal)
+	if problem.Detail != "" {
+		t.Errorf("problem detail = %q, want nothing about a place the consumer never sent", problem.Detail)
+	}
+	if strings.Contains(response.Body.String(), "srv/work/pricing") {
+		t.Errorf("the problem document leaked the recorded path: %s", response.Body.String())
+	}
+	if !strings.Contains(logged.String(), "srv/work/pricing") || !strings.Contains(logged.String(), BasePath+"/runs") {
+		t.Errorf("the log records neither the recorded place nor the path it was read on: %s", logged.String())
+	}
+	// The mapping is exhaustive by intent, so a failure the core does classify must not
+	// be recorded as one it does not: an operator triaging "unclassified" is looking for
+	// a missing branch that is right there.
+	if strings.Contains(logged.String(), "unclassified") {
+		t.Errorf("a classified failure was logged as unclassified: %s", logged.String())
+	}
 }
 
 // TestDependencyFailureIsRetryableAndDoesNotLeakTheCause pins both reliability and
@@ -1041,5 +1073,474 @@ func TestOverviewResourcesKeepTheFieldNamesTheWebClientReads(t *testing.T) {
 		if _, ok := document.Items[0].UpNext[0][key]; !ok {
 			t.Errorf("up-next node has no %q, which the web client reads", key)
 		}
+	}
+}
+
+// The location contract: every response that carries work publishes a flat registry
+// of the places that work runs in, and every item references one of them by an
+// opaque server-issued id. The tests below are the published contract, not the
+// implementation: they read the payload a consumer reads.
+
+// mustDirectory builds a directory place, failing the test if the fact is invalid.
+func mustDirectory(t *testing.T, directory string, parent *agenthub.Location) agenthub.Location {
+	t.Helper()
+	location, err := agenthub.NewDirectoryLocation(directory, parent)
+	if err != nil {
+		t.Fatalf("NewDirectoryLocation(%q): %v", directory, err)
+	}
+	return location
+}
+
+// registryDocument is the registry as a consumer decodes it.
+type registryDocument struct {
+	Locations []locationResource `json:"locations"`
+}
+
+// locationIndex maps a decoded registry by id, and reports each id's position, which
+// is what makes "parents first" and "each place once" assertable.
+func locationIndex(t *testing.T, locations []locationResource) map[string]int {
+	t.Helper()
+	index := map[string]int{}
+	for position, location := range locations {
+		if _, duplicate := index[location.ID]; duplicate {
+			t.Errorf("the registry publishes %q twice", location.ID)
+		}
+		index[location.ID] = position
+	}
+	return index
+}
+
+func TestEveryWorkCollectionPublishesTheRegistryAndAResolvableReference(t *testing.T) {
+	view := &viewStub{
+		fleets:    []agenthub.Fleet{{ID: "fleet-1", Goal: "Expose pricing", Status: agenthub.StatusInProgress}},
+		runs:      []agenthub.Run{{ID: "run-1", Label: "Daily digest", Status: agenthub.StatusDone}},
+		schedules: []agenthub.Schedule{{ID: "schedule-1", Label: "Post digest"}},
+	}
+	server := newTestServer(t, view)
+
+	for _, path := range []string{"/fleets", "/runs", "/schedules"} {
+		response := request(t, server, http.MethodGet, BasePath+path, nil)
+		var document struct {
+			Items     []map[string]any   `json:"items"`
+			Locations []locationResource `json:"locations"`
+		}
+		decodeResponse(t, response, &document)
+
+		if len(document.Locations) != 1 {
+			t.Fatalf("%s: locations = %+v, want exactly the unknown place", path, document.Locations)
+		}
+		unknown := document.Locations[0]
+		if unknown.ID != "unknown" || unknown.Kind != agenthub.LocationUnknown || unknown.Label == "" {
+			t.Errorf("%s: unknown place = %+v, want an identified, labelled place", path, unknown)
+		}
+		if unknown.ParentID != nil || unknown.Directory != "" || unknown.Ref != "" {
+			t.Errorf("%s: the unknown place carries fields of another variant: %+v", path, unknown)
+		}
+		if len(document.Items) != 1 {
+			t.Fatalf("%s: items = %+v, want one", path, document.Items)
+		}
+		if document.Items[0]["locationId"] != "unknown" {
+			t.Errorf("%s: item locationId = %v, want the unknown place", path, document.Items[0]["locationId"])
+		}
+	}
+}
+
+func TestAWorkCollectionWithNoItemsStillPublishesTheRegistryItsSchemaRequires(t *testing.T) {
+	// locations is required on all three located collections, so it must be present on
+	// an empty page too: a consumer that resolves a reference against the registry must
+	// never have to tell "no places" apart from "no field".
+	server := newTestServer(t, &viewStub{})
+
+	for _, path := range []string{"/fleets", "/runs", "/schedules"} {
+		response := request(t, server, http.MethodGet, BasePath+path, nil)
+		var document map[string]json.RawMessage
+		decodeResponse(t, response, &document)
+
+		raw, present := document["locations"]
+		if !present {
+			t.Fatalf("%s: an empty page dropped the locations its schema requires", path)
+		}
+		var locations []locationResource
+		if err := json.Unmarshal(raw, &locations); err != nil {
+			t.Fatalf("%s: locations is not a registry: %v", path, err)
+		}
+		if len(locations) != 1 || locations[0].ID != "unknown" {
+			t.Errorf("%s: locations = %+v, want exactly the unknown place", path, locations)
+		}
+	}
+}
+
+func TestAnItemResourceCarriesItsOwnRegistryBecauseItHasNoEnvelope(t *testing.T) {
+	view := &viewStub{
+		fleets: []agenthub.Fleet{{ID: "fleet-1", Nodes: []agenthub.FleetNode{{ID: "api", Status: agenthub.StatusTodo}}}},
+		runs:   []agenthub.Run{{ID: "run-1"}},
+	}
+	server := newTestServer(t, view)
+
+	for path, itemID := range map[string]string{"/fleets/fleet-1": "fleet-1", "/runs/run-1": "run-1"} {
+		response := request(t, server, http.MethodGet, BasePath+path, nil)
+		var document struct {
+			ID        string             `json:"id"`
+			Locations []locationResource `json:"locations"`
+			Nodes     []struct {
+				LocationID string `json:"locationId"`
+			} `json:"nodes"`
+			LocationID string `json:"locationId"`
+		}
+		decodeResponse(t, response, &document)
+		if document.ID != itemID || document.LocationID != "unknown" {
+			t.Errorf("%s = %+v, want the item referencing the unknown place", path, document)
+		}
+		if len(document.Locations) == 0 {
+			t.Errorf("%s carries no registry for its own reference", path)
+		}
+		for _, node := range document.Nodes {
+			if node.LocationID != "unknown" {
+				t.Errorf("%s: node locationId = %q, want the unknown place", path, node.LocationID)
+			}
+		}
+	}
+}
+
+func TestTheRegistryIsClosedOverAncestryAndOrderedParentsFirst(t *testing.T) {
+	repository := mustDirectory(t, "/srv/repos/pricing", nil)
+	worktree := mustDirectory(t, "/srv/work/pricing", &repository)
+	other := mustDirectory(t, "/srv/work/billing", &repository)
+	view := &viewStub{runs: []agenthub.Run{
+		{ID: "run-1", Location: worktree},
+		{ID: "run-2", Location: other},
+		{ID: "run-3", Location: worktree},
+		{ID: "run-4"},
+	}}
+
+	response := request(t, newTestServer(t, view), http.MethodGet, BasePath+"/runs", nil)
+	var document struct {
+		Items []struct {
+			ID         string `json:"id"`
+			LocationID string `json:"locationId"`
+		} `json:"items"`
+		Locations []locationResource `json:"locations"`
+	}
+	decodeResponse(t, response, &document)
+
+	index := locationIndex(t, document.Locations)
+	// The repository is never referenced by an item, and must still be published: a
+	// client cannot draw a place inside a parent it was never told about.
+	if len(index) != 4 {
+		t.Fatalf("registry = %+v, want unknown, the repository and the two worktrees", document.Locations)
+	}
+	if _, ok := index[repository.ID()]; !ok {
+		t.Fatalf("the registry is not closed over ancestry: %+v", document.Locations)
+	}
+	for _, location := range document.Locations {
+		if location.ParentID == nil {
+			continue
+		}
+		if index[*location.ParentID] >= index[location.ID] {
+			t.Errorf("%q is published before its parent %q", location.ID, *location.ParentID)
+		}
+	}
+	for _, item := range document.Items {
+		if _, resolves := index[item.LocationID]; !resolves {
+			t.Errorf("%s references %q, which the registry does not contain", item.ID, item.LocationID)
+		}
+	}
+	if document.Items[3].LocationID != "unknown" {
+		t.Errorf("an item with no recorded place references %q, want the unknown place", document.Items[3].LocationID)
+	}
+}
+
+func TestAFleetNodeRunsInItsOwnPlaceAndThatPlaceResolvesThroughBothReads(t *testing.T) {
+	// A node genuinely differs from its fleet: it develops in a worktree of its own.
+	// That is the one reference this contract adds whose place is not the fleet's, and
+	// it has to resolve on both paths — against the collection's envelope registry and
+	// against the single fleet's own.
+	repository := mustDirectory(t, "/srv/repos/pricing", nil)
+	worktree := mustDirectory(t, "/srv/work/pricing-api", &repository)
+	started := mustDirectory(t, "/srv/work/pricing-web", &repository)
+	view := &viewStub{fleets: []agenthub.Fleet{{
+		ID: "fleet-1", Goal: "Expose pricing", Location: repository,
+		Nodes: []agenthub.FleetNode{
+			// The started node is not up next, so it is only reachable through Nodes.
+			{ID: "web", Status: agenthub.StatusInProgress, Location: started},
+			{ID: "api", Status: agenthub.StatusTodo, Location: worktree},
+		},
+	}}}
+	server := newTestServer(t, view)
+
+	type fleetDocument struct {
+		LocationID string `json:"locationId"`
+		Nodes      []struct {
+			ID         string `json:"id"`
+			LocationID string `json:"locationId"`
+		} `json:"nodes"`
+		UpNext []struct {
+			ID         string `json:"id"`
+			LocationID string `json:"locationId"`
+		} `json:"upNext"`
+	}
+
+	// The collection carries no graph, so only the fleet's place and its up-next nodes'
+	// places are referenced — and each must resolve against the envelope's registry.
+	var collection struct {
+		Items     []fleetDocument    `json:"items"`
+		Locations []locationResource `json:"locations"`
+	}
+	decodeResponse(t, request(t, server, http.MethodGet, BasePath+"/fleets", nil), &collection)
+	if len(collection.Items) != 1 || len(collection.Items[0].UpNext) != 1 {
+		t.Fatalf("collection = %+v, want one fleet with one node up next", collection.Items)
+	}
+	collected := locationIndex(t, collection.Locations)
+	if _, resolves := collected[collection.Items[0].UpNext[0].LocationID]; !resolves {
+		t.Errorf("the collection's up-next node references %q, which its registry does not contain: %+v",
+			collection.Items[0].UpNext[0].LocationID, collection.Locations)
+	}
+	if collection.Items[0].UpNext[0].LocationID != worktree.ID() {
+		t.Errorf("up-next node locationId = %q, want its own worktree %q",
+			collection.Items[0].UpNext[0].LocationID, worktree.ID())
+	}
+
+	// The single fleet carries its whole graph and its own registry. Its up-next nodes
+	// are a subset of its nodes, so walking the graph is enough — which is only true
+	// while up next is derived from Nodes, and this asserts it.
+	var single struct {
+		fleetDocument
+		Locations []locationResource `json:"locations"`
+	}
+	decodeResponse(t, request(t, server, http.MethodGet, BasePath+"/fleets/fleet-1", nil), &single)
+	index := locationIndex(t, single.Locations)
+	if single.LocationID != repository.ID() {
+		t.Errorf("fleet locationId = %q, want its repository %q", single.LocationID, repository.ID())
+	}
+	if len(single.Nodes) != 2 {
+		t.Fatalf("nodes = %+v, want the whole graph", single.Nodes)
+	}
+	for _, node := range append(single.Nodes, single.UpNext...) {
+		if node.LocationID == "unknown" {
+			t.Errorf("node %s references the unknown place, want the worktree it was recorded in", node.ID)
+		}
+		if _, resolves := index[node.LocationID]; !resolves {
+			t.Errorf("node %s references %q, which the fleet's registry does not contain: %+v",
+				node.ID, node.LocationID, single.Locations)
+		}
+	}
+	// And the registry closes over what a node hangs under, so a client can draw the
+	// worktree inside the repository without a second read.
+	if _, ok := index[repository.ID()]; !ok {
+		t.Fatalf("the fleet's registry is not closed over its nodes' ancestry: %+v", single.Locations)
+	}
+	for _, location := range single.Locations {
+		if location.ParentID != nil && index[*location.ParentID] >= index[location.ID] {
+			t.Errorf("%q is published before its parent %q", location.ID, *location.ParentID)
+		}
+	}
+}
+
+func TestALabelAndTheNaturalKeyComeFromTheServer(t *testing.T) {
+	repository := mustDirectory(t, "/srv/repos/pricing", nil)
+	remote, err := agenthub.NewRemoteLocation("github.com/acme/pricing", nil)
+	if err != nil {
+		t.Fatalf("NewRemoteLocation: %v", err)
+	}
+	view := &viewStub{runs: []agenthub.Run{{ID: "run-1", Location: repository}, {ID: "run-2", Location: remote}}}
+
+	response := request(t, newTestServer(t, view), http.MethodGet, BasePath+"/runs", nil)
+	var document registryDocument
+	decodeResponse(t, response, &document)
+
+	byID := map[string]locationResource{}
+	for _, location := range document.Locations {
+		byID[location.ID] = location
+	}
+	directory := byID[repository.ID()]
+	if directory.Label != "pricing" || directory.Directory != "/srv/repos/pricing" || directory.Ref != "" {
+		t.Errorf("directory place = %+v, want a server-computed label, its path, and no ref", directory)
+	}
+	published := byID[remote.ID()]
+	if published.Ref != "github.com/acme/pricing" || published.Directory != "" {
+		t.Errorf("remote place = %+v, want a ref and no directory", published)
+	}
+	if strings.Contains(directory.ID, "pricing") {
+		t.Errorf("the id %q leaks the path it identifies", directory.ID)
+	}
+}
+
+func TestTheRegistrySerialisesDeterministicallyAndKeepsTheEntityTagStable(t *testing.T) {
+	repository := mustDirectory(t, "/srv/repos/pricing", nil)
+	view := &viewStub{runs: []agenthub.Run{
+		{ID: "run-1", Location: mustDirectory(t, "/srv/work/a", &repository)},
+		{ID: "run-2", Location: mustDirectory(t, "/srv/work/b", &repository)},
+		{ID: "run-3", Location: mustDirectory(t, "/srv/work/c", &repository)},
+	}}
+	server := newTestServer(t, view)
+
+	first := request(t, server, http.MethodGet, BasePath+"/runs", nil)
+	for range 20 {
+		again := request(t, server, http.MethodGet, BasePath+"/runs", nil)
+		if again.Body.String() != first.Body.String() {
+			t.Fatalf("an unchanged read serialised differently:\n%s\n%s", first.Body.String(), again.Body.String())
+		}
+		if again.Header().Get("ETag") != first.Header().Get("ETag") {
+			t.Fatalf("entity tag moved for an unchanged read: %q then %q",
+				first.Header().Get("ETag"), again.Header().Get("ETag"))
+		}
+	}
+
+	conditional := newRequest(http.MethodGet, BasePath+"/runs", nil)
+	conditional.Header.Set("If-None-Match", first.Header().Get("ETag"))
+	revalidated := httptest.NewRecorder()
+	server.ServeHTTP(revalidated, conditional)
+	if revalidated.Code != http.StatusNotModified {
+		t.Fatalf("conditional read = %d, want 304", revalidated.Code)
+	}
+}
+
+func TestThePagedActiveWorkContractGainsAFieldAndLosesNone(t *testing.T) {
+	worktree := mustDirectory(t, "/srv/work/pricing", nil)
+	view := &viewStub{runs: []agenthub.Run{{
+		ID: "run-1", Running: true, Status: agenthub.StatusInProgress, Location: worktree,
+	}}}
+	server := newTestServer(t, view)
+
+	response := request(t, server, http.MethodGet, BasePath+"/active-work", nil)
+	var document struct {
+		Items     []map[string]any   `json:"items"`
+		Count     int                `json:"count"`
+		Limit     int                `json:"limit"`
+		Next      *string            `json:"next"`
+		Locations []locationResource `json:"locations"`
+	}
+	decodeResponse(t, response, &document)
+	if len(document.Items) != 1 {
+		t.Fatalf("items = %+v, want one", document.Items)
+	}
+	// Every field the existing consumers read is still there and still means the same.
+	for _, key := range []string{"id", "type", "status", "running"} {
+		if _, ok := document.Items[0][key]; !ok {
+			t.Errorf("the paged model lost %q", key)
+		}
+	}
+	if document.Items[0]["locationId"] != worktree.ID() {
+		t.Errorf("paged locationId = %v, want %q", document.Items[0]["locationId"], worktree.ID())
+	}
+	if _, resolves := locationIndex(t, document.Locations)[worktree.ID()]; !resolves {
+		t.Errorf("the paged registry = %+v, does not resolve the item's reference", document.Locations)
+	}
+
+	// And the contract says the addition is optional, so a client that ignores it, or
+	// a server that has nothing to say, both stay valid.
+	activeWork := server.spec.schemas["ActiveWork"].(map[string]any)
+	for _, required := range activeWork["required"].([]any) {
+		if required == "locationId" {
+			t.Error("locationId became required on the paged active-work model")
+		}
+	}
+	collection := server.spec.schemas["ActiveWorkCollection"].(map[string]any)
+	for _, required := range collection["required"].([]any) {
+		if required == "locations" {
+			t.Error("locations became required on the paged active-work collection")
+		}
+	}
+}
+
+func TestTheSpecificationDescribesTheLocationUnion(t *testing.T) {
+	server := newTestServer(t, &viewStub{})
+
+	kinds := schemaEnum(t, server.spec.schemas, "LocationKind")
+	want := make([]string, 0, len(agenthub.LocationKinds()))
+	for _, kind := range agenthub.LocationKinds() {
+		want = append(want, string(kind))
+	}
+	assertSameStrings(t, kinds, want)
+
+	location, ok := server.spec.schemas["Location"].(map[string]any)
+	if !ok {
+		t.Fatal("the specification has no Location schema")
+	}
+	variants, ok := location["oneOf"].([]any)
+	if !ok || len(variants) != len(agenthub.LocationKinds()) {
+		t.Fatalf("Location oneOf = %v, want one branch per variant", location["oneOf"])
+	}
+	discriminator, ok := location["discriminator"].(map[string]any)
+	if !ok || discriminator["propertyName"] != "kind" {
+		t.Fatalf("Location discriminator = %v, want a union discriminated on kind", location["discriminator"])
+	}
+	mapping, ok := discriminator["mapping"].(map[string]any)
+	if !ok || len(mapping) != len(agenthub.LocationKinds()) {
+		t.Fatalf("Location mapping = %v, want every variant mapped", discriminator["mapping"])
+	}
+
+	// A variant carries exactly its own fields: the schema refuses the others rather
+	// than describing three nullable ones.
+	unknown := server.spec.schemas["UnknownLocation"].(map[string]any)
+	properties := unknown["properties"].(map[string]any)
+	for _, forbidden := range []string{"directory", "ref"} {
+		if _, present := properties[forbidden]; present {
+			t.Errorf("the unknown variant describes %q", forbidden)
+		}
+	}
+	if unknown["additionalProperties"] != false {
+		t.Error("the unknown variant accepts fields of other variants")
+	}
+	directory := server.spec.schemas["DirectoryLocation"].(map[string]any)
+	if _, present := directory["properties"].(map[string]any)["ref"]; present {
+		t.Error("the directory variant describes a ref")
+	}
+
+	// The entry point publishes the vocabulary too, so a consumer discovers the
+	// variants without reading the specification.
+	description := request(t, server, http.MethodGet, BasePath, nil)
+	var entry struct {
+		Vocabularies struct {
+			LocationKind []string `json:"locationKind"`
+		} `json:"vocabularies"`
+	}
+	decodeResponse(t, description, &entry)
+	assertSameStrings(t, entry.Vocabularies.LocationKind, want)
+}
+
+func TestOnlyADiscriminatorObjectIsRewrittenAsOne(t *testing.T) {
+	// A discriminator is legal on a base schema whose variants compose with allOf, so a
+	// nearby oneOf is not what makes one. A schema property that happens to be called
+	// "discriminator" is not one, and rewriting it as a mapping would corrupt it.
+	rewritten, ok := rewriteRefs(map[string]any{
+		"discriminator": map[string]any{
+			"propertyName": "kind",
+			"mapping":      map[string]any{"directory": "#/components/schemas/DirectoryLocation"},
+		},
+		"properties": map[string]any{
+			"discriminator": map[string]any{"type": "string"},
+		},
+	}).(map[string]any)
+	if !ok {
+		t.Fatal("rewriteRefs did not answer with a schema")
+	}
+
+	discriminator := rewritten["discriminator"].(map[string]any)
+	mapping := discriminator["mapping"].(map[string]any)
+	if mapping["directory"] != "#/$defs/DirectoryLocation" {
+		t.Errorf("mapping = %v, want a reference the standalone document contains", mapping)
+	}
+	property := rewritten["properties"].(map[string]any)["discriminator"].(map[string]any)
+	if property["type"] != "string" {
+		t.Errorf("a property called \"discriminator\" was rewritten as one: %v", property)
+	}
+}
+
+func TestTheRegistryIsPublishedAsAModelOfItsOwn(t *testing.T) {
+	server := newTestServer(t, &viewStub{})
+
+	response := request(t, server, http.MethodGet, BasePath+"/schemas/"+modelLocation, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("location schema = %d: %s", response.Code, response.Body.String())
+	}
+	var document map[string]any
+	decodeResponse(t, response, &document)
+	if document["oneOf"] == nil || document["$defs"] == nil {
+		t.Fatalf("the published union is not a standalone schema: %v", sortedKeys(document))
+	}
+	encoded, _ := json.Marshal(document)
+	if bytes.Contains(encoded, []byte("#/components/schemas/")) {
+		t.Error("the union's discriminator still points into the OpenAPI document")
 	}
 }

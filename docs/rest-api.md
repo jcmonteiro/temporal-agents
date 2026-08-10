@@ -90,7 +90,8 @@ move to it deliberately.
 
 Collections accept `limit` from 1 to 200 and default to 25. Existing fleet, run,
 schedule, and dismissal collections keep their original v1 envelope with `items`,
-`count`, and `limit`.
+`count`, and `limit`. The fleet, run, and schedule collections additionally publish
+`locations` (see [Locations](#locations)).
 
 `/active-work` is an additive resource for complete active-work reads. Its
 `active-work-collection.v1` envelope also has `next`. Follow that URL without
@@ -166,6 +167,41 @@ A schedule is recurring. It has no progress, no terminal state, and cannot be
 dismissed. The lightweight active-work projection always sets schedule `running` to
 `false`. Its schedule status uses configuration and the last observed completed
 action. Use the schedule resource when reconciled current action liveness is needed.
+
+### Locations
+
+Every item reports **where** it runs, and every response that carries work publishes
+the places it refers to:
+
+- Each fleet, run, schedule, and fleet node carries `locationId`, an **opaque**
+  server-issued reference. Never parse it: the natural key (the directory, or the
+  ref) is published as a field of its own.
+- Each work collection carries a `locations` array (the dismissal collection does
+  not: a dismissal is view state and runs nowhere); the single-item resources
+  (`/fleets/{id}`, `/runs/{id}`) carry the same array themselves, because they have
+  no envelope to hold it.
+- A location is a **tagged union** discriminated by `kind`:
+  - `unknown` — nothing was recorded about where the work ran. It is a real,
+    rendered place, not a null branch. It carries no directory, no ref, and no
+    parent, and it is always present in the registry.
+  - `directory` — an absolute, cleaned path in `directory`.
+  - `remote` — work with no local directory, identified by `ref`. A git ref of a
+    piece of work is an attribute of that work, not a location.
+- Every location carries a server-computed `label`. No consumer derives a display
+  name from a path.
+- The registry is **flat**, **closed under ancestry** (every referenced place plus
+  all of its ancestors), holds each place exactly once, and is ordered
+  **parents-first** with a deterministic order: a published `parentId` always names
+  a place published earlier in the same array, so following it terminates. The set
+  and its order come from the places alone, never from the order the server happened
+  to collect them in, so a client builds the tree in one pass and the response's
+  entity tag stays stable for an unchanged read.
+- The fleet, run, and schedule collections always carry `locations`, even when
+  `items` is empty: the unknown place is always in the registry.
+- On the paged active-work model the reference and the registry are **optional**
+  members, so an existing consumer decodes the payload unchanged.
+
+The union and the registry are published as `location.v1` under `/api/v1/schemas`.
 
 ### Status vocabulary
 

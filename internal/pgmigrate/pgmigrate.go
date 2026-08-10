@@ -12,13 +12,18 @@ package pgmigrate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"temporal-agents/internal/schema"
 )
 
 // schemaMigrationsDDL creates the tracking table that makes applying migrations
@@ -173,6 +178,104 @@ func applyMigration(ctx context.Context, conn *pgxpool.Conn, name, body string) 
 		return fmt.Errorf("commit migration %s: %w", name, err)
 	}
 	return nil
+}
+
+// Inspect reports what the database is at for one namespace, without changing
+// anything. A database with no tracking table at all is not an error: it is a
+// database at version "none", which is exactly what a fresh one is.
+//
+// The answer is a schema.State: what a schema is at is a fact about a deployment, not
+// about Postgres, so a process that verifies a schema can state the port it needs
+// without naming this package.
+func Inspect(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, dir, namespace string) (schema.State, error) {
+	required, err := Names(fsys, dir)
+	if err != nil {
+		return schema.State{}, err
+	}
+	recorded, err := recordedNames(ctx, pool)
+	if err != nil {
+		return schema.State{}, err
+	}
+	return newState(namespace, required, recorded), nil
+}
+
+// newState decides the state from the two lists it is given. It is a free function so
+// the rule "applied, missing, and the version they imply" is unit testable without a
+// database.
+func newState(namespace string, required []string, recorded map[string]bool) schema.State {
+	state := schema.State{Namespace: namespace, Required: required}
+	for name := range recorded {
+		owned, ok := ownedName(namespace, name)
+		if ok {
+			state.Applied = append(state.Applied, owned)
+		}
+	}
+	sort.Strings(state.Applied)
+	for _, name := range required {
+		if !recorded[recordedName(namespace, name)] {
+			state.Missing = append(state.Missing, name)
+		}
+	}
+	return state
+}
+
+// ownedName reports whether a recorded name belongs to this namespace, and what its
+// filename is. The empty namespace owns exactly the un-namespaced rows, which is what
+// keeps an adapter that migrated before namespacing existed readable.
+//
+// Exactly one adapter may pass an empty namespace, because the empty namespace claims
+// every un-namespaced row: a second one would silently share a namespace with the
+// first and report the other's migrations as its own. See execpg's
+// migrationNamespace, which is that adapter.
+func ownedName(namespace, recorded string) (string, bool) {
+	if namespace == "" {
+		return recorded, !strings.Contains(recorded, "/")
+	}
+	prefix := namespace + "/"
+	if !strings.HasPrefix(recorded, prefix) {
+		return "", false
+	}
+	return strings.TrimPrefix(recorded, prefix), true
+}
+
+// listRecordedSQL reads every migration recorded in the database, across namespaces.
+// The caller filters: one table records them all (see schemaMigrationsDDL).
+const listRecordedSQL = `SELECT name FROM schema_migrations`
+
+// recordedNames reads the tracking table, reporting an absent table as "nothing has
+// been applied". Inspecting must never create it: verifying a schema is a read, and a
+// process that verifies is precisely the one that is not allowed to run DDL.
+func recordedNames(ctx context.Context, pool *pgxpool.Pool) (map[string]bool, error) {
+	rows, err := pool.Query(ctx, listRecordedSQL)
+	if err != nil {
+		if undefinedTable(err) {
+			return map[string]bool{}, nil
+		}
+		return nil, fmt.Errorf("read the applied migrations: %w", err)
+	}
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		if undefinedTable(err) {
+			return map[string]bool{}, nil
+		}
+		return nil, fmt.Errorf("read the applied migrations: %w", err)
+	}
+	recorded := make(map[string]bool, len(names))
+	for _, name := range names {
+		recorded[name] = true
+	}
+	return recorded, nil
+}
+
+// undefinedTableCode is the SQLSTATE Postgres answers with when a statement names a
+// table that does not exist.
+const undefinedTableCode = "42P01"
+
+// undefinedTable reports whether the driver refused because the tracking table does
+// not exist yet.
+func undefinedTable(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == undefinedTableCode
 }
 
 // Names lists the migration filenames under dir in the order they must be applied.

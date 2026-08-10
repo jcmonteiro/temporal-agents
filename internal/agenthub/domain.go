@@ -220,6 +220,9 @@ type Fleet struct {
 	// order. It is empty when the fleet's plan could not be resolved, in which case
 	// the fleet still reports its own execution's status.
 	Nodes []FleetNode
+	// Location is where the fleet runs. The zero value is the unknown place, so a
+	// fleet whose place was never recorded reports the unknown one rather than none.
+	Location Location
 }
 
 // Dismissible reports whether the fleet may be dismissed from the overview: only
@@ -256,6 +259,9 @@ type FleetNode struct {
 	// Execution is the child execution the node ran in, or nil when it never
 	// started.
 	Execution *NodeExecution
+	// Location is where the node runs. A node genuinely differs from its fleet: it
+	// can develop in a worktree of its own.
+	Location Location
 }
 
 // NodeExecution is the child execution a plan node ran in. It carries only what
@@ -318,6 +324,8 @@ type Run struct {
 	Iterations int
 	// Tokens is the token usage summed over the chain's known iterations.
 	Tokens int
+	// Location is where the run runs.
+	Location Location
 }
 
 // Dismissible reports whether the run may be dismissed from the overview.
@@ -344,6 +352,8 @@ type Schedule struct {
 	// NextRunAt is when it will fire next, or the zero time when it is paused or
 	// has no further action.
 	NextRunAt time.Time
+	// Location is where the runs it fires run.
+	Location Location
 }
 
 // Dismissible reports whether the schedule may be dismissed. It never can: a
@@ -381,6 +391,9 @@ type ActiveWorkItem struct {
 	Type    ActiveWorkType
 	Status  WorkStatus
 	Running bool
+	// Location is where the item runs. It is published as an optional reference, so
+	// the CLI's paged contract gains a field and loses none.
+	Location Location
 }
 
 // PageQuery selects one bounded page. Cursor is an opaque value returned by the

@@ -21,6 +21,7 @@ import (
 
 	"temporal-agents/internal/agenthub"
 	"temporal-agents/internal/pgmigrate"
+	"temporal-agents/internal/schema"
 )
 
 // migrationFS holds this adapter's schema as embedded SQL, so bringing the stack up
@@ -76,11 +77,19 @@ func (d *Dismissals) Close() {
 	}
 }
 
-// Migrate brings this adapter's schema up to date, idempotently. The API server
-// applies it at startup: an operator's dismissal is not allowed to be the thing that
-// discovers a missing table.
+// Migrate brings this adapter's schema up to date, idempotently. It is applied by the
+// explicit migrate step, never by a starting API server: an operator's dismissal is
+// not allowed to be the thing that discovers a missing table, and a server is not
+// allowed to be the thing that creates one.
 func (d *Dismissals) Migrate(ctx context.Context) error {
 	return pgmigrate.Apply(ctx, d.pool, migrationFS, migrationDir, migrationNamespace)
+}
+
+// SchemaState reports what this context's schema is at and what this build requires,
+// without changing anything. The API server verifies it at startup and fails fast
+// rather than applying DDL.
+func (d *Dismissals) SchemaState(ctx context.Context) (schema.State, error) {
+	return pgmigrate.Inspect(ctx, d.pool, migrationFS, migrationDir, migrationNamespace)
 }
 
 // listDismissalsSQL reads every dismissal in force, newest first.

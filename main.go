@@ -81,6 +81,10 @@ func main() {
 		if err := serveCmd(os.Args[2:]); err != nil {
 			fatalf("%v", err)
 		}
+	case "migrate":
+		if err := migrateCmd(os.Args[2:], os.Stdout); err != nil {
+			fatalf("%v", err)
+		}
 	default:
 		usage()
 	}
@@ -93,6 +97,7 @@ USAGE
   temporal-agents <command> [arguments]
 
 COMMANDS
+  migrate                                Apply every bounded context's schema
   worker [--no-desktop] [--webhook <url>]
                                          Start the Temporal worker
   code <subcommand>                      Agent workflows for the current repo
@@ -109,6 +114,7 @@ COMMANDS
   serve [--addr <host:port>]             Serve the Agent Hub REST API
 
 EXAMPLES
+  temporal-agents migrate
   temporal-agents worker
   temporal-agents run "summarize the README"
   temporal-agents run "nightly triage" --save triage
@@ -131,8 +137,15 @@ ENVIRONMENT
   AGENT_HUB_API_URL     Versioned API endpoint used by list
                         (default http://127.0.0.1:8973/api/v1)
   AGENT_HUB_AUTH_TOKEN  Bearer token sent by list when authentication is enabled
+  DATABASE_URL          Postgres connection string (required by migrate, worker,
+                        serve and history)
   TEMPORAL_ADDRESS      Temporal endpoint used by execution commands
                         (default localhost:17233)
+
+The schema is applied by 'temporal-agents migrate'. Run it before 'worker' or
+'serve': both verify the schema at startup and refuse to run against an older one.
+'history' only reads, so it does not verify: against a database the migrate step has
+not reached it reports the database's own error rather than a schema failure.
 
 See "temporal-agents schedule --help", "temporal-agents template --help", and
 "temporal-agents serve --help".
@@ -467,10 +480,10 @@ func runWorker(opts notifyOptions) {
 	defer c.Close()
 
 	// The durable execution store is a hard dependency of every recorded workflow,
-	// so the worker resolves it (and brings its schema up to date) before accepting
-	// work: an unreachable store fails here rather than failing each workflow at its
-	// first record write.
-	store := openMigratedStore(context.Background())
+	// so the worker resolves it before accepting work: an unreachable store fails here
+	// rather than failing each workflow at its first record write. Its schema is
+	// verified, never applied — see migrate.go.
+	store := openVerifiedStore(context.Background())
 	defer store.Close()
 
 	// Flush heartbeats promptly so `watch` sees near-real-time Pi progress
