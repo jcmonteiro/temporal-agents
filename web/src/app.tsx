@@ -1,10 +1,8 @@
 import type { ReactNode } from "react";
 import { TopBar } from "./components/TopBar";
 import { LeftNav } from "./components/LeftNav";
-import { OverviewPage } from "./pages/Overview/OverviewPage";
-import { PlacePage } from "./pages/Place/PlacePage";
 import { SessionUnavailablePage, SignInPage } from "./pages/SignIn/SignInPage";
-import { useRoute } from "./platform/route";
+import { Router } from "./router";
 import { SessionProvider, useSession } from "./platform/session";
 
 export function App(): ReactNode {
@@ -54,15 +52,10 @@ function Shell(): ReactNode {
 
 /** The hub itself, which only a usable session reaches. */
 function Workspace(): ReactNode {
-  const route = useRoute();
   return (
     <>
-      <LeftNav active="overview" />
-      {route.name === "place" ? (
-        <PlacePage placeId={route.placeId} />
-      ) : (
-        <OverviewPage />
-      )}
+      <LeftNav />
+      <Router />
     </>
   );
 }

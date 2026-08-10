@@ -11,14 +11,28 @@ import { useEffect, useState } from "react";
 
 export type Route =
   | { name: "overview" }
-  | { name: "place"; placeId: string };
+  | { name: "place"; placeId: string }
+  | { name: "run"; runId: string }
+  | { name: "fleet"; fleetId: string }
+  | { name: "settings" };
 
 export const OVERVIEW: Route = { name: "overview" };
+export const SETTINGS: Route = { name: "settings" };
 
 /** The address of a route, fragment included. */
 export function addressOf(route: Route): string {
-  if (route.name === "place") return `#/places/${encodeURIComponent(route.placeId)}`;
-  return "#/";
+  switch (route.name) {
+    case "place":
+      return `#/places/${encodeURIComponent(route.placeId)}`;
+    case "run":
+      return `#/runs/${encodeURIComponent(route.runId)}`;
+    case "fleet":
+      return `#/fleets/${encodeURIComponent(route.fleetId)}`;
+    case "settings":
+      return "#/settings";
+    default:
+      return "#/";
+  }
 }
 
 /**
@@ -29,10 +43,33 @@ export function routeOf(address: string): Route {
   const fragment = address.startsWith("#") ? address.slice(1) : address;
   const path = fragment.replace(/^\/+/, "").replace(/\/+$/, "");
   const [section, ...rest] = path.split("/");
-  if (section === "places" && rest.length === 1 && rest[0] !== "") {
-    return { name: "place", placeId: decodeURIComponent(rest[0]) };
-  }
+  const id = rest.length === 1 && rest[0] !== "" ? decodeURIComponent(rest[0]) : null;
+  if (section === "places" && id !== null) return { name: "place", placeId: id };
+  if (section === "runs" && id !== null) return { name: "run", runId: id };
+  if (section === "fleets" && id !== null) return { name: "fleet", fleetId: id };
+  if (section === "settings" && rest.length === 0) return SETTINGS;
   return OVERVIEW;
+}
+
+/**
+ * The navigation entry a route belongs under.
+ *
+ * A place and the overview share an entry, because a place is the overview
+ * looked at closely; a run and a fleet belong to no entry of their own, so the
+ * navigation highlights nothing rather than highlighting something wrong.
+ */
+export function navigationKeyOf(route: Route): string | null {
+  switch (route.name) {
+    case "overview":
+    case "place":
+      return "overview";
+    case "fleet":
+      return "fleets";
+    case "settings":
+      return "settings";
+    default:
+      return null;
+  }
 }
 
 /** The current route, kept current as the operator navigates. */

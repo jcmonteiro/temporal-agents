@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addressOf, OVERVIEW, routeOf } from "./route";
+import { addressOf, navigationKeyOf, OVERVIEW, routeOf, SETTINGS } from "./route";
 
 describe("the address of a route", () => {
   it("names a place by its id", () => {
@@ -14,6 +14,12 @@ describe("the address of a route", () => {
 
   it("names the overview", () => {
     expect(addressOf(OVERVIEW)).toBe("#/");
+  });
+
+  it("names a run, a fleet and the settings", () => {
+    expect(addressOf({ name: "run", runId: "run-1" })).toBe("#/runs/run-1");
+    expect(addressOf({ name: "fleet", fleetId: "fleet-1" })).toBe("#/fleets/fleet-1");
+    expect(addressOf(SETTINGS)).toBe("#/settings");
   });
 });
 
@@ -47,5 +53,33 @@ describe("the route an address names", () => {
     const route = { name: "place", placeId: "dir:/srv/checkout" } as const;
 
     expect(routeOf(addressOf(route))).toEqual(route);
+  });
+
+  it("reads a run, a fleet and the settings", () => {
+    expect(routeOf("#/runs/run-1")).toEqual({ name: "run", runId: "run-1" });
+    expect(routeOf("#/fleets/fleet-1")).toEqual({ name: "fleet", fleetId: "fleet-1" });
+    expect(routeOf("#/settings")).toEqual(SETTINGS);
+  });
+
+  it("reads a destination that names no thing as the overview", () => {
+    expect(routeOf("#/runs")).toEqual(OVERVIEW);
+    expect(routeOf("#/fleets/")).toEqual(OVERVIEW);
+    expect(routeOf("#/settings/anything")).toEqual(OVERVIEW);
+  });
+});
+
+describe("the navigation entry a route belongs under", () => {
+  it("puts a place under the overview, because it is the overview close up", () => {
+    expect(navigationKeyOf(OVERVIEW)).toBe("overview");
+    expect(navigationKeyOf({ name: "place", placeId: "dir-1" })).toBe("overview");
+  });
+
+  it("puts a fleet under the fleets, and the settings under the settings", () => {
+    expect(navigationKeyOf({ name: "fleet", fleetId: "fleet-1" })).toBe("fleets");
+    expect(navigationKeyOf(SETTINGS)).toBe("settings");
+  });
+
+  it("puts a run under no entry rather than under a wrong one", () => {
+    expect(navigationKeyOf({ name: "run", runId: "run-1" })).toBeNull();
   });
 });

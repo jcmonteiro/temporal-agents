@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { STATUS_LABEL, type WorkItem } from "../domain/work-item";
 import { temporalUrlFor } from "../config/temporal";
+import { addressOf, type Route } from "../platform/route";
 import { Icon } from "./Icon";
 import { StatusDot } from "./StatusDot";
 
@@ -76,26 +77,7 @@ export function WorkItemDetail({ item }: { item: WorkItem }): ReactNode {
           </>
         )}
       </div>
-      {/* The fleet detail view does not exist yet, so this control stays
-          disabled: an enabled button that does nothing is worse than one that
-          says so. Enable it (and add the handler) with the detail view. */}
-      <button
-        style={{
-          marginTop: 4,
-          padding: "8px 12px",
-          borderRadius: "var(--radius-sm)",
-          border: "1px solid var(--color-border-strong)",
-          color: "var(--color-text)",
-          background: "var(--color-surface-2)",
-          fontSize: "var(--font-size-sm)",
-          cursor: "not-allowed",
-          opacity: 0.5,
-        }}
-        disabled
-        title="Fleet details are not available yet"
-      >
-        View Details
-      </button>
+      <ItsOwnPage item={item} />
       <a
         href={temporalUrlFor(item) ?? undefined}
         target="_blank"
@@ -135,3 +117,48 @@ export function WorkItemDetail({ item }: { item: WorkItem }): ReactNode {
   );
 }
 
+/**
+ * The way from a piece of work to the page about it.
+ *
+ * A run and a fleet each have a page; a schedule does not, so for a schedule
+ * the control stays disabled and says why. An enabled control that leads
+ * nowhere is worse than one that admits it.
+ */
+function ItsOwnPage({ item }: { item: WorkItem }): ReactNode {
+  const style = {
+    marginTop: 4,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "8px 12px",
+    borderRadius: "var(--radius-sm)",
+    border: "1px solid var(--color-border-strong)",
+    color: "var(--color-text)",
+    background: "var(--color-surface-2)",
+    fontSize: "var(--font-size-sm)",
+    textDecoration: "none",
+  };
+  const route: Route | null =
+    item.kind === "run"
+      ? { name: "run", runId: item.id }
+      : item.kind === "fleet"
+        ? { name: "fleet", fleetId: item.id }
+        : null;
+  if (route === null) {
+    return (
+      <button
+        type="button"
+        disabled
+        title="A schedule has no page of its own yet"
+        style={{ ...style, cursor: "not-allowed", opacity: 0.5 }}
+      >
+        View details
+      </button>
+    );
+  }
+  return (
+    <a href={addressOf(route)} style={style}>
+      View details
+    </a>
+  );
+}

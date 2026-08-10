@@ -1,17 +1,35 @@
 import type { ReactNode } from "react";
+import { addressOf, navigationKeyOf, OVERVIEW, SETTINGS, useRoute } from "../platform/route";
 
-const ITEMS = [
-  { key: "overview", label: "Overview" },
+/**
+ * The way between the destinations the hub has.
+ *
+ * An entry with a destination is a link, so it is reachable by keyboard, can be
+ * opened in a new tab, and shows where it leads before it is followed. An entry
+ * whose destination does not exist yet is a disabled control that says so: it
+ * keeps the shape of the hub visible without promising a page that is not
+ * there.
+ */
+interface Entry {
+  key: string;
+  label: string;
+  href?: string;
+}
+
+const ENTRIES: Entry[] = [
+  { key: "overview", label: "Overview", href: addressOf(OVERVIEW) },
   { key: "fleets", label: "Fleets" },
   { key: "workflows", label: "Workflows" },
   { key: "templates", label: "Templates" },
   { key: "insights", label: "Insights" },
-  { key: "settings", label: "Settings" },
+  { key: "settings", label: "Settings", href: addressOf(SETTINGS) },
 ];
 
-export function LeftNav({ active = "overview" }: { active?: string }): ReactNode {
+export function LeftNav(): ReactNode {
+  const active = navigationKeyOf(useRoute());
   return (
     <nav
+      aria-label="Sections"
       style={{
         width: 220,
         borderRight: "1px solid var(--color-border)",
@@ -22,36 +40,55 @@ export function LeftNav({ active = "overview" }: { active?: string }): ReactNode
         gap: "var(--space-1)",
       }}
     >
-      {ITEMS.map((it) => {
-        const isActive = it.key === active;
-        return (
+      {ENTRIES.map((entry) => {
+        const isActive = entry.key === active;
+        const style = {
+          display: "flex",
+          alignItems: "center",
+          padding: "8px 12px",
+          borderRadius: "var(--radius-sm)",
+          textAlign: "left" as const,
+          textDecoration: "none",
+          fontSize: "var(--font-size-md)",
+          color: isActive ? "var(--color-text)" : "var(--color-text-muted)",
+          background: isActive ? "var(--color-surface-2)" : "transparent",
+          border: isActive
+            ? "1px solid var(--color-border-strong)"
+            : "1px solid transparent",
+        };
+        return entry.href === undefined ? (
           <button
-            key={it.key}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              padding: "8px 12px",
-              borderRadius: "var(--radius-sm)",
-              textAlign: "left",
-              fontSize: "var(--font-size-md)",
-              color: isActive ? "var(--color-text)" : "var(--color-text-muted)",
-              background: isActive ? "var(--color-surface-2)" : "transparent",
-              border: isActive
-                ? "1px solid var(--color-border-strong)"
-                : "1px solid transparent",
-            }}
+            key={entry.key}
+            type="button"
+            disabled
+            title={`${entry.label} are not built yet`}
+            style={{ ...style, opacity: 0.5, cursor: "not-allowed" }}
           >
-            {it.label}
+            {entry.label}
           </button>
+        ) : (
+          <a
+            key={entry.key}
+            href={entry.href}
+            aria-current={isActive ? "page" : undefined}
+            style={style}
+          >
+            {entry.label}
+          </a>
         );
       })}
       <div style={{ flex: 1 }} />
       <button
+        type="button"
+        disabled
+        title="Help is not built yet"
         style={{
           padding: "8px 12px",
           textAlign: "left",
           color: "var(--color-text-subtle)",
           fontSize: "var(--font-size-sm)",
+          opacity: 0.5,
+          cursor: "not-allowed",
         }}
       >
         ? Help

@@ -70,6 +70,9 @@ it("shows who is signed in, and lets them sign out", async () => {
 });
 
 it("lands on the sign-in page when a session ends mid-use, and stays there", async () => {
+  // Pages are loaded on demand, and that loading is real work no fake clock
+  // drives, so the module is fetched before the clock is frozen.
+  await import("./pages/Overview/OverviewPage");
   vi.useFakeTimers();
   render(<App />);
   await settle();
