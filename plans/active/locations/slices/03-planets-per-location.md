@@ -12,25 +12,25 @@ planet per repository; the unknown planet is always present and never folded.
 
 ## Tasks
 
-- [ ] Extend the client boundary to read the registry and expose it as a keyed
+- [x] Extend the client boundary to read the registry and expose it as a keyed
       structure; components never parse paths and never re-derive grouping.
-- [ ] Model the scene as a **pure function** of (items, registry, view state) →
+- [x] Model the scene as a **pure function** of (items, registry, view state) →
       bodies and placements. No randomness, no time, no mutation of inputs.
-- [ ] Implement **derived folding**: a visible depth follows from the view state;
+- [x] Implement **derived folding**: a visible depth follows from the view state;
       deeper locations render inside their nearest visible ancestor, which reports
       the fold count.
-- [ ] Implement the **legibility override**: a place whose work cannot be drawn
+- [x] Implement the **legibility override**: a place whose work cannot be drawn
       without overlap folds its children regardless of depth and says so.
-- [ ] Implement **collapse-all**, forcing the visible depth to the base ancestor.
-- [ ] Draw a place holding exactly one place and no work of its own **once**.
-- [ ] Order places **stably** and independently of item counts, so the five-second
+- [x] Implement **collapse-all**, forcing the visible depth to the base ancestor.
+- [x] Draw a place holding exactly one place and no work of its own **once**.
+- [x] Order places **stably** and independently of item counts, so the five-second
       refresh does not reshuffle the picture.
-- [ ] Keep selection behaviour for work items; add selection of a **place**, which
+- [x] Keep selection behaviour for work items; add selection of a **place**, which
       fills the detail rail with the place, its work counts by state, and its
       children.
-- [ ] Keep the center a neutral mark that holds no work.
-- [ ] Accessibility: places are focusable and named, folds announce their count.
-- [ ] Component tests: given a fixed registry, assert placements, fold counts at
+- [x] Keep the center a neutral mark that holds no work.
+- [x] Accessibility: places are focusable and named, folds announce their count.
+- [x] Component tests: given a fixed registry, assert placements, fold counts at
       each depth, collapse-all, the single-child rule, the crowded-place override,
       stability across two identical loads, and that the unknown place renders.
 
