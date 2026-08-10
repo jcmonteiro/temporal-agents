@@ -18,6 +18,23 @@ export const MIN_ZOOM = 0.4;
 export const MAX_ZOOM = 3;
 export const ZOOM_STEP = 1.2; // per button press
 
+// Zoom levels at which one more level of places earns a body of its own. The
+// visible depth is derived from the view, never stored: zooming out folds the
+// deeper places into their parents, and zooming back in unfolds them.
+const DEPTH_ZOOM_THRESHOLDS = [0.75, 1.5];
+
+/** The deepest a place may sit and still draw as its own body. */
+export const MAX_VISIBLE_DEPTH = DEPTH_ZOOM_THRESHOLDS.length;
+
+/**
+ * How deep the scene draws places, given the view and the collapse-all option.
+ * Collapse-all forces every place into its base ancestor, which is depth 0.
+ */
+export function visibleDepthFor(view: View, collapseAll: boolean): number {
+  if (collapseAll) return 0;
+  return DEPTH_ZOOM_THRESHOLDS.filter((threshold) => view.k >= threshold).length;
+}
+
 // Wheel zoom sensitivity: multiplier per unit of wheel delta. Small = gentle.
 const WHEEL_ZOOM_SENSITIVITY = 0.0015;
 

@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   clampZoom,
   IDENTITY,
+  MAX_VISIBLE_DEPTH,
   MAX_ZOOM,
   MIN_ZOOM,
   panned,
+  visibleDepthFor,
   wheelZoomFactor,
   zoomedAround,
   type View,
@@ -108,5 +110,28 @@ describe("panning", () => {
 describe("the starting view", () => {
   it("shows the content unmoved and unscaled", () => {
     expect(toScreen(IDENTITY, 450, 320)).toEqual([450, 320]);
+  });
+});
+
+describe("how deep the places are drawn", () => {
+  const at = (k: number): View => ({ x: 0, y: 0, k });
+
+  it("folds the deeper places as the operator zooms out", () => {
+    expect(visibleDepthFor(at(MIN_ZOOM), false)).toBe(0);
+    expect(visibleDepthFor(at(0.5), false)).toBeLessThan(
+      visibleDepthFor(at(MAX_ZOOM), false),
+    );
+  });
+
+  it("draws a place under a place from the starting view on", () => {
+    expect(visibleDepthFor(IDENTITY, false)).toBeGreaterThanOrEqual(1);
+  });
+
+  it("never goes deeper than the deepest level it draws", () => {
+    expect(visibleDepthFor(at(MAX_ZOOM), false)).toBe(MAX_VISIBLE_DEPTH);
+  });
+
+  it("folds everything into its base ancestor when the operator collapses all", () => {
+    expect(visibleDepthFor(at(MAX_ZOOM), true)).toBe(0);
   });
 });
