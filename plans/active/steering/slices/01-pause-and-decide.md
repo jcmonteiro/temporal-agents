@@ -11,27 +11,27 @@ correspondingly; with steering off, the loop behaves exactly as before.
 
 ## Tasks
 
-- [ ] Add the steering unit as a durable child of the review pass: it awaits a decision
+- [x] Add the steering unit as a durable child of the review pass: it awaits a decision
       with **no timeout**, returns the decision and the guidance text, and never
       restarts itself in a way that would change its identity.
-- [ ] Consume the scoped enablement setting, resolved once at the start of the work;
+- [x] Consume the scoped enablement setting, resolved once at the start of the work;
       when off, no steering unit is created and no behaviour changes.
-- [ ] Insert the two pause points, each immediately before the agent acts on review
+- [x] Insert the two pause points, each immediately before the agent acts on review
       material.
-- [ ] Accept the three decisions as signals; **ignore all but the first** and make a
+- [x] Accept the three decisions as signals; **ignore all but the first** and make a
       repeat observable as the recorded decision rather than an error.
-- [ ] Compose the guidance into the agent's input as an additive fenced block, after
+- [x] Compose the guidance into the agent's input as an additive fenced block, after
       the instruction and before the material, through the existing pure composition
       function; no existing section changes.
-- [ ] Refuse a decision that claims guidance but carries none.
-- [ ] Replace the loop's single convergence flag with a **named ending** —
+- [x] Refuse a decision that claims guidance but carries none.
+- [x] Replace the loop's single convergence flag with a **named ending** —
       converged, accepted by a human, stopped by a human, limit reached — keeping the
       existing flag written for compatibility.
-- [ ] Flip the parent run's reported state to "needs input" while a session waits, with
+- [x] Flip the parent run's reported state to "needs input" while a session waits, with
       no new item appearing anywhere.
-- [ ] Record the steering unit's own execution row for token attribution, and exclude
+- [x] Record the steering unit's own execution row for token attribution, and exclude
       its class from overview items.
-- [ ] Tests: workflow tests for each decision path; a repeated decision starts one
+- [x] Tests: workflow tests for each decision path; a repeated decision starts one
       implementation pass; steering-off is byte-identical to today; composition table
       test for the fenced block; replay tests for the new histories.
 
