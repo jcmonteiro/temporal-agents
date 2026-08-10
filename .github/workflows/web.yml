@@ -29,9 +29,13 @@ jobs:
       - uses: actions/checkout@v4
 
       # Single source of truth for the pnpm version: package.json's
-      # "packageManager" field.
+      # "packageManager" field. The path is explicit because
+      # defaults.run.working-directory applies to run steps only, not to
+      # actions, and the repository root holds no package.json.
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
 
       - name: Set up Node
         uses: actions/setup-node@v4
