@@ -275,6 +275,19 @@ describe("the places on the Overview", () => {
     expect(within(selected).queryByText("/srv/checkout")).toBeNull();
   });
 
+  it("leads to the page of the place the operator picked", async () => {
+    api.runs = [aRun({ id: "run-1", locationId: "repo" })];
+    await showOverview();
+
+    fireEvent.click(screen.getByRole("button", { name: "checkout, place, 1 item" }));
+
+    expect(
+      within(railSection("Selected"))
+        .getByRole("link", { name: "Open this place" })
+        .getAttribute("href"),
+    ).toBe("#/places/repo");
+  });
+
   it("keeps the places it draws across a refresh", async () => {
     api.runs = [aRun({ id: "run-1", locationId: "tree" })];
     await showOverviewOnAFakeClock();

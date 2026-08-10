@@ -2,8 +2,11 @@ import type { ReactNode } from "react";
 import { TopBar } from "./components/TopBar";
 import { LeftNav } from "./components/LeftNav";
 import { OverviewPage } from "./pages/Overview/OverviewPage";
+import { PlacePage } from "./pages/Place/PlacePage";
+import { useRoute } from "./platform/route";
 
 export function App(): ReactNode {
+  const route = useRoute();
   return (
     <div
       style={{
@@ -17,7 +20,11 @@ export function App(): ReactNode {
       <TopBar />
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
         <LeftNav active="overview" />
-        <OverviewPage />
+        {route.name === "place" ? (
+          <PlacePage placeId={route.placeId} />
+        ) : (
+          <OverviewPage />
+        )}
       </div>
     </div>
   );
