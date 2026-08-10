@@ -193,6 +193,9 @@ function SelectedItem({ item }: { item: WorkItem }): ReactNode {
           </>
         )}
       </div>
+      {/* The fleet detail view does not exist yet, so this control stays
+          disabled: an enabled button that does nothing is worse than one that
+          says so. Enable it (and add the handler) with the detail view. */}
       <button
         style={{
           marginTop: 4,
@@ -202,8 +205,11 @@ function SelectedItem({ item }: { item: WorkItem }): ReactNode {
           color: "var(--color-text)",
           background: "var(--color-surface-2)",
           fontSize: "var(--font-size-sm)",
+          cursor: "not-allowed",
+          opacity: 0.5,
         }}
-        disabled={item.kind !== "fleet"}
+        disabled
+        title="Fleet details are not available yet"
       >
         View Details
       </button>
