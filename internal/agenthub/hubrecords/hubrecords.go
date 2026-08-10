@@ -271,6 +271,14 @@ func executionFrom(record execstore.Execution) agenthub.Execution {
 			Outcome: nodeOutcomeFrom(node.Status),
 		})
 	}
+	for _, use := range record.Detail.Instructions {
+		e.Instructions = append(e.Instructions, agenthub.InstructionUse{
+			Key:     use.Key,
+			Scope:   use.Scope,
+			Version: use.Version,
+			Hash:    use.Hash,
+		})
+	}
 	return e
 }
 

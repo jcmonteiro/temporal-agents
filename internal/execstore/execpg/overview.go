@@ -257,6 +257,12 @@ func preserveExecutionFacts(target *execstore.Execution, source execstore.Execut
 		target.Detail.Directory = source.Detail.Directory
 		target.Detail.Repository = source.Detail.Repository
 	}
+	// The instructions are resolved once per unit of work and travel across
+	// continue-as-new, so they are a fact about the chain: an iteration that recorded
+	// none must not hide the ones an earlier iteration ran under.
+	if len(target.Detail.Instructions) == 0 {
+		target.Detail.Instructions = source.Detail.Instructions
+	}
 }
 
 func kindSet(kinds []execstore.Kind) map[execstore.Kind]bool {

@@ -447,7 +447,15 @@ func (s *Service) Run(ctx context.Context, id string) (Run, error) {
 		}
 		chains = []resolvedChain{{Execution: chain, Iterations: 1}}
 	}
-	return runFrom(chains[0])
+	run, err := runFrom(chains[0])
+	if err != nil {
+		return Run{}, err
+	}
+	// Who started it is asked for one run and never for a collection: it is a fact
+	// a person reads on a run's own page, and one query per listed run would make an
+	// overview pay for it.
+	run.StartedBy = s.startedBy(ctx, run.ID)
+	return run, nil
 }
 
 // Schedules returns the schedule satellites: one per schedule, whatever its runs
@@ -996,6 +1004,12 @@ func merge(chains map[string]Execution, iterations map[string]int, e Execution) 
 	if len(newest.NodeOutcomes) == 0 {
 		newest.NodeOutcomes = older.NodeOutcomes
 	}
+	// The instructions are a fact about the chain too: they are resolved once per
+	// unit of work and travel across continue-as-new, so an iteration that recorded
+	// none must not erase what a sibling recorded.
+	if len(newest.Instructions) == 0 {
+		newest.Instructions = older.Instructions
+	}
 	chains[e.WorkflowID] = newest
 }
 
@@ -1028,16 +1042,17 @@ func runFrom(chain resolvedChain) (Run, error) {
 		return Run{}, err
 	}
 	return Run{
-		ID:         chain.WorkflowID,
-		Running:    chain.Running(),
-		Type:       runType(chain.Class),
-		Label:      chain.Label,
-		Status:     chain.Outcome.WorkStatus(),
-		StartedAt:  chain.StartedAt,
-		EndedAt:    chain.EndedAt,
-		Iterations: max(chain.Iterations, 1),
-		Tokens:     chain.Tokens,
-		Location:   location,
+		ID:           chain.WorkflowID,
+		Running:      chain.Running(),
+		Type:         runType(chain.Class),
+		Label:        chain.Label,
+		Status:       chain.Outcome.WorkStatus(),
+		StartedAt:    chain.StartedAt,
+		EndedAt:      chain.EndedAt,
+		Iterations:   max(chain.Iterations, 1),
+		Tokens:       chain.Tokens,
+		Location:     location,
+		Instructions: chain.Instructions,
 	}, nil
 }
 

@@ -326,6 +326,13 @@ type Run struct {
 	Tokens int
 	// Location is where the run runs.
 	Location Location
+	// StartedBy identifies who started the run from the hub, and is empty for a run
+	// started from the command line or by a schedule: the hub records who asked, and
+	// never invents an operator for work nobody asked it for.
+	StartedBy string
+	// Instructions is which stored instruction the run resolved for each governed
+	// key, so "which instruction produced this" stays answerable.
+	Instructions []InstructionUse
 }
 
 // Dismissible reports whether the run may be dismissed from the overview.

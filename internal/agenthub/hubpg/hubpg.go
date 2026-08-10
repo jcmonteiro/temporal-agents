@@ -263,6 +263,25 @@ func (d *Store) LaunchOf(ctx context.Context, requestID string) (agenthub.Launch
 	return launch, nil
 }
 
+// launchOfRunSQL reads what started one execution.
+const launchOfRunSQL = `
+SELECT request_id, workflow_id, kind, directory, prompt, started_at, started_by
+FROM launches
+WHERE workflow_id = $1`
+
+// LaunchOfRun implements agenthub.LaunchStore, reporting agenthub.ErrNotFound for
+// work this hub did not start.
+func (d *Store) LaunchOfRun(ctx context.Context, workflowID string) (agenthub.Launch, error) {
+	launch, err := scanLaunch(d.pool.QueryRow(ctx, launchOfRunSQL, workflowID))
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return agenthub.Launch{}, agenthub.ErrNotFound
+	case err != nil:
+		return agenthub.Launch{}, fmt.Errorf("read what started this run: %w", err)
+	}
+	return launch, nil
+}
+
 // scanLaunch reads one launch row.
 func scanLaunch(row pgx.Row) (agenthub.Launch, error) {
 	var launch agenthub.Launch

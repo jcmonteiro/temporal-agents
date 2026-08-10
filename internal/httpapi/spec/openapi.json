@@ -1720,6 +1720,17 @@
           "locationId": {
             "$ref": "#/components/schemas/LocationID",
             "description": "The place this item runs, resolved against the response's locations registry."
+          },
+          "startedBy": {
+            "type": "string",
+            "description": "Who started the run from the hub, absent for a run started from the command line or fired by a schedule. Published in the single-run representation only."
+          },
+          "instructions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstructionUse"
+            },
+            "description": "Which stored instruction the run resolved for each governed key. Published in the single-run representation only."
           }
         }
       },
@@ -2646,6 +2657,34 @@
           },
           "locations": {
             "$ref": "#/components/schemas/LocationRegistry"
+          }
+        }
+      },
+      "InstructionUse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "scope",
+          "version"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The governed instruction, e.g. \"review.perform\"."
+          },
+          "scope": {
+            "type": "string",
+            "description": "Where the value that won came from: \"global\", \"factory\", or \"directory:<path>\"."
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Which version of that key and scope answered, or 0 when the value the build ships did."
+          },
+          "hash": {
+            "type": "string",
+            "description": "The content hash of the text that was used, so the naming is verifiable. The text itself is deliberately not published here."
           }
         }
       }

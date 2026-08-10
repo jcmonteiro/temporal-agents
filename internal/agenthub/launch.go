@@ -148,6 +148,10 @@ type LaunchStore interface {
 	Launch(ctx context.Context, launch Launch) (Launch, error)
 	// LaunchOf returns the launch one request identity produced, or ErrNotFound.
 	LaunchOf(ctx context.Context, requestID string) (Launch, error)
+	// LaunchOfRun returns the launch that started one execution, or ErrNotFound for
+	// work the hub did not start. It is how a run answers "who started this" without
+	// the answer having to travel in the workflow's own input.
+	LaunchOfRun(ctx context.Context, workflowID string) (Launch, error)
 }
 
 // Launch is one recorded start.
@@ -425,4 +429,18 @@ func classOf(kind StartKind) wfid.Class {
 	default:
 		return ""
 	}
+}
+
+// startedBy reports who started one run from the hub, and empty for a run the hub
+// did not start — one begun from the command line, or fired by a schedule.
+//
+// A launch store that cannot answer is not allowed to hide the run: attribution is
+// provenance about the run, and a run reported without it is still the truth about
+// the work, while no run at all is not.
+func (s *Service) startedBy(ctx context.Context, workflowID string) string {
+	launch, err := s.deps.Launches.LaunchOfRun(ctx, workflowID)
+	if err != nil {
+		return ""
+	}
+	return launch.StartedBy
 }

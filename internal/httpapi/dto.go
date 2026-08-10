@@ -279,9 +279,35 @@ type runResource struct {
 	Dismissible bool `json:"dismissible"`
 	// LocationID references the place the run runs.
 	LocationID string `json:"locationId"`
+	// StartedBy identifies who started the run from the hub. It is absent for a run
+	// started from the command line or fired by a schedule: the hub records who
+	// asked, and invents no operator for work nobody asked it for. Like the
+	// instructions below, it is published only in the single-run representation,
+	// where a person reads it.
+	StartedBy string `json:"startedBy,omitempty"`
+	// Instructions is which stored instruction the run resolved for each governed
+	// key, so "which instruction produced this" stays answerable.
+	Instructions []instructionUseResource `json:"instructions,omitempty"`
 	// Locations is the registry this resource's references resolve against, present
 	// only in the single-run representation.
 	Locations []locationResource `json:"locations,omitempty"`
+}
+
+// instructionUseResource is one instruction a run ran under. The text is absent by
+// design: the version is named, not copied, so a record cannot drift from the
+// instruction it claims to have used.
+type instructionUseResource struct {
+	// Key is the governed instruction ("review.perform").
+	Key string `json:"key"`
+	// Scope is where the value that won came from ("global", "factory",
+	// "directory:<path>").
+	Scope string `json:"scope"`
+	// Version is which version of that key and scope answered, or 0 when the value
+	// the build ships did because storage held none.
+	Version int `json:"version"`
+	// Hash is the content hash of the text that was used, so the naming is
+	// verifiable.
+	Hash string `json:"hash,omitempty"`
 }
 
 // scheduleResource is one schedule. It carries no progress: a schedule is
@@ -437,6 +463,15 @@ func runFrom(run agenthub.Run, withRegistry bool) runResource {
 		LocationID:  run.Location.ID(),
 	}
 	if withRegistry {
+		// The single-run representation is what a person reads about one run, so it is
+		// the one that carries the provenance: a collection would grow with facts no
+		// overview shows.
+		resource.StartedBy = run.StartedBy
+		for _, use := range run.Instructions {
+			resource.Instructions = append(resource.Instructions, instructionUseResource{
+				Key: use.Key, Scope: use.Scope, Version: use.Version, Hash: use.Hash,
+			})
+		}
 		resource.Locations = locationsFrom(agenthub.NewLocationRegistry(run.Location))
 	}
 	return resource

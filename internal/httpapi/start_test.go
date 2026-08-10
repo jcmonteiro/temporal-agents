@@ -212,3 +212,60 @@ func TestTheStartSurfaceIsNotReachedThroughTheReadPort(t *testing.T) {
 		t.Fatal("unreachable")
 	}
 }
+
+func TestOneRunExplainsItselfWithItsProvenance(t *testing.T) {
+	view := &viewStub{runs: []agenthub.Run{{
+		ID: "develop-1", Type: agenthub.RunTypeDevelop, Label: "make the flaky test pass",
+		Status: agenthub.StatusDone, Iterations: 2, StartedBy: "https://issuer.test|operator-1",
+		Instructions: []agenthub.InstructionUse{
+			{Key: "review.perform", Scope: "directory:/srv/repos/pricing", Version: 3, Hash: "abc123"},
+		},
+	}}}
+	server := newTestServer(t, view)
+
+	response := request(t, server, http.MethodGet, BasePath+"/runs/develop-1", nil)
+
+	var run map[string]any
+	decodeResponse(t, response, &run)
+	if run["startedBy"] != "https://issuer.test|operator-1" {
+		t.Errorf("startedBy = %v, want who started it", run["startedBy"])
+	}
+	instructions, ok := run["instructions"].([]any)
+	if !ok || len(instructions) != 1 {
+		t.Fatalf("instructions = %v, want the one the run used", run["instructions"])
+	}
+	used, _ := instructions[0].(map[string]any)
+	for key, want := range map[string]any{
+		"key": "review.perform", "scope": "directory:/srv/repos/pricing", "version": float64(3),
+	} {
+		if used[key] != want {
+			t.Errorf("instruction %s = %v, want %v", key, used[key], want)
+		}
+	}
+	// The text is named, never copied: a record that carried it would drift from
+	// the version it claims.
+	if _, carried := used["text"]; carried {
+		t.Error("the instruction's text travels with the run")
+	}
+}
+
+func TestTheRunCollectionDoesNotGrowWithProvenanceNobodyReadsThere(t *testing.T) {
+	view := &viewStub{runs: []agenthub.Run{{
+		ID: "develop-1", Type: agenthub.RunTypeDevelop, Label: "make the flaky test pass",
+		Status: agenthub.StatusDone, StartedBy: "https://issuer.test|operator-1",
+		Instructions: []agenthub.InstructionUse{{Key: "review.perform", Scope: "factory"}},
+	}}}
+	server := newTestServer(t, view)
+
+	response := request(t, server, http.MethodGet, BasePath+"/runs", nil)
+
+	var collection struct {
+		Items []map[string]any `json:"items"`
+	}
+	decodeResponse(t, response, &collection)
+	for _, key := range []string{"startedBy", "instructions"} {
+		if _, carried := collection.Items[0][key]; carried {
+			t.Errorf("the run collection carries %q, which only a run's own page shows", key)
+		}
+	}
+}

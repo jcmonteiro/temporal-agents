@@ -534,6 +534,7 @@ func limitedChains(groups map[string][]agenthub.Execution, limit int) []agenthub
 	for _, executions := range groups {
 		chain := agenthub.ExecutionChain{Iterations: len(executions)}
 		var place agenthub.RecordedPlace
+		var instructions []agenthub.InstructionUse
 		for _, e := range executions {
 			chain.Tokens += e.Tokens
 			if chain.StartedAt.IsZero() || e.StartedAt.Before(chain.StartedAt) {
@@ -541,6 +542,9 @@ func limitedChains(groups map[string][]agenthub.Execution, limit int) []agenthub
 			}
 			if !place.Recorded() {
 				place = e.Place
+			}
+			if len(instructions) == 0 {
+				instructions = e.Instructions
 			}
 			if chain.Latest.WorkflowID == "" || e.StartedAt.After(chain.Latest.StartedAt) ||
 				e.StartedAt.Equal(chain.Latest.StartedAt) && e.RunID > chain.Latest.RunID {
@@ -550,9 +554,13 @@ func limitedChains(groups map[string][]agenthub.Execution, limit int) []agenthub
 		chain.Latest.StartedAt = chain.StartedAt
 		chain.Latest.Tokens = chain.Tokens
 		// A place is a fact about the chain: an iteration that recorded none must not
-		// hide the one an earlier iteration established.
+		// hide the one an earlier iteration established. The instructions are the same
+		// kind of fact, resolved once per unit of work.
 		if !chain.Latest.Place.Recorded() {
 			chain.Latest.Place = place
+		}
+		if len(chain.Latest.Instructions) == 0 {
+			chain.Latest.Instructions = instructions
 		}
 		chains = append(chains, chain)
 	}
@@ -701,6 +709,21 @@ func (s *Source) Launch(_ context.Context, launch agenthub.Launch) (agenthub.Lau
 	}
 	s.launches[launch.RequestID] = launch
 	return launch, nil
+}
+
+// LaunchOfRun implements agenthub.LaunchStore.
+func (s *Source) LaunchOfRun(_ context.Context, workflowID string) (agenthub.Launch, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return agenthub.Launch{}, s.err
+	}
+	for _, launch := range s.launches {
+		if launch.WorkflowID == workflowID {
+			return launch, nil
+		}
+	}
+	return agenthub.Launch{}, agenthub.ErrNotFound
 }
 
 // LaunchOf implements agenthub.LaunchStore.

@@ -219,6 +219,14 @@ Schedule-fired runs are represented by their schedule. Child workflows are
 represented by their parent. They are excluded from `/runs` to avoid showing the
 same work twice.
 
+`GET /api/v1/runs/{id}` additionally carries the run's **provenance**: `startedBy`,
+which names who started it *from the hub* and is absent for a run begun on the
+command line or fired by a schedule, and `instructions`, which names the stored
+instruction the run resolved for each governed key (`key`, `scope`, `version`,
+`hash`). The instruction's text is deliberately not published there: a record that
+carried it would drift from the version it claims to be. Neither field is on the run
+collection, which no consumer reads them from.
+
 ### Schedule model
 
 A schedule resource is identified by schedule ID. Its status is:

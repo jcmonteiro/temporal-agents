@@ -68,11 +68,35 @@ type Execution struct {
 	// record has and which is the sole home of a skipped node's outcome: a skipped
 	// node starts no execution, so it has none of its own.
 	NodeOutcomes []NodeOutcome
+	// Instructions is which stored instruction each governed key of this execution
+	// resolved to. Only the durable record has it, and it is empty for an execution
+	// that resolves none — and for one that ran before instructions were stored.
+	Instructions []InstructionUse
 	// Place is what was recorded about where the execution ran. Only the durable
 	// record has it — the orchestrator knows what is running, not where — and it is
 	// the zero value for an execution whose place was never established, which the
 	// core reads as the unknown place.
 	Place RecordedPlace
+}
+
+// InstructionUse is one instruction a unit of work ran under: which governed
+// instruction, where the value that won came from, and which version of it.
+//
+// The text is deliberately absent. "Which instruction produced this" is answered by
+// naming the version, not by copying it: a copy would grow every record with the
+// text it used and would drift from the version it claims to be. The hash makes the
+// naming verifiable.
+type InstructionUse struct {
+	// Key is the governed instruction ("review.perform").
+	Key string
+	// Scope is where the value that won came from ("global", "factory",
+	// "directory:<path>").
+	Scope string
+	// Version is which version of that key and scope was used, or 0 when the value
+	// the build ships answered because storage held none.
+	Version int
+	// Hash is the content hash of the instruction text that was used.
+	Hash string
 }
 
 // Running reports whether the execution has not settled.

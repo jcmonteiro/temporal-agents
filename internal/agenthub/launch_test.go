@@ -246,3 +246,75 @@ func TestAnUnreachableOrchestratorIsReportedAsSuchAndRecordsNothing(t *testing.T
 	require.ErrorIs(t, err, agenthub.ErrUnavailable,
 		"a dependency that is down is not the operator's mistake")
 }
+
+func TestARunStartedFromTheHubSaysWhoStartedIt(t *testing.T) {
+	source := agenthubtest.New()
+	service := newService(t, source)
+	place := aRegisteredPlace(t, service, source, "/srv/repos/pricing")
+	started, err := service.StartWork(context.Background(), agenthub.StartRequest{
+		RequestID: "request-1",
+		Kind:      agenthub.StartDevelop,
+		PlaceID:   place.ID(),
+		Prompt:    "make the flaky test pass",
+		StartedBy: "https://issuer.test|operator-1",
+	})
+	require.NoError(t, err)
+	recorded := agenthubtest.Run(started.RunID, "make the flaky test pass",
+		agenthub.OutcomeRunning, ago(time.Minute))
+	recorded.Place = agenthub.RecordedPlace{Directory: "/srv/repos/pricing"}
+	source.WithRecorded(recorded).WithRunning(recorded)
+
+	run, err := service.Run(context.Background(), started.RunID)
+
+	require.NoError(t, err)
+	require.Equal(t, "https://issuer.test|operator-1", run.StartedBy)
+}
+
+func TestARunTheHubDidNotStartClaimsNobody(t *testing.T) {
+	// Work begun from the command line, or fired by a schedule, was asked for by
+	// nobody here. Naming an operator for it would be an invention.
+	source := agenthubtest.New()
+	recorded := agenthubtest.Run("develop-"+uuidLike("84"), "yesterday's pass",
+		agenthub.OutcomeSucceeded, ago(time.Hour))
+	recorded.Place = agenthub.RecordedPlace{Directory: "/srv/repos/pricing"}
+	source.WithRecorded(recorded)
+
+	run, err := newService(t, source).Run(context.Background(), recorded.WorkflowID)
+
+	require.NoError(t, err)
+	require.Empty(t, run.StartedBy)
+}
+
+func TestARunReportsTheInstructionItRanUnder(t *testing.T) {
+	source := agenthubtest.New()
+	recorded := agenthubtest.Run("develop-"+uuidLike("85"), "yesterday's pass",
+		agenthub.OutcomeSucceeded, ago(time.Hour))
+	recorded.Instructions = []agenthub.InstructionUse{
+		{Key: "review.perform", Scope: "directory:/srv/repos/pricing", Version: 3, Hash: "abc123"},
+	}
+	source.WithRecorded(recorded)
+
+	run, err := newService(t, source).Run(context.Background(), recorded.WorkflowID)
+
+	require.NoError(t, err)
+	require.Equal(t, recorded.Instructions, run.Instructions,
+		"which instruction produced a run must stay answerable")
+}
+
+func TestAChainKeepsTheInstructionAnEarlierIterationRecorded(t *testing.T) {
+	// The instructions are resolved once per unit of work and travel across
+	// continue-as-new, so a later iteration that recorded none must not erase them.
+	source := agenthubtest.New()
+	id := "develop-" + uuidLike("86")
+	first := agenthubtest.Run(id, "the pass", agenthub.OutcomeSucceeded, ago(3*time.Hour))
+	first.RunID = "iteration-1"
+	first.Instructions = []agenthub.InstructionUse{{Key: "review.perform", Scope: "factory", Version: 1}}
+	latest := agenthubtest.Run(id, "the pass", agenthub.OutcomeSucceeded, ago(time.Hour))
+	latest.RunID = "iteration-2"
+	source.WithRecorded(first, latest)
+
+	run, err := newService(t, source).Run(context.Background(), id)
+
+	require.NoError(t, err)
+	require.Equal(t, first.Instructions, run.Instructions)
+}
