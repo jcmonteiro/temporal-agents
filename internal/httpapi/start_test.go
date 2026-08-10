@@ -127,14 +127,16 @@ func TestAStartCarriesTheRequestIdentityAndThePrincipalToTheCore(t *testing.T) {
 
 func TestARefusedStartReadsAsWhatItIs(t *testing.T) {
 	cases := map[string]struct {
-		err    error
-		status int
-		code   problemCode
-		detail string
+		err      error
+		status   int
+		code     problemCode
+		detail   string
+		conflict string
 	}{
 		"work is already running there": {
-			err:    fmt.Errorf("%w: develop-9 is already running in pricing", agenthub.ErrPlaceIsBusy),
+			err:    agenthub.PlaceIsBusy{RunID: "develop-9", Place: "pricing"},
 			status: http.StatusConflict, code: codePlaceIsBusy, detail: "develop-9",
+			conflict: "develop-9",
 		},
 		"the place is not one the hub knows": {
 			err:    fmt.Errorf("%w: this hub knows no place \"invented\" to work in", agenthub.ErrInvalid),
@@ -155,6 +157,11 @@ func TestARefusedStartReadsAsWhatItIs(t *testing.T) {
 
 			if tc.detail != "" && !strings.Contains(problem.Detail, tc.detail) {
 				t.Errorf("detail = %q, want it to name %q", problem.Detail, tc.detail)
+			}
+			// A surface that offers to take the operator to the work in the way must
+			// not have to read its identity out of a sentence.
+			if problem.ConflictingRunID != tc.conflict {
+				t.Errorf("conflictingRunId = %q, want %q", problem.ConflictingRunID, tc.conflict)
 			}
 		})
 	}

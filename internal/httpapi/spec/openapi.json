@@ -2157,6 +2157,10 @@
           "requestId": {
             "type": "string",
             "format": "uuid"
+          },
+          "conflictingRunId": {
+            "type": "string",
+            "description": "The work a refusal collided with, present only where it collided with something. It is an extension member, so a consumer can link to what is in the way instead of reading an identity out of the detail."
           }
         }
       },

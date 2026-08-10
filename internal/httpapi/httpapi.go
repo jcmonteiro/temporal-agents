@@ -777,8 +777,11 @@ func (s *Server) writeServiceProblem(w http.ResponseWriter, r *http.Request, err
 			"only an item that has finished can be dismissed")
 	case errors.Is(err, agenthub.ErrPlaceIsBusy):
 		// The request is fine and will succeed once the work in that place settles, so
-		// the detail names what it collided with.
-		s.writeProblem(w, r, codePlaceIsBusy, err.Error())
+		// the refusal names what it collided with — in the sentence for a person, and
+		// as an identity for the surface that offers to take them there.
+		var busy agenthub.PlaceIsBusy
+		errors.As(err, &busy)
+		s.writeProblemAbout(w, r, codePlaceIsBusy, err.Error(), busy.RunID)
 	case errors.Is(err, agenthub.ErrNoSuchDirectory), errors.Is(err, agenthub.ErrNotARepository):
 		// The request is well formed; the machine it names does not hold what it says.
 		// The detail names the mistake, because "no such directory" and "no repository

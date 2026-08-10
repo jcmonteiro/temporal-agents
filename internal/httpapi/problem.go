@@ -221,6 +221,11 @@ type problemDocument struct {
 	// request, which is how a consumer reports a problem without the server having
 	// to disclose its internals in the response.
 	RequestID string `json:"requestId,omitempty"`
+	// ConflictingRunID names the work a refusal collided with, where a refusal
+	// collided with something. It is an extension member (RFC 9457 allows them), and
+	// it exists so a consumer can link to what is in the way instead of reading the
+	// identity out of a sentence written for a person.
+	ConflictingRunID string `json:"conflictingRunId,omitempty"`
 }
 
 // problemTypeURI is the URI a problem code resolves to: the catalogue entry for that
@@ -233,6 +238,12 @@ func (s *Server) problemTypeURI(code problemCode) string {
 // consumer-facing explanation; anything the consumer must not see belongs in the log
 // instead (see logProblem).
 func (s *Server) writeProblem(w http.ResponseWriter, r *http.Request, code problemCode, detail string) {
+	s.writeProblemAbout(w, r, code, detail, "")
+}
+
+// writeProblemAbout answers with a problem document that also names the resource the
+// refusal is about, for the refusals that collide with one.
+func (s *Server) writeProblemAbout(w http.ResponseWriter, r *http.Request, code problemCode, detail, conflictingRunID string) {
 	kind, ok := problemTypes[code]
 	if !ok {
 		// A code that is not in the catalogue is itself a defect; report the generic
@@ -246,6 +257,8 @@ func (s *Server) writeProblem(w http.ResponseWriter, r *http.Request, code probl
 		Detail:    detail,
 		Instance:  r.URL.EscapedPath(),
 		RequestID: requestIDFrom(r.Context()),
+
+		ConflictingRunID: conflictingRunID,
 	}
 	body, err := json.Marshal(document)
 	if err != nil {

@@ -33,6 +33,25 @@ import (
 // is wrong, and the same request will succeed once the running work settles.
 var ErrPlaceIsBusy = errors.New("work is already running in this place")
 
+// PlaceIsBusy is the refusal itself: it reads as a sentence and carries the
+// identity of the work in the way, so a consumer can lead an operator to it rather
+// than parse it out of a message written for a person.
+type PlaceIsBusy struct {
+	// RunID is the work already running there.
+	RunID string
+	// Place is what to call the place, for the sentence.
+	Place string
+}
+
+// Error implements error.
+func (e PlaceIsBusy) Error() string {
+	return fmt.Sprintf("%s: %s is already running in %s", ErrPlaceIsBusy, e.RunID, e.Place)
+}
+
+// Is makes the refusal match the sentinel, so a caller that only wants to know
+// "was it busy?" does not have to know this type exists.
+func (e PlaceIsBusy) Is(target error) bool { return target == ErrPlaceIsBusy }
+
 // StartKind is what may be started. It is a closed set, and deliberately smaller
 // than what the CLI offers: a fleet needs its plan approved and a schedule needs a
 // recurrence, and neither is a decision this surface can carry.
@@ -235,8 +254,7 @@ func (s *Service) StartWork(ctx context.Context, request StartRequest) (StartedW
 			"%w: %s is not a working tree, so nothing can be started in it", ErrInvalid, place.Label())
 	}
 	if conflict, busy := known.runningIn(place.ID()); busy {
-		return StartedWork{}, fmt.Errorf("%w: %s is already running in %s",
-			ErrPlaceIsBusy, conflict, place.Label())
+		return StartedWork{}, PlaceIsBusy{RunID: conflict, Place: place.Label()}
 	}
 	workflowID, minted := wfid.ForRequest(classOf(request.Kind), request.RequestID)
 	if !minted {

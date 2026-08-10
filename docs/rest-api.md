@@ -354,8 +354,9 @@ Three rules are the server's, and none of them is the client's to remember:
   intent, not per attempt.
 - **Work that would collide is refused** with `409` (`place-is-busy`), naming what is
   already running there: two loops in one working tree stash and commit over each
-  other. A linked worktree is a place of its own, so work in it does not make its
-  repository busy.
+  other. The problem document carries `conflictingRunId`, so a consumer links to the
+  work in the way instead of parsing the detail. A linked worktree is a place of its
+  own, so work in it does not make its repository busy.
 
 What may be started is `develop` (with a `prompt`) and `review` (without one). A
 fleet needs its plan approved and a schedule a recurrence, so neither is started
