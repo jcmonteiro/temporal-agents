@@ -50,6 +50,9 @@ const (
 	modelDismissal            = "dismissal.v1"
 	modelDismissalCollection  = "dismissal-collection.v1"
 	modelDismissalRequest     = "dismissal-request.v1"
+	modelPlace                = "place.v1"
+	modelPlaceCollection      = "place-collection.v1"
+	modelPlaceRequest         = "place-request.v1"
 	modelSetting              = "setting.v1"
 	modelSettingCollection    = "setting-collection.v1"
 	modelSession              = "session.v1"
@@ -72,6 +75,9 @@ var modelSchemas = map[string]string{
 	modelDismissal:            "Dismissal",
 	modelDismissalCollection:  "DismissalCollection",
 	modelDismissalRequest:     "DismissalRequest",
+	modelPlace:                "Place",
+	modelPlaceCollection:      "PlaceCollection",
+	modelPlaceRequest:         "PlaceRegistrationRequest",
 	modelSetting:              "Setting",
 	modelSettingCollection:    "SettingCollection",
 	modelSession:              "Session",
@@ -383,6 +389,7 @@ func (s *Server) handleServiceDescription(w http.ResponseWriter, r *http.Request
 			{Name: "runs", Href: s.basePath + "/runs", Methods: []string{"GET"}, Schema: s.schemaURI(modelRunCollection)},
 			{Name: "schedules", Href: s.basePath + "/schedules", Methods: []string{"GET"}, Schema: s.schemaURI(modelScheduleCollection)},
 			{Name: "dismissals", Href: s.basePath + "/dismissals", Methods: []string{"GET", "POST"}, Schema: s.schemaURI(modelDismissalCollection)},
+			{Name: "places", Href: s.basePath + "/places", Methods: []string{"GET", "POST"}, Schema: s.schemaURI(modelPlaceCollection)},
 			{Name: "settings", Href: s.basePath + "/settings", Methods: []string{"GET"}, Schema: s.schemaURI(modelSettingCollection)},
 		},
 		"vocabularies": map[string]any{

@@ -86,6 +86,25 @@ type WorkView interface {
 	Undismiss(ctx context.Context, kind agenthub.ItemKind, itemID string) error
 }
 
+// PlaceView is the surface that answers "where may the hub work?", and the one
+// mutation that changes the answer.
+//
+// It is a driving port of its own, next to the work view rather than inside it,
+// because registering a place is a write against the operator's machine and not a
+// read of work. A deployment that publishes no place registry serves no places
+// resource at all, exactly as one with no identity provider serves no sign-in
+// routes.
+//
+// *agenthub.Service implements it.
+type PlaceView interface {
+	// RegisteredPlaces returns the places an operator registered, whether or not any
+	// work has ever run in them.
+	RegisteredPlaces(ctx context.Context) ([]agenthub.RegisteredPlace, error)
+	// RegisterPlace records that the hub may work in a directory, and returns the
+	// place it registered. It is idempotent on the place the directory resolves to.
+	RegisterPlace(ctx context.Context, directory, by string) (agenthub.RegisteredPlace, error)
+}
+
 // SettingsView is the read the configuration surface answers from: what every
 // governed setting is, and where each answer came from.
 //
@@ -157,6 +176,10 @@ type Options struct {
 	// path, for local convenience. The API itself never depends on it: the same bundle
 	// can be served by anything else without the API changing.
 	WebDir string
+	// Places is the registry of where the hub may work, and the write that adds to
+	// it. It is nil for a deployment that publishes no registry, which then serves no
+	// places resource.
+	Places PlaceView
 	// Settings is the read of what the tool is configured to do. It is nil for a
 	// deployment that publishes no configuration, which then serves no settings
 	// resource, exactly as a deployment with no identity provider serves no sign-in
@@ -189,6 +212,7 @@ type Server struct {
 	signIn          SignIn
 	secureCookies   bool
 	webDir          string
+	places          PlaceView
 	settings        SettingsView
 	healthChecks    []HealthCheck
 	deprecatedSince time.Time
@@ -225,6 +249,7 @@ func New(view WorkView, options Options) (*Server, error) {
 		signIn:          options.SignIn,
 		secureCookies:   options.SecureCookies,
 		webDir:          options.WebDir,
+		places:          options.Places,
 		settings:        options.Settings,
 		healthChecks:    options.HealthChecks,
 		deprecatedSince: options.DeprecatedSince,
@@ -325,6 +350,15 @@ func (s *Server) resources() []resource {
 			methods:      map[string]http.HandlerFunc{http.MethodGet: s.handleAPICatalog},
 			undocumented: true,
 		},
+	}
+	if s.places != nil {
+		list = append(list, resource{
+			pattern: s.basePath + "/places",
+			methods: map[string]http.HandlerFunc{
+				http.MethodGet:  s.handlePlaces,
+				http.MethodPost: s.handleRegisterPlace,
+			},
+		})
 	}
 	if s.settings != nil {
 		list = append(list, resource{
@@ -559,6 +593,51 @@ func (s *Server) handleUndismiss(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handlePlaces answers where the hub may work: the places an operator registered,
+// whether or not anything has ever run in them.
+//
+// The registry is the whole point of the read, so it carries the same registry every
+// work collection does: a consumer resolves a place's label, its path and its parent
+// the one way, wherever it read the reference.
+func (s *Server) handlePlaces(w http.ResponseWriter, r *http.Request) {
+	places, err := s.places.RegisteredPlaces(r.Context())
+	if err != nil {
+		s.writeServiceProblem(w, r, err)
+		return
+	}
+	items := make([]placeResource, 0, len(places))
+	locations := make([]agenthub.Location, 0, len(places))
+	for _, place := range places {
+		items = append(items, placeFrom(place, false))
+		locations = append(locations, place.Location)
+	}
+	s.writeJSON(w, r, http.StatusOK, modelPlaceCollection,
+		newLocatedCollection(items, len(items), agenthub.NewLocationRegistry(locations...)))
+}
+
+// handleRegisterPlace records that the hub may work in a directory.
+//
+// It answers 201 for a place that was already registered too. The registration's
+// identity is the place the directory resolves to, so a retried request, a double
+// click and a second operator all address the same resource; answering a conflict
+// would report a problem where there is none.
+func (s *Server) handleRegisterPlace(w http.ResponseWriter, r *http.Request) {
+	var request placeRegistrationRequest
+	if !s.decodeJSONBody(w, r, &request) {
+		return
+	}
+	by := ""
+	if principal, ok := PrincipalFrom(r.Context()); ok {
+		by = principal.ID()
+	}
+	place, err := s.places.RegisterPlace(r.Context(), request.Directory, by)
+	if err != nil {
+		s.writeServiceProblem(w, r, err)
+		return
+	}
+	s.writeJSON(w, r, http.StatusCreated, modelPlace, placeFrom(place, true))
+}
+
 // handleSettings answers what the tool is configured to do, and where each answer
 // came from. It is a read of configuration, not of work, so it carries no location
 // registry: a setting resolved for one place arrives with the surface that addresses
@@ -637,6 +716,12 @@ func (s *Server) writeServiceProblem(w http.ResponseWriter, r *http.Request, err
 	case errors.Is(err, agenthub.ErrNotDismissible):
 		s.writeProblem(w, r, codeNotDismissible,
 			"only an item that has finished can be dismissed")
+	case errors.Is(err, agenthub.ErrNoSuchDirectory), errors.Is(err, agenthub.ErrNotARepository):
+		// The request is well formed; the machine it names does not hold what it says.
+		// The detail names the mistake, because "no such directory" and "no repository
+		// holds it" have different fixes, and the consumer sent the path it is told
+		// about.
+		s.writeProblem(w, r, codeNotAPlace, err.Error())
 	case errors.Is(err, agenthub.ErrInvalid):
 		s.writeProblem(w, r, codeInvalidRequest, err.Error())
 	case errors.Is(err, agenthub.ErrInvalidLocation):

@@ -6,12 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -185,6 +187,9 @@ func newTestServer(t *testing.T, view WorkView, mutate ...func(*Options)) *Serve
 		// the default test server has one: a resource served by production and by no test
 		// would be a resource nothing keeps honest.
 		Settings: settingsStub{},
+		// The same reasoning applies to the place registry: a deployment that can be
+		// worked in publishes it, so the default test server does too.
+		Places: &placesStub{},
 	}
 	for _, change := range mutate {
 		change(&options)
@@ -1691,4 +1696,47 @@ type fixedSettings struct {
 
 func (f fixedSettings) Settings(context.Context) (setting.Resolution, error) {
 	return f.resolution, nil
+}
+
+// placesStub is a stateful stand-in for the place registry: it applies a
+// registration the way the core does — one place per directory, keeping the first
+// registration — so the transport's tests assert on resources rather than on calls.
+type placesStub struct {
+	places []agenthub.RegisteredPlace
+	// missing and unversioned are the directories that stand in for the two machine
+	// refusals.
+	missing     []string
+	unversioned []string
+	err         error
+}
+
+func (p *placesStub) RegisteredPlaces(context.Context) ([]agenthub.RegisteredPlace, error) {
+	return p.places, p.err
+}
+
+func (p *placesStub) RegisterPlace(_ context.Context, directory, by string) (agenthub.RegisteredPlace, error) {
+	if p.err != nil {
+		return agenthub.RegisteredPlace{}, p.err
+	}
+	if err := agenthub.ValidatePlaceDirectory(directory); err != nil {
+		return agenthub.RegisteredPlace{}, err
+	}
+	if slices.Contains(p.missing, directory) {
+		return agenthub.RegisteredPlace{}, fmt.Errorf("%w: %s", agenthub.ErrNoSuchDirectory, directory)
+	}
+	if slices.Contains(p.unversioned, directory) {
+		return agenthub.RegisteredPlace{}, fmt.Errorf("%w: %s", agenthub.ErrNotARepository, directory)
+	}
+	location, err := agenthub.RecordedPlace{Directory: directory}.Location()
+	if err != nil {
+		return agenthub.RegisteredPlace{}, err
+	}
+	for _, existing := range p.places {
+		if existing.Location.ID() == location.ID() {
+			return existing, nil
+		}
+	}
+	place := agenthub.RegisteredPlace{Location: location, RegisteredAt: fixedNow, RegisteredBy: by}
+	p.places = append(p.places, place)
+	return place, nil
 }

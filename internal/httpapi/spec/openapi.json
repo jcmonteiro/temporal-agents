@@ -43,6 +43,10 @@
       "description": "Recurring schedule resources. A schedule has no progress and is never dismissible."
     },
     {
+      "name": "Places",
+      "description": "Where the hub may work: the places an operator registered, before any work has run in them."
+    },
+    {
       "name": "Dismissals",
       "description": "Durable operator view state over finished items. Dismissals never change workflow state."
     },
@@ -1028,6 +1032,113 @@
           }
         }
       }
+    },
+    "/api/v1/places": {
+      "get": {
+        "tags": [
+          "Places"
+        ],
+        "summary": "List the places the hub may work in",
+        "description": "The places an operator registered, whether or not any work has ever run in them. A place with work in it is also published in every work collection's location registry; this resource is the only one that reports a place nothing has run in yet.",
+        "operationId": "listPlaces",
+        "responses": {
+          "200": {
+            "description": "The registered places, with the registry their references resolve against.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Link": {
+                "$ref": "#/components/headers/DescribedBy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaceCollection"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Places"
+        ],
+        "summary": "Register a place",
+        "description": "Records that the hub may work in a directory. The request names a directory and nothing else: what is stored is what the location probe establishes about it, so an operator who names a subdirectory registers the working tree that holds it, and a worktree hangs under the repository the probe names. Registering the same place again returns the registration that is already there.",
+        "operationId": "registerPlace",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaceRegistrationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The registered place, with the registry its reference resolves against.",
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/DescribedBy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Place"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/NotAPlace"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
+          },
+          "default": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1228,6 +1339,16 @@
       },
       "SignInFailed": {
         "description": "The callback does not belong to a sign-in this server started for this browser, has been used already, expired, or was refused by the provider.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "NotAPlace": {
+        "description": "The directory is not one the hub can work in: nothing is there, or no repository holds it.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -2285,6 +2406,80 @@
           "limit": {
             "type": "integer",
             "minimum": 0
+          }
+        }
+      },
+      "Place": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "locationId",
+          "registeredAt"
+        ],
+        "properties": {
+          "locationId": {
+            "type": "string",
+            "description": "The place, referenced into the registry. The registry is in the collection's envelope, or in this resource's own locations when it is served on its own."
+          },
+          "registeredAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the place was first registered. A repeat registration does not move it."
+          },
+          "registeredBy": {
+            "type": "string",
+            "description": "The principal who registered the place, absent where nobody is authenticated. It is provenance only: the hub has identities and no authorization."
+          },
+          "locations": {
+            "$ref": "#/components/schemas/LocationRegistry",
+            "description": "Present when the place is served on its own, so its reference resolves without a second read."
+          }
+        }
+      },
+      "PlaceCollection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "count",
+          "limit",
+          "locations"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Place"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "locations": {
+            "$ref": "#/components/schemas/LocationRegistry"
+          }
+        }
+      },
+      "PlaceRegistrationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "directory"
+        ],
+        "properties": {
+          "directory": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "description": "An absolute, cleaned path of a directory a repository holds, on the machine the work runs on. The place that is registered is the working tree the probe resolves it to."
           }
         }
       }

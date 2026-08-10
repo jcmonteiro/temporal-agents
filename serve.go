@@ -427,6 +427,7 @@ func runAPIServer(options serveOptions) error {
 		SecureCookies:        options.tlsCert != "",
 		AllowUnauthenticated: openForLocalUse,
 		WebDir:               options.webDir,
+		Places:               service,
 		Settings:             settings,
 		HealthChecks: append([]httpapi.HealthCheck{
 			{

@@ -148,6 +148,8 @@ move to it deliberately.
 | `GET /api/v1/dismissals` | View-state dismissals in force |
 | `POST /api/v1/dismissals` | Hide one finished fleet or run |
 | `DELETE /api/v1/dismissals/{id}` | Make the item visible again |
+| `GET /api/v1/places` | The places the hub may work in |
+| `POST /api/v1/places` | Register a place |
 | `GET /api/v1/settings` | What the tool is configured to do, and where each value came from |
 
 Collections accept `limit` from 1 to 200 and default to 25. Existing fleet, run,
@@ -323,6 +325,40 @@ The response is `201 Created`, with a `Location` header such as:
 
 The identity is derived from kind and item ID. Repeating the same POST is idempotent
 and keeps the original dismissal time. Delete the returned resource to undo it.
+
+## Places
+
+A place with work in it is *observed*: the location probe recorded it, so every work
+collection publishes it. A place with **no** work in it cannot be observed, so it is
+registered:
+
+```http
+POST /api/v1/places
+Content-Type: application/json
+
+{"directory":"/srv/repos/pricing"}
+```
+
+```json
+{"locationId":"5f2b…","registeredAt":"2026-08-06T12:00:00Z","registeredBy":"https://issuer.test|operator-1",
+ "locations":[{"id":"unknown","kind":"unknown","label":"Unknown","parentId":null},
+              {"id":"5f2b…","kind":"directory","label":"pricing","parentId":null,"directory":"/srv/repos/pricing"}]}
+```
+
+The request names a directory and nothing else. What is registered is what the
+location probe establishes about it, so naming a subdirectory registers the working
+tree that holds it, and a worktree hangs under the repository the probe names — a
+registration can state no hierarchy of its own. The directory must be absolute and
+written plainly (`400`), and it must exist on the machine the work runs on and be
+held by a repository (`422`, with the detail saying which of the two is missing).
+
+Registering the same place again answers `201` with the registration that is already
+there: the identity is the place, so a retried request, a double click and a second
+operator all address one resource.
+
+`GET /api/v1/places` lists the registered places with the registry their
+`locationId` resolves against. It is the only read that reports a place nothing has
+ever run in.
 
 ## Settings
 

@@ -40,6 +40,9 @@ const (
 	codeRequestTooLarge problemCode = "request-too-large"
 	// codeNotDismissible is a dismissal asked for work that has not finished.
 	codeNotDismissible problemCode = "not-dismissible"
+	// codeNotAPlace is a registration of a directory the hub cannot work in: nothing
+	// is there, or no repository holds it.
+	codeNotAPlace problemCode = "not-a-place"
 	// codeAuthenticationRequired is a request that carries no credential this hub
 	// accepts: no session, and no configured token.
 	codeAuthenticationRequired problemCode = "authentication-required"
@@ -117,6 +120,13 @@ var problemTypes = map[problemCode]problemType{
 		Description: "Dismissing is view state over finished work: only an item that has finished " +
 			"(done or failed) can be hidden, and a schedule never can because it has no finished " +
 			"state. Wait for the work to settle, or leave it visible.",
+	},
+	codeNotAPlace: {
+		Title:  "The hub cannot work in that directory",
+		Status: http.StatusUnprocessableEntity,
+		Description: "A place must be a directory that exists on the machine the work runs on and " +
+			"that a repository holds: the hub works by branching, committing and reviewing. The " +
+			"detail says which of the two is missing. Nothing was registered.",
 	},
 	codeAuthenticationRequired: {
 		Title:  "Authentication is required",

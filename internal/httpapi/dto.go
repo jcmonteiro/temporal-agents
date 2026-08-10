@@ -516,3 +516,47 @@ func settingFrom(value setting.Value) settingResource {
 	}
 	return resource
 }
+
+// placeResource is one place an operator registered: which place it is, and the
+// provenance of the registration.
+//
+// The place itself is not repeated here. It is referenced by id and published once
+// in the response's registry, exactly as a run references where it ran: a payload
+// that carried a place twice could carry it with two different sets of facts.
+type placeResource struct {
+	// LocationID references the place in this response's registry.
+	LocationID string `json:"locationId"`
+	// RegisteredAt is when the place was first registered, in UTC.
+	RegisteredAt *string `json:"registeredAt"`
+	// RegisteredBy identifies the principal who registered it, and is absent on a
+	// deployment that authenticates nobody. It is provenance, never a filter: the hub
+	// has identities and no authorization.
+	RegisteredBy string `json:"registeredBy,omitempty"`
+	// Locations is the registry this resource's reference resolves against, present
+	// only when the place is served on its own and therefore has no envelope to carry
+	// one.
+	Locations []locationResource `json:"locations,omitempty"`
+}
+
+// placeRegistrationRequest is the body of a registration. It names a directory and
+// nothing else: where a place sits is a probed fact, so a client that could state a
+// parent could state one the machine contradicts.
+type placeRegistrationRequest struct {
+	// Directory is the absolute, cleaned path of a directory in a repository.
+	Directory string `json:"directory"`
+}
+
+// placeFrom projects a registered place onto its representation. standalone carries
+// the registry with the resource, for the response to a registration, which has no
+// collection envelope to put it in.
+func placeFrom(place agenthub.RegisteredPlace, standalone bool) placeResource {
+	resource := placeResource{
+		LocationID:   place.Location.ID(),
+		RegisteredAt: timestamp(place.RegisteredAt),
+		RegisteredBy: place.RegisteredBy,
+	}
+	if standalone {
+		resource.Locations = locationsFrom(agenthub.NewLocationRegistry(place.Location))
+	}
+	return resource
+}
