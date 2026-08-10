@@ -1,5 +1,11 @@
 // Wire types matching the Go API's DTOs (internal/httpapi/dto.go).
 // Only the fields the Overview needs are declared; extra fields are ignored.
+//
+// These declarations are a hand-written copy, so nothing here detects a rename
+// on the Go side. The names below are pinned by
+// TestOverviewResourcesKeepTheFieldNamesTheWebClientReads in
+// internal/httpapi/httpapi_test.go; add a field to that list when the Overview
+// starts reading it.
 
 import type { WorkItemStatus } from "../domain/work-item";
 
