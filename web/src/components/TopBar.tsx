@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useSession } from "../platform/session";
 
 export function TopBar(): ReactNode {
   return (
@@ -84,22 +85,50 @@ export function TopBar(): ReactNode {
             <path d="M10 20a2 2 0 0 0 4 0" />
           </svg>
         </button>
-        <div
-          aria-hidden="true"
-          style={{
-            width: 32,
-            height: 32,
-            borderRadius: "50%",
-            border: "1px solid var(--color-border-strong)",
-            display: "grid",
-            placeItems: "center",
-            fontSize: "var(--font-size-sm)",
-            color: "var(--color-text-muted)",
-          }}
-        >
-          A
-        </div>
+        <SignedIn />
       </div>
     </header>
+  );
+}
+
+/**
+ * Who is signed in, and the way out.
+ *
+ * It shows the name the provider disclosed, because "signed in as somebody"
+ * with no name is not an answer an operator on a shared instance can act on.
+ * When the deployment configures no sign-in there is nobody to be, so the
+ * indicator says nothing rather than inventing an identity.
+ */
+function SignedIn(): ReactNode {
+  const { state, signOut } = useSession();
+  if (state.status !== "signed-in") return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+      <span
+        style={{
+          fontSize: "var(--font-size-sm)",
+          color: "var(--color-text-muted)",
+          maxWidth: 220,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {state.principal.name}
+      </span>
+      <button
+        onClick={() => void signOut()}
+        style={{
+          padding: "var(--space-1) var(--space-3)",
+          borderRadius: 8,
+          border: "1px solid var(--color-border)",
+          background: "var(--color-surface-2)",
+          color: "var(--color-text-muted)",
+          fontSize: "var(--font-size-sm)",
+        }}
+      >
+        Sign out
+      </button>
+    </div>
   );
 }

@@ -6,6 +6,7 @@ import type {
   RunDTO,
   ScheduleDTO,
 } from "../clients/api";
+import type { PrincipalDTO } from "../clients/session";
 
 /**
  * Hand-written stub of the Agent Hub HTTP API, installed at the transport edge
@@ -26,17 +27,37 @@ export class FakeApi {
   locations: LocationResource[] = [theUnknownPlace()];
   /** While true, every request answers 503. */
   down = false;
+  /**
+   * Who the API says the request is made by, or null for a browser whose
+   * credential the API refuses. A refused credential closes the whole API, not
+   * only the session endpoint, exactly as the server does.
+   */
+  principal: PrincipalDTO | null = theOperator();
+  /**
+   * Whether this deployment can sign anybody in. When false the sign-in routes
+   * do not exist at all, which is how a hub with no identity provider answers.
+   */
+  signInConfigured = true;
+  /** How many times the session endpoint was asked, so a loop is visible. */
+  sessionReads = 0;
 
   private original: typeof globalThis.fetch | undefined;
 
   install(): void {
     this.original = globalThis.fetch;
-    globalThis.fetch = ((input: RequestInfo | URL) => {
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input), "http://test.local").pathname;
+      const method = init?.method ?? "GET";
       if (this.down) {
         return Promise.resolve(
           new Response("service unavailable", { status: 503 }),
         );
+      }
+      if (path === "/api/v1/auth/session") {
+        return Promise.resolve(this.session(method));
+      }
+      if (this.signInConfigured && this.principal === null) {
+        return Promise.resolve(this.unauthenticated());
       }
       const body = this.bodyFor(path);
       if (!body) {
@@ -49,6 +70,35 @@ export class FakeApi {
         }),
       );
     }) as typeof globalThis.fetch;
+  }
+
+  /** Answers the session endpoint: who am I, and signing out. */
+  private session(method: string): Response {
+    if (!this.signInConfigured) {
+      return new Response("not found", { status: 404 });
+    }
+    if (method === "DELETE") {
+      this.principal = null;
+      return new Response(null, { status: 204 });
+    }
+    this.sessionReads += 1;
+    if (this.principal === null) return this.unauthenticated();
+    return new Response(JSON.stringify({ principal: this.principal }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  /** The problem document the API answers a refused credential with. */
+  private unauthenticated(): Response {
+    return new Response(
+      JSON.stringify({
+        type: "/api/v1/problems/authentication-required",
+        title: "Authentication is required",
+        status: 401,
+      }),
+      { status: 401, headers: { "content-type": "application/problem+json" } },
+    );
   }
 
   restore(): void {
@@ -76,6 +126,20 @@ export class FakeApi {
       locations: this.locations,
     };
   }
+}
+
+/** The operator the fake API knows, as the session endpoint publishes them. */
+export function theOperator(
+  overrides: Partial<PrincipalDTO> = {},
+): PrincipalDTO {
+  return {
+    id: "https://issuer.test|operator-1",
+    issuer: "https://issuer.test",
+    subject: "operator-1",
+    name: "The Operator",
+    email: "operator@example.test",
+    ...overrides,
+  };
 }
 
 /** The place work runs in when nothing was recorded about where. */

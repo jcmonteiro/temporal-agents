@@ -388,3 +388,30 @@ type authenticatorFunc func(context.Context, identity.Credential) (identity.Prin
 func (f authenticatorFunc) Authenticate(ctx context.Context, credential identity.Credential) (identity.Principal, error) {
 	return f(ctx, credential)
 }
+
+// TestTheSessionResourceKeepsTheFieldNamesTheWebClientReads pins the wire names the
+// frontend depends on, for the same reason the overview's are pinned:
+// web/src/clients/session.ts is a hand-written copy of this resource, so a rename
+// here would silently leave the hub showing nobody as signed in, and the frontend's
+// own tests — written from the same assumption — could not see the drift.
+func TestTheSessionResourceKeepsTheFieldNamesTheWebClientReads(t *testing.T) {
+	server, _ := newAuthenticatedServer(t, &stubProvider{principal: theOperator})
+	session := signInThroughTheBrowser(t, server)
+
+	read := newRequest(http.MethodGet, BasePath+"/auth/session", nil)
+	read.AddCookie(session)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, read)
+
+	var document map[string]any
+	decodeResponse(t, response, &document)
+	principal, ok := document["principal"].(map[string]any)
+	if !ok {
+		t.Fatalf("the session document has no principal: %v", sortedKeys(document))
+	}
+	for _, key := range []string{"id", "issuer", "subject", "name", "email"} {
+		if _, present := principal[key]; !present {
+			t.Errorf("the principal has no %q; the web client reads %v", key, sortedKeys(principal))
+		}
+	}
+}
