@@ -14,12 +14,16 @@ export function prefersReducedMotion(): boolean {
  * is hidden, so motion never runs up a backlog off screen.
  */
 export function onEachFrame(frame: (timestampMs: number) => void): () => void {
+  let stopped = false;
   let handle = requestAnimationFrame(tick);
 
   function tick(timestampMs: number): void {
     frame(timestampMs);
-    handle = requestAnimationFrame(tick);
+    if (!stopped) handle = requestAnimationFrame(tick);
   }
 
-  return () => cancelAnimationFrame(handle);
+  return () => {
+    stopped = true;
+    cancelAnimationFrame(handle);
+  };
 }
