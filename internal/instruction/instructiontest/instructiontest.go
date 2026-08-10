@@ -8,6 +8,7 @@ package instructiontest
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"temporal-agents/internal/instruction"
@@ -87,6 +88,20 @@ func (s *Store) Current(_ context.Context, keys []instruction.Key, scopes []inst
 		}
 	}
 	return records, nil
+}
+
+// Version implements instruction.Reader.
+func (s *Store) Version(_ context.Context, key instruction.Key, scope instruction.Scope, version int) (instruction.Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Err != nil {
+		return instruction.Record{}, s.Err
+	}
+	stored := s.versions[key][scope]
+	if version < 1 || version > len(stored) {
+		return instruction.Record{}, fmt.Errorf("%w: %s at %s v%d", instruction.ErrNoSuchVersion, key, scope, version)
+	}
+	return stored[version-1], nil
 }
 
 // PublishFactory implements instruction.Publisher: it appends a version only when

@@ -86,14 +86,25 @@ func Render(resolution Resolution, key Key, data Data) (string, error) {
 	return spec.Render(resolution.Text(key), data)
 }
 
+// ErrNoSuchVersion is returned when a recorded provenance names a version the store
+// does not hold. It is a sentinel of its own so a caller can tell "that version was
+// never stored" apart from a store outage, and report each honestly.
+var ErrNoSuchVersion = errors.New("no such instruction version")
+
 // Reader is the driven port resolution reads through. An adapter answers only what
-// it stores: which version each (key, scope) currently points at. Deciding which of
-// them wins is the core's rule, stated once in resolve, never in SQL.
+// it stores: which version each (key, scope) currently points at, and what one named
+// version says. Deciding which of them wins is the core's rule, stated once in
+// resolve, never in SQL.
 type Reader interface {
 	// Current returns the pointed-at version of every (key, scope) pair that has one.
 	// A pair with no pointer is simply absent; that is a gap in the chain, not an
 	// error.
 	Current(ctx context.Context, keys []Key, scopes []Scope) ([]Record, error)
+	// Version returns one stored version, reporting ErrNoSuchVersion when there is
+	// none. It is what turns an execution's recorded provenance — key, scope, version
+	// — back into the instruction that produced it, which is why the text is never
+	// copied into an execution's own row.
+	Version(ctx context.Context, key Key, scope Scope, version int) (Record, error)
 }
 
 // Publisher is the driven port the shipped defaults are published through at
