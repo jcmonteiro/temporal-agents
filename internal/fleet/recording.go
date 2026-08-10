@@ -8,6 +8,8 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"temporal-agents/internal/execstore"
+	"temporal-agents/internal/place"
+	"temporal-agents/internal/wfplace"
 	"temporal-agents/internal/wfrecord"
 )
 
@@ -43,6 +45,9 @@ type FleetState struct {
 	// outcome: a skipped node's dependency did not succeed, so it never starts a
 	// child workflow and has no run ID to record a row under.
 	Nodes []NodeResult
+	// Place is where the orchestration runs: the repository the nodes' worktrees
+	// are created from. Each node reports its own worktree separately.
+	Place place.Facts
 	Error string
 }
 
@@ -71,10 +76,12 @@ func (a *Activities) PersistFleetWorkflowState(ctx context.Context, in FleetStat
 		Status:           in.Status,
 		ParentWorkflowID: in.ParentWorkflowID,
 		Detail: execstore.Detail{
-			PlanID:    in.PlanID,
-			PlanNodes: in.PlanNodes,
-			Nodes:     nodeOutcomes(in.Nodes),
-			Error:     in.Error,
+			PlanID:     in.PlanID,
+			PlanNodes:  in.PlanNodes,
+			Nodes:      nodeOutcomes(in.Nodes),
+			Error:      in.Error,
+			Directory:  in.Place.Directory,
+			Repository: in.Place.Repository,
 		},
 	})
 }
@@ -122,6 +129,7 @@ func startFleetState(ctx workflow.Context, in FleetInput) (FleetState, error) {
 		PlanNodes:        len(in.Plan.Nodes),
 		StartedAt:        workflow.Now(ctx),
 		Status:           execstore.StatusRunning,
+		Place:            wfplace.Probe(ctx, in.WorkDir),
 	}
 	opts := wfrecord.WithOptions(ctx)
 	var a *Activities
@@ -177,7 +185,11 @@ type FleetPlanState struct {
 	Status    execstore.Status
 	// Tokens is the planning agent session's own usage.
 	Tokens int
-	Error  string
+	// Place is where planning runs: the repository the agent inspects. The
+	// disposable clone it actually reads is an implementation detail of the step,
+	// not a place an operator has work in.
+	Place place.Facts
+	Error string
 }
 
 // PersistFleetPlanWorkflowState records a FleetPlanWorkflow execution's state. The
@@ -197,9 +209,11 @@ func (a *Activities) PersistFleetPlanWorkflowState(ctx context.Context, in Fleet
 		Tokens:           in.Tokens,
 		ParentWorkflowID: in.ParentWorkflowID,
 		Detail: execstore.Detail{
-			PlanID:    in.PlanID,
-			PlanNodes: in.PlanNodes,
-			Error:     in.Error,
+			PlanID:     in.PlanID,
+			PlanNodes:  in.PlanNodes,
+			Error:      in.Error,
+			Directory:  in.Place.Directory,
+			Repository: in.Place.Repository,
 		},
 	})
 }
@@ -222,6 +236,7 @@ func startFleetPlanState(ctx workflow.Context, in FleetPlanInput) (FleetPlanStat
 		PlanID:           in.PlanID,
 		StartedAt:        workflow.Now(ctx),
 		Status:           execstore.StatusRunning,
+		Place:            wfplace.Probe(ctx, in.WorkDir),
 	}
 	opts := wfrecord.WithOptions(ctx)
 	var a *Activities

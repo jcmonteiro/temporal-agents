@@ -27,6 +27,7 @@ import (
 	"temporal-agents/internal/notification"
 	"temporal-agents/internal/notify"
 	"temporal-agents/internal/piagent"
+	"temporal-agents/internal/place"
 	"temporal-agents/internal/wfid"
 )
 
@@ -531,6 +532,11 @@ func runWorker(opts notifyOptions) {
 
 	// A single notification activity, shared by every workflow that notifies.
 	w.RegisterActivity(&notification.Activity{Notifier: buildNotifier(opts)})
+
+	// A single location probe, shared by every workflow that owns a working
+	// directory. It answers over the same git adapter the code workflows drive, so
+	// where work runs is established by git rather than guessed from a path.
+	w.RegisterActivity(&place.Activity{Prober: gitcli.New()})
 
 	fmt.Printf("Worker ready · task queue %q", TaskQueue)
 	fmt.Printf(" · desktop notifications %s", onOff(opts.desktop))

@@ -14,6 +14,8 @@ import (
 	"temporal-agents/internal/codereview"
 	"temporal-agents/internal/execstore/execstoretest"
 	"temporal-agents/internal/notification"
+	"temporal-agents/internal/place"
+	"temporal-agents/internal/place/placetest"
 )
 
 // The fleet workflow tests exercise observable behavior — which nodes run in
@@ -38,6 +40,9 @@ func newEnvWithStore(t *testing.T, store *execstoretest.Store) *testsuite.TestWo
 	env := s.NewTestWorkflowEnvironment()
 	env.RegisterActivity(&Activities{Store: store, Plans: store})
 	env.RegisterActivity(&notification.Activity{})
+	// The location probe is a driven adapter like any other; the fake answers every
+	// directory as its own working tree, which is what an ordinary checkout is.
+	env.RegisterActivity(&place.Activity{Prober: placetest.New()})
 	env.RegisterWorkflow(FleetWorkflow)
 	env.RegisterWorkflow(FleetPlanWorkflow)
 	// The child develop workflow is mocked, but must be registered so its name
