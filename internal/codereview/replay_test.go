@@ -95,3 +95,30 @@ func TestPilotWorkflow_ReplaysAHistoryFromBeforeTheLocationProbe(t *testing.T) {
 
 	require.NoError(t, err, "a pilot pass started before the probe must still replay")
 }
+
+// Stored instructions added a third gate, and it protects a third kind of history:
+// an execution started after recording and the probe, but before an instruction was
+// ever resolved. Those histories carry both earlier markers and no resolution, which
+// is the shape of every review and pilot pass in flight across that upgrade — and
+// both loops are long-lived enough that being mid-flight is the norm.
+//
+// The fixtures were captured from the code one commit before the change, with the
+// agent, git, GitHub and record activities stubbed under their real names.
+
+func TestReviewWorkflow_ReplaysAHistoryFromBeforeStoredInstructions(t *testing.T) {
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(ReviewWorkflow)
+
+	err := wftest.ReplayHistoryFile(t, replayer, "testdata/review_workflow_before_instructions.json", "review-fixture")
+
+	require.NoError(t, err, "a review pass started before instructions were stored must still replay")
+}
+
+func TestPilotWorkflow_ReplaysAHistoryFromBeforeStoredInstructions(t *testing.T) {
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(PilotWorkflow)
+
+	err := wftest.ReplayHistoryFile(t, replayer, "testdata/pilot_workflow_before_instructions.json", "pilot-fixture")
+
+	require.NoError(t, err, "a pilot pass started before instructions were stored must still replay")
+}

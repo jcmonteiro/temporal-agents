@@ -3,7 +3,7 @@
 The `testdata/*_before_<change>.json` files in the root package, `internal/codereview`
 and `internal/fleet` are real Temporal histories of the workflows **as they were
 before a change** (`_before_recording` for durable recording, `_before_location` for
-the location probe). They exist so a version gate (`wfrecord.Enabled`,
+the location probe, `_before_instructions` for stored instructions). They exist so a version gate (`wfrecord.Enabled`,
 `wfplace.Enabled`, and any gate added after them) is proved by a test instead of by
 an in-flight execution failing nondeterministically after a worker upgrade.
 
