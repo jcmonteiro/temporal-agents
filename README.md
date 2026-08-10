@@ -77,7 +77,9 @@ is fixed: **`migrate` first, then `worker` and `serve`**.
   context, the version the database is at, the version the build requires, and the
   command that fixes it.
 - Each context owns its migrations inside its own adapter package
-  (`internal/execstore/execpg/migrations`, `internal/agenthub/hubpg/migrations`),
+  (`internal/execstore/execpg/migrations`, `internal/agenthub/hubpg/migrations`,
+  `internal/identity/identitypg/migrations`,
+  `internal/instruction/instructionpg/migrations`),
   recorded under its own namespace, with no foreign keys between contexts. A
   process is only stopped by the contexts it actually uses: a stale dismissal
   schema stops `serve`, not `worker`.
@@ -93,6 +95,8 @@ is fixed: **`migrate` first, then `worker` and `serve`**.
 $ temporal-agents migrate
 execution-store  brought 4 migration(s) up to date  schema 0004_execution_first_run_id.sql
 agent-hub        brought 1 migration(s) up to date  schema 0001_dismissals.sql
+identity         brought 1 migration(s) up to date  schema 0001_identity.sql
+instructions     brought 1 migration(s) up to date  schema 0001_instructions.sql
 ```
 
 **Upgrading a running installation to this workflow:** a build from before the
@@ -134,6 +138,32 @@ cannot record its *outcome* keeps its result and reports the bookkeeping failure
 (the row is left at `running`, so treat an hours-old `running` row as abandoned).
 `list` remains the live Agent Hub overview; `history` is the durable execution
 record.
+
+### Stored instructions
+
+What the agent is told when it reviews a branch, acts on a review, or addresses
+pull request comments is stored, not compiled in. The worker publishes the
+instructions this build ships into Postgres when it starts, so an upgrade that
+improves one reaches every place that has not overridden it, and each unit of work
+resolves the instructions it needs **once**, at its start:
+
+- Resolution walks the place the work runs in, then the repository that place
+  belongs to, then the installation, then the shipped default — **per instruction**,
+  so a place can override one and inherit the rest.
+- A loop resolves at its first pass and carries the result through every
+  continue-as-new, so an instruction edited while it runs cannot change what a later
+  pass did.
+- Every settled execution records which instruction it used — the key, where the
+  value came from, its version and the hash of its text — and `history` prints it,
+  so a past result stays explainable. Versions are append-only: an edit adds one and
+  never rewrites what an earlier run referenced.
+- A store that cannot answer fails the unit of work rather than quietly falling back
+  to a default, because a silent substitution would change agent behaviour with
+  nothing in the record to say so.
+
+Configuring an instruction from the hub arrives with the prompt configuration
+surface; today the shipped defaults are what every place resolves to, so behaviour
+is unchanged for anyone who configures nothing.
 
 ## Commands
 
