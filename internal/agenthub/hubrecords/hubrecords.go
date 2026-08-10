@@ -257,6 +257,13 @@ func executionFrom(record execstore.Execution) agenthub.Execution {
 		ScheduleID:       record.ScheduleID,
 		ParentWorkflowID: record.ParentWorkflowID,
 		PlanID:           record.Detail.PlanID,
+		// The place travels as the facts that were recorded, not as a location: the
+		// core owns what a directory and its repository mean, and this adapter must not
+		// decide it on the way past.
+		Place: agenthub.RecordedPlace{
+			Directory:  record.Detail.Directory,
+			Repository: record.Detail.Repository,
+		},
 	}
 	for _, node := range record.Detail.Nodes {
 		e.NodeOutcomes = append(e.NodeOutcomes, agenthub.NodeOutcome{

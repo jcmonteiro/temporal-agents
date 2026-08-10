@@ -68,6 +68,35 @@ func TestRecordedExecutionsTranslatesARecord(t *testing.T) {
 	}
 }
 
+// TestARecordedPlaceCrossesAsFactsNotAsALocation pins where the place is decided:
+// the adapter hands the core the two facts the probe wrote, and nothing else. If it
+// built a location here, the rule that a repository is a parent only when git said
+// the two differ would live in an adapter instead of in the core.
+func TestARecordedPlaceCrossesAsFactsNotAsALocation(t *testing.T) {
+	store := execstoretest.New()
+	save(t, store, execstore.Execution{
+		WorkflowID: "develop-1", RunID: "r1", Kind: execstore.KindDevelop,
+		Status: execstore.StatusSucceeded,
+		Detail: execstore.Detail{
+			Directory:  "/srv/worktrees/pricing-fix",
+			Repository: "/srv/repos/pricing",
+		},
+	})
+
+	got := recordedExecutions(t, store, agenthub.RecordQuery{})
+
+	if len(got) != 1 {
+		t.Fatalf("got %d executions, want 1", len(got))
+	}
+	want := agenthub.RecordedPlace{
+		Directory:  "/srv/worktrees/pricing-fix",
+		Repository: "/srv/repos/pricing",
+	}
+	if got[0].Place != want {
+		t.Errorf("place = %+v, want %+v", got[0].Place, want)
+	}
+}
+
 // TestOutcomeFromEveryRecordedStatus pins the whole status mapping, including that
 // an unrecognised status is reported as failed rather than as success: the API
 // never claims an outcome it cannot evidence.

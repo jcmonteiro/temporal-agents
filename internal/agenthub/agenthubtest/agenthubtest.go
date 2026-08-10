@@ -499,10 +499,14 @@ func limitedChains(groups map[string][]agenthub.Execution, limit int) []agenthub
 	chains := make([]agenthub.ExecutionChain, 0, len(groups))
 	for _, executions := range groups {
 		chain := agenthub.ExecutionChain{Iterations: len(executions)}
+		var place agenthub.RecordedPlace
 		for _, e := range executions {
 			chain.Tokens += e.Tokens
 			if chain.StartedAt.IsZero() || e.StartedAt.Before(chain.StartedAt) {
 				chain.StartedAt = e.StartedAt
+			}
+			if !place.Recorded() {
+				place = e.Place
 			}
 			if chain.Latest.WorkflowID == "" || e.StartedAt.After(chain.Latest.StartedAt) ||
 				e.StartedAt.Equal(chain.Latest.StartedAt) && e.RunID > chain.Latest.RunID {
@@ -511,6 +515,11 @@ func limitedChains(groups map[string][]agenthub.Execution, limit int) []agenthub
 		}
 		chain.Latest.StartedAt = chain.StartedAt
 		chain.Latest.Tokens = chain.Tokens
+		// A place is a fact about the chain: an iteration that recorded none must not
+		// hide the one an earlier iteration established.
+		if !chain.Latest.Place.Recorded() {
+			chain.Latest.Place = place
+		}
 		chains = append(chains, chain)
 	}
 	sort.SliceStable(chains, func(i, j int) bool {

@@ -205,6 +205,16 @@ type Detail struct {
 	// Error is the failure text of a failed execution, so the durable record says
 	// why it failed and not merely that it did.
 	Error string `json:"error,omitempty"`
+	// Directory is the absolute path of the working tree the execution ran in, as
+	// the location probe established it. It is empty when the probe failed, found no
+	// repository, or never ran, which is what makes an execution's place honestly
+	// unknown instead of guessed.
+	Directory string `json:"directory,omitempty"`
+	// Repository is the absolute path of the repository that working tree belongs
+	// to, recorded only when the probe found the two to differ (a linked worktree).
+	// It is never derived from one path containing the other: git puts a worktree
+	// outside its repository by default.
+	Repository string `json:"repository,omitempty"`
 }
 
 // NodeOutcome is one fleet node's outcome inside a fleet parent's Detail.

@@ -250,6 +250,13 @@ func preserveExecutionFacts(target *execstore.Execution, source execstore.Execut
 	if len(target.Detail.Nodes) == 0 {
 		target.Detail.Nodes = source.Detail.Nodes
 	}
+	// The place travels as a pair — the working tree and the repository it belongs to
+	// — and is preserved as a pair: taking the directory from one iteration and the
+	// repository from another would state a relation neither of them recorded.
+	if target.Detail.Directory == "" {
+		target.Detail.Directory = source.Detail.Directory
+		target.Detail.Repository = source.Detail.Repository
+	}
 }
 
 func kindSet(kinds []execstore.Kind) map[execstore.Kind]bool {

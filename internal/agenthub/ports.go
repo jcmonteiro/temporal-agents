@@ -68,6 +68,11 @@ type Execution struct {
 	// record has and which is the sole home of a skipped node's outcome: a skipped
 	// node starts no execution, so it has none of its own.
 	NodeOutcomes []NodeOutcome
+	// Place is what was recorded about where the execution ran. Only the durable
+	// record has it — the orchestrator knows what is running, not where — and it is
+	// the zero value for an execution whose place was never established, which the
+	// core reads as the unknown place.
+	Place RecordedPlace
 }
 
 // Running reports whether the execution has not settled.

@@ -382,7 +382,11 @@ func (s *Service) Runs(ctx context.Context, limit int) ([]Run, error) {
 
 	runs := make([]Run, 0, len(chains))
 	for _, chain := range chains {
-		runs = append(runs, runFrom(chain))
+		run, err := runFrom(chain)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
 	}
 	return runs, nil
 }
@@ -426,7 +430,7 @@ func (s *Service) Run(ctx context.Context, id string) (Run, error) {
 		}
 		chains = []resolvedChain{{Execution: chain, Iterations: 1}}
 	}
-	return runFrom(chains[0]), nil
+	return runFrom(chains[0])
 }
 
 // Schedules returns the schedule satellites: one per schedule, whatever its runs
@@ -495,7 +499,11 @@ func (s *Service) schedulesFromStates(ctx context.Context, states []ScheduleStat
 		// and durable execution sources reconciled above.
 		state.RunningActions = 0
 		state.LastOutcome = ""
-		schedules = append(schedules, scheduleFrom(state, actions[state.ID], running[state.ID]))
+		schedule, err := scheduleFrom(state, actions[state.ID], running[state.ID])
+		if err != nil {
+			return nil, err
+		}
+		schedules = append(schedules, schedule)
 	}
 	return schedules, nil
 }
@@ -509,7 +517,12 @@ func sameExecutionChain(recorded, live Execution) bool {
 
 // scheduleFrom assembles one schedule satellite from its state, the runs it fired
 // (newest first) and how many of its actions are in flight.
-func scheduleFrom(state ScheduleState, fired []ExecutionChain, runningActions int) Schedule {
+//
+// A schedule has no place of its own: it is configuration, and it runs nothing. The
+// place it reports is the one its runs report, taken from the most recent firing
+// that recorded one, so a schedule sits with the work it produces instead of in the
+// unknown place.
+func scheduleFrom(state ScheduleState, fired []ExecutionChain, runningActions int) (Schedule, error) {
 	schedule := Schedule{
 		ID:             state.ID,
 		Spec:           state.Spec,
@@ -519,10 +532,14 @@ func scheduleFrom(state ScheduleState, fired []ExecutionChain, runningActions in
 		NextRunAt:      state.NextRunAt,
 	}
 	outcome := state.LastOutcome
+	var place RecordedPlace
 	for _, chain := range fired {
 		action := chain.Latest
 		if schedule.Label == "" {
 			schedule.Label = action.Label
+		}
+		if !place.Recorded() {
+			place = action.Place
 		}
 		if schedule.LastRunAt.IsZero() {
 			schedule.LastRunAt = chain.StartedAt
@@ -533,8 +550,13 @@ func scheduleFrom(state ScheduleState, fired []ExecutionChain, runningActions in
 			outcome = action.Outcome
 		}
 	}
+	location, err := place.Location()
+	if err != nil {
+		return Schedule{}, err
+	}
+	schedule.Location = location
 	schedule.Status = ScheduleStatus(state.Paused, runningActions, outcome)
-	return schedule
+	return schedule, nil
 }
 
 // Dismissals returns every dismissal in force, newest first. It is what lets a
@@ -638,6 +660,10 @@ func (s *Service) plansFor(ctx context.Context, parents []resolvedChain) (map[st
 // resolved is still returned — with no nodes and its own execution's status — so a
 // plan the store has lost hides the graph rather than the fleet.
 func (s *Service) buildFleet(ctx context.Context, parent resolvedChain, tree []Execution, live map[string]Execution, plan Plan) (Fleet, error) {
+	location, err := parent.Place.Location()
+	if err != nil {
+		return Fleet{}, err
+	}
 	fleet := Fleet{
 		ID:        parent.WorkflowID,
 		Running:   parent.Running(),
@@ -645,6 +671,7 @@ func (s *Service) buildFleet(ctx context.Context, parent resolvedChain, tree []E
 		PlanID:    parent.PlanID,
 		StartedAt: parent.StartedAt,
 		EndedAt:   parent.EndedAt,
+		Location:  location,
 	}
 
 	if len(plan.Nodes) == 0 && plan.Goal == "" {
@@ -655,19 +682,27 @@ func (s *Service) buildFleet(ctx context.Context, parent resolvedChain, tree []E
 		fleet.Goal = plan.Goal
 	}
 
-	executions, outcomes, err := s.nodeExecutions(ctx, parent, tree, live)
+	executions, outcomes, places, err := s.nodeExecutions(ctx, parent, tree, live)
 	if err != nil {
 		return Fleet{}, err
 	}
 	statuses := DeriveNodeStatuses(plan, outcomes)
 	fleet.Nodes = make([]FleetNode, 0, len(plan.Nodes))
 	for _, n := range plan.Nodes {
+		// A node develops in a worktree of its own, so its place is its own execution's,
+		// never its fleet's. A node that never started has none, which is the unknown
+		// place.
+		nodeLocation, err := places[n.ID].Location()
+		if err != nil {
+			return Fleet{}, err
+		}
 		fleet.Nodes = append(fleet.Nodes, FleetNode{
 			ID:        n.ID,
 			Prompt:    n.Prompt,
 			DependsOn: n.DependsOn,
 			Status:    statuses[n.ID],
 			Execution: executions[n.ID],
+			Location:  nodeLocation,
 		})
 	}
 	fleet.Progress = NodeProgress(fleet.Nodes)
@@ -700,7 +735,7 @@ func fleetStatus(parent resolvedChain, nodes []FleetNode) WorkStatus {
 }
 
 // nodeExecutions matches a fleet's child executions to its plan nodes by the
-// workflow-ID convention, and works out each node's outcome.
+// workflow-ID convention, and works out each node's outcome and where it ran.
 //
 // A node's own child execution is the primary source. The fleet parent's recorded
 // per-node breakdown is layered on top for settled nodes, because it is the only
@@ -708,7 +743,7 @@ func fleetStatus(parent resolvedChain, nodes []FleetNode) WorkStatus {
 // skipped (it has no execution at all) and a node that stopped in a recoverable
 // way and needs a human. A node whose child is running keeps "running": a
 // breakdown entry then belongs to an earlier attempt.
-func (s *Service) nodeExecutions(ctx context.Context, parent resolvedChain, tree []Execution, live map[string]Execution) (map[string]*NodeExecution, map[string]ExecutionOutcome, error) {
+func (s *Service) nodeExecutions(ctx context.Context, parent resolvedChain, tree []Execution, live map[string]Execution) (map[string]*NodeExecution, map[string]ExecutionOutcome, map[string]RecordedPlace, error) {
 	byNode := make(map[string][]Execution)
 	for _, e := range tree {
 		nodeID, ok := wfid.FleetNodeID(parent.WorkflowID, e.WorkflowID)
@@ -727,13 +762,14 @@ func (s *Service) nodeExecutions(ctx context.Context, parent resolvedChain, tree
 
 	executions := make(map[string]*NodeExecution, len(byNode))
 	outcomes := make(map[string]ExecutionOutcome, len(byNode))
+	places := make(map[string]RecordedPlace, len(byNode))
 	for nodeID, execs := range byNode {
 		nodeWorkflowID := wfid.FleetNodeWorkflowID(parent.WorkflowID, nodeID)
 		chains, err := s.resolveChains(ctx, execs, live, func(e Execution) bool {
 			return e.WorkflowID == nodeWorkflowID
 		})
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if len(chains) == 0 {
 			continue
@@ -747,6 +783,7 @@ func (s *Service) nodeExecutions(ctx context.Context, parent resolvedChain, tree
 			Tokens:     chain.Tokens,
 		}
 		outcomes[nodeID] = chain.Outcome
+		places[nodeID] = chain.Place
 	}
 	for _, recorded := range parent.NodeOutcomes {
 		if outcomes[recorded.NodeID] == OutcomeRunning {
@@ -754,7 +791,7 @@ func (s *Service) nodeExecutions(ctx context.Context, parent resolvedChain, tree
 		}
 		outcomes[recorded.NodeID] = recorded.Outcome
 	}
-	return executions, outcomes, nil
+	return executions, outcomes, places, nil
 }
 
 // resolvedChain is one execution chain after collapsing: the chain's latest
@@ -933,6 +970,12 @@ func merge(chains map[string]Execution, iterations map[string]int, e Execution) 
 	newest.PlanID = firstNonEmpty(newest.PlanID, older.PlanID)
 	newest.ScheduleID = firstNonEmpty(newest.ScheduleID, older.ScheduleID)
 	newest.ParentWorkflowID = firstNonEmpty(newest.ParentWorkflowID, older.ParentWorkflowID)
+	// A place is a fact about the chain, not about one iteration: an iteration
+	// recorded before the probe existed (or one whose probe failed) must not erase
+	// the place a sibling iteration established.
+	if !newest.Place.Recorded() {
+		newest.Place = older.Place
+	}
 	if len(newest.NodeOutcomes) == 0 {
 		newest.NodeOutcomes = older.NodeOutcomes
 	}
@@ -958,7 +1001,15 @@ func newer(candidate, current Execution) bool {
 }
 
 // runFrom projects a resolved chain onto the run satellite the API publishes.
-func runFrom(chain resolvedChain) Run {
+//
+// It fails only when the chain's recorded place cannot be expressed as a location,
+// which is a defect in what was recorded rather than something the run itself did
+// (see RecordedPlace.Location).
+func runFrom(chain resolvedChain) (Run, error) {
+	location, err := chain.Place.Location()
+	if err != nil {
+		return Run{}, err
+	}
 	return Run{
 		ID:         chain.WorkflowID,
 		Running:    chain.Running(),
@@ -969,7 +1020,8 @@ func runFrom(chain resolvedChain) Run {
 		EndedAt:    chain.EndedAt,
 		Iterations: max(chain.Iterations, 1),
 		Tokens:     chain.Tokens,
-	}
+		Location:   location,
+	}, nil
 }
 
 // runType names the command a run came from, defaulting to a plain run for an ID
