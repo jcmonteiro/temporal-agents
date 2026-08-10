@@ -134,14 +134,16 @@ func (s *Store) OpenSession(ctx context.Context, session steering.Session) (stee
 
 // closeSessionSQL settles a session, writing the decision only where none was
 // recorded. A decision sent through the API is already the authoritative one; a
-// session that was signalled directly still has to end with what it was told.
+// session that was signalled directly still has to end with what it was told; and a
+// settlement carrying no decision is a session whose loop is gone, which is recorded
+// as abandoned rather than left waiting for an answer nobody can act on.
 const closeSessionSQL = `
 UPDATE steering_sessions
-SET state = 'decided',
+SET state = CASE WHEN choice <> '' OR $2 <> '' THEN 'decided' ELSE 'abandoned' END,
     choice = CASE WHEN choice = '' THEN $2 ELSE choice END,
     guidance = CASE WHEN choice = '' AND $3 <> '' THEN $3 ELSE guidance END,
     principal = CASE WHEN choice = '' THEN $4 ELSE principal END,
-    decided_at = COALESCE(decided_at, $5)
+    decided_at = CASE WHEN choice <> '' OR $2 <> '' THEN COALESCE(decided_at, $5) ELSE decided_at END
 WHERE id = $1`
 
 // CloseSession implements steering.SessionRecorder.

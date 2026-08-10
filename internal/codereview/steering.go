@@ -33,16 +33,24 @@ func steered(settings setting.Resolution) bool {
 // pause stops the loop on the operator and returns their decision.
 //
 // waiting is how the pausing loop reports that it needs a human: it is called with
-// the moment the wait began, and again with the zero time once the decision is in.
-// The loop's own record is the only thing that changes — no item appears anywhere
-// while a session waits, because the loop is the work and it must not be shown
-// twice.
-func pause(ctx workflow.Context, round steering.Round, where place.Facts, waiting func(since time.Time)) (steering.Decision, error) {
-	waiting(workflow.Now(ctx))
-	decision, err := steering.Ask(ctx, steering.SessionInput{Round: round, Place: where})
+// the moment the wait began and the session that is waiting, and again with nothing
+// once the decision is in. The loop's own record is the only thing that changes — no
+// item appears anywhere while a session waits, because the loop is the work and it
+// must not be shown twice. The session travels with the wait so an interface can go
+// straight from the run that is asking to the question it is asking.
+func pause(
+	ctx workflow.Context,
+	round steering.Round,
+	where place.Facts,
+	material string,
+	waiting func(since time.Time, session string),
+) (steering.Decision, error) {
+	session := steering.SessionID(workflow.GetInfo(ctx).WorkflowExecution.RunID)
+	waiting(workflow.Now(ctx), session)
+	decision, err := steering.Ask(ctx, steering.Pause{Round: round, Place: where, Material: material})
 	// The run stops reporting that it needs input as soon as it stops needing it,
 	// including when the session failed: a run nobody can answer must not keep asking.
-	waiting(time.Time{})
+	waiting(time.Time{}, "")
 	if err != nil {
 		return steering.Decision{}, err
 	}

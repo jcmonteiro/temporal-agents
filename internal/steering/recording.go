@@ -2,6 +2,7 @@ package steering
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -60,7 +61,16 @@ type Activities struct {
 	// Store is the durable execution history port. A nil store makes the write fail
 	// loudly rather than panic, since recording is a hard dependency.
 	Store execstore.ExecutionWriter
+	// Sessions is the steering store: what an operator reads and decides. It is a
+	// hard dependency of a pausing loop for the same reason — a round waiting in a
+	// session nobody can read is a loop stuck with no visible cause.
+	Sessions SessionRecorder
 }
+
+// ErrNoStore is returned by an activity asked to write without a steering store
+// wired in. It turns a misconfigured worker into a clear activity failure instead of
+// a nil-pointer panic.
+var ErrNoStore = errors.New("steering store is not configured (is DATABASE_URL set?)")
 
 // PersistSteeringSessionState records a steering session's state. It is called when
 // the session starts waiting and again when it settles.

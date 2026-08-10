@@ -1,6 +1,7 @@
 package codereview
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"temporal-agents/internal/scoped/scopedtest"
 	"temporal-agents/internal/setting"
 	"temporal-agents/internal/steering"
+	"temporal-agents/internal/steering/steeringtest"
 )
 
 // These tests are about the two pause points: what a loop does when an operator has
@@ -33,6 +35,18 @@ const testRunID = "default-test-run-id"
 // place, which is what an operator asking to steer this repository looks like.
 func newSteeredEnv(t *testing.T, store *execstoretest.Store, enabled bool) *testsuite.TestWorkflowEnvironment {
 	t.Helper()
+	return newSteeredEnvReadableAt(t, store, steeringtest.New(), enabled)
+}
+
+// newSteeredEnvReadableAt is newSteeredEnv with the steering store in the test's
+// hands, for the tests that read what an operator would be shown.
+func newSteeredEnvReadableAt(
+	t *testing.T,
+	store *execstoretest.Store,
+	sessions *steeringtest.Store,
+	enabled bool,
+) *testsuite.TestWorkflowEnvironment {
+	t.Helper()
 	settings := scopedtest.New()
 	settings.Store(setting.KeySteeringEnabled, setting.GlobalScope, setting.Format(enabled))
 
@@ -43,7 +57,9 @@ func newSteeredEnv(t *testing.T, store *execstoretest.Store, enabled bool) *test
 	env.RegisterActivity(&place.Activity{Prober: placetest.New()})
 	env.RegisterActivity(&instruction.Activity{Store: scopedtest.New()})
 	env.RegisterActivity(&setting.Activity{Resolver: setting.Resolver{Store: settings}})
-	env.RegisterActivity(&steering.Activities{Store: store})
+	// The waiting round is written where an operator reads it, so the loop's pause
+	// needs the steering store as much as the execution record.
+	env.RegisterActivity(&steering.Activities{Store: store, Sessions: sessions})
 	env.RegisterWorkflow(steering.SessionWorkflow)
 	env.RegisterWorkflow(ReviewWorkflow)
 	env.RegisterWorkflow(PilotWorkflow)
@@ -173,6 +189,63 @@ func TestAWaitingRoundIsReportedOnTheRunThatIsWaiting(t *testing.T) {
 	require.True(t, stoppedWaiting, "and must stop saying so once the decision is in")
 	require.Nil(t, lastReviewRecord(t, store).Detail.WaitingSince,
 		"a settled pass is not waiting for anybody")
+}
+
+// An operator cannot decide what they cannot read. The waiting round is written to
+// the store the operator's surface reads, with the very material the agent would
+// have acted on, and it stops waiting once the decision is in.
+func TestAWaitingRoundIsReadableWithTheMaterialItIsAbout(t *testing.T) {
+	sessions := steeringtest.New()
+	env := newSteeredEnvReadableAt(t, execstoretest.New(), sessions, true)
+	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).Return(Checkpoint{HeadSHA: "head"}, nil)
+	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "implemented"}, nil)
+	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha"}, nil)
+	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "more"}, nil)
+	env.RegisterDelayedCallback(func() {
+		waiting, err := sessions.WaitingSessions(context.Background())
+		require.NoError(t, err)
+		require.Len(t, waiting, 1, "a paused round must be findable while it waits")
+		require.Equal(t, steering.RoundLocalReview, waiting[0].Round)
+		require.Equal(t, "rename foo", waiting[0].Material,
+			"an operator decides about the review the agent would have acted on")
+		require.False(t, waiting[0].OpenedAt.IsZero(), "an unbounded wait has to say since when")
+	}, time.Hour)
+	decide(env, 2*time.Hour, steering.Decision{Choice: steering.ChoiceSkip, Principal: "ada"})
+
+	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo", Payload: "rename foo", Pass: 1})
+
+	require.True(t, env.IsWorkflowCompleted())
+	waiting, err := sessions.WaitingSessions(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, waiting, "an answered round must stop asking")
+	session, err := sessions.Session(context.Background(), steering.SessionID(testRunID))
+	require.NoError(t, err)
+	require.Equal(t, steering.ChoiceSkip, session.Decision.Choice)
+}
+
+// The run that is waiting names the session it waits in, so a surface can go from
+// the work an operator sees straight to the question it is asking.
+func TestTheRunThatIsWaitingNamesTheSessionItWaitsIn(t *testing.T) {
+	store := execstoretest.New()
+	env := newSteeredEnv(t, store, true)
+	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).Return(Checkpoint{HeadSHA: "head"}, nil)
+	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "implemented"}, nil)
+	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha"}, nil)
+	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "more"}, nil)
+	decide(env, time.Hour, steering.Decision{Choice: steering.ChoiceSkip})
+
+	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo", Payload: "rename foo", Pass: 1})
+	require.True(t, env.IsWorkflowCompleted())
+
+	var named string
+	for _, record := range store.Records() {
+		if record.Kind == execstore.KindReview && record.Detail.WaitingSince != nil {
+			named = record.Detail.WaitingSession
+		}
+	}
+	require.Equal(t, steering.SessionID(testRunID), named)
+	require.Empty(t, lastReviewRecord(t, store).Detail.WaitingSession,
+		"a settled pass names no session, because it is waiting in none")
 }
 
 // A loop nobody asked to steer must behave exactly as it did: no session, no wait,

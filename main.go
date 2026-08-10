@@ -500,6 +500,12 @@ func runWorker(opts notifyOptions) {
 	config := openPublishedConfiguration(context.Background())
 	defer config.Close()
 
+	// Where a paused round is written for an operator to read. It is opened before
+	// the worker takes work for the same reason the record is: a loop that stops for
+	// a human must leave something a human can find.
+	sessions := openSteeringStore(context.Background())
+	defer sessions.Close()
+
 	// Flush heartbeats promptly so `watch` sees near-real-time Pi progress
 	// instead of the SDK's default ~30s throttle.
 	//
@@ -536,7 +542,7 @@ func runWorker(opts notifyOptions) {
 	// loop that pauses, and records an execution row of its own so what it costs is
 	// attributable without it becoming a second item on the overview.
 	w.RegisterWorkflow(steering.SessionWorkflow)
-	w.RegisterActivity(&steering.Activities{Store: store})
+	w.RegisterActivity(&steering.Activities{Store: store, Sessions: sessions})
 
 	// The fleet workflows fan out over a dependency graph, reusing the codereview
 	// develop workflow for each node. FleetWorkflow runs codereview.DevelopWorkflow

@@ -182,6 +182,28 @@ func TestSettlingASessionKeepsTheDecisionThatWasAlreadyRecorded(t *testing.T) {
 	require.Equal(t, steering.StateDecided, signalled.State)
 }
 
+// A loop that was cancelled takes its waiting round with it. The round is recorded
+// as abandoned rather than left waiting: a question nobody can answer must stop
+// asking, or it would sit on the operator's surface forever.
+func TestARoundWhoseLoopIsGoneStopsAsking(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	opened := time.Date(2026, 8, 11, 9, 0, 0, 0, time.UTC)
+	_, err := store.OpenSession(ctx, waitingRound("steering-1", opened))
+	require.NoError(t, err)
+
+	require.NoError(t, store.CloseSession(ctx, "steering-1", steering.Decision{}, opened.Add(time.Hour)))
+
+	abandoned, err := store.Session(ctx, "steering-1")
+	require.NoError(t, err)
+	require.Equal(t, steering.StateAbandoned, abandoned.State)
+	require.False(t, abandoned.Decision.Made(), "nobody decided it")
+	require.True(t, abandoned.DecidedAt.IsZero())
+	waiting, err := store.WaitingSessions(ctx)
+	require.NoError(t, err)
+	require.Empty(t, waiting)
+}
+
 // A decision against a session nobody opened is not an outage, and neither is a
 // read of one: the surface must be able to say "there is nothing here".
 func TestASessionNobodyOpenedIsReportedAsSuch(t *testing.T) {

@@ -52,9 +52,11 @@ type SessionRecorder interface {
 	// identity, because a replayed activity must not open a second session or
 	// overwrite a decision that has already been recorded against this one.
 	OpenSession(ctx context.Context, session Session) (Session, error)
-	// CloseSession settles the session. The decision is written only when none was
-	// recorded — a decision sent through the API is already the authoritative one, and
-	// a session that was signalled directly still has to end with what it was told.
+	// CloseSession settles the session: it stops waiting. The decision is written only
+	// when none was recorded — a decision sent through the API is already the
+	// authoritative one, and a session that was signalled directly still has to end
+	// with what it was told. A settlement carrying no decision at all is a session
+	// whose loop is gone, and it is recorded as abandoned rather than left waiting.
 	CloseSession(ctx context.Context, id string, decision Decision, at time.Time) error
 }
 

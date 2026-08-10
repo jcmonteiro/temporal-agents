@@ -364,10 +364,12 @@ func runPilotOnce(ctx workflow.Context, in PilotInput, rec *PilotState, agentRan
 	// thinking for days is never thinking with the developer's changes in a stash.
 	var guidance string
 	if steered(in.Settings) {
-		decision, err := pause(ctx, steering.RoundRemoteComments, rec.Place, func(since time.Time) {
-			rec.WaitingSince = since
-			recordPilotWaiting(ctx, *rec)
-		})
+		decision, err := pause(ctx, steering.RoundRemoteComments, rec.Place,
+			formatComments(pr.Body, loaded.Threads),
+			func(since time.Time, session string) {
+				rec.WaitingSince, rec.WaitingSession = since, session
+				recordPilotWaiting(ctx, *rec)
+			})
 		if err != nil {
 			return pilotPass{}, err
 		}
@@ -1010,10 +1012,11 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome,
 		// them.
 		var guidance string
 		if steered(in.Settings) {
-			decision, derr := pause(ctx, steering.RoundLocalReview, rec.Place, func(since time.Time) {
-				rec.WaitingSince = since
-				recordReviewWaiting(ctx, rec)
-			})
+			decision, derr := pause(ctx, steering.RoundLocalReview, rec.Place, in.Payload,
+				func(since time.Time, session string) {
+					rec.WaitingSince, rec.WaitingSession = since, session
+					recordReviewWaiting(ctx, rec)
+				})
 			if derr != nil {
 				return ReviewOutcome{}, derr
 			}

@@ -200,6 +200,10 @@ type Detail struct {
 	// pointer because a zero time is a value jsonb would keep: a row that never
 	// waited must carry no such field at all.
 	WaitingSince *time.Time `json:"waitingSince,omitempty"`
+	// WaitingSession is the steering session the execution is waiting in, and empty
+	// whenever it is not waiting. It is a value and never a reference: the steering
+	// store is another bounded context, and neither may key into the other's tables.
+	WaitingSession string `json:"waitingSession,omitempty"`
 	// Round is which pause point a steering session belongs to.
 	Round string `json:"round,omitempty"`
 	// Decision is what an operator decided in a steering session: guide, skip or

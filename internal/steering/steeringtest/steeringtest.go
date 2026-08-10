@@ -93,8 +93,13 @@ func (s *Store) CloseSession(_ context.Context, id string, decision steering.Dec
 	}
 	session.State = steering.StateDecided
 	if !session.Decision.Made() {
-		session.Decision = decision
-		session.DecidedAt = at
+		if !decision.Made() {
+			// Nobody answered, and the loop that was waiting is gone.
+			session.State = steering.StateAbandoned
+		} else {
+			session.Decision = decision
+			session.DecidedAt = at
+		}
 	}
 	s.sessions[id] = session
 	return nil

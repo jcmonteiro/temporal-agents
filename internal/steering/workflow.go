@@ -90,6 +90,13 @@ func SessionWorkflow(ctx workflow.Context, in SessionInput) (decision Decision, 
 		if perr := finishSessionRecord(ctx, rec, err); perr != nil {
 			wfrecord.TerminalWriteFailed(ctx, "steering session", string(decision.Choice), err, perr)
 		}
+		// The stored session stops waiting whatever ended it. A session whose loop was
+		// cancelled is recorded as abandoned rather than left asking a question nobody
+		// can answer any more.
+		if cerr := closeSession(ctx, workflow.GetInfo(ctx).WorkflowExecution.ID, decision); cerr != nil {
+			workflow.GetLogger(ctx).Error("could not settle the stored steering session",
+				"round", in.Round, "error", cerr)
+		}
 	}()
 
 	if qerr := workflow.SetQueryHandler(ctx, DecisionQuery, func() (SessionState, error) {
@@ -126,18 +133,40 @@ func SessionWorkflow(ctx workflow.Context, in SessionInput) (decision Decision, 
 	return decision, nil
 }
 
-// Ask pauses the calling loop on the operator: it runs the session as a child of
-// the loop and returns the decision the operator made.
+// Pause is what the pausing loop knows at the pause point: which round is stopping,
+// where it runs, and the material the operator has to read to decide.
 //
-// The session is a child rather than a workflow of its own so it cannot outlive the
-// work it is steering: a cancelled loop takes its waiting session with it. It is
-// given no timeout of any kind, at any level, because the wait is unbounded.
-func Ask(ctx workflow.Context, in SessionInput) (Decision, error) {
-	opts := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
-		WorkflowID: SessionID(workflow.GetInfo(ctx).WorkflowExecution.RunID),
-	})
+// The material is deliberately not part of the waiting unit's own input. It is
+// written to the store the conversation is authoritative in, and the wait carries
+// only an identity, so the review's findings never become part of a history that is
+// replayed every time the session is loaded.
+type Pause struct {
+	// Round is which pause point this is.
+	Round Round
+	// Place is where the paused work runs.
+	Place place.Facts
+	// Material is what the decision is about, as the agent would have received it.
+	Material string
+}
+
+// Ask pauses the calling loop on the operator: it records the waiting round with the
+// material it is about, runs the session as a child of the loop, and returns the
+// decision the operator made.
+//
+// The stored session is opened before the wait begins, so the moment a loop stops
+// there is something for an operator to find. The session is a child rather than a
+// workflow of its own so it cannot outlive the work it is steering: a cancelled loop
+// takes its waiting session with it. It is given no timeout of any kind, at any
+// level, because the wait is unbounded.
+func Ask(ctx workflow.Context, in Pause) (Decision, error) {
+	id := SessionID(workflow.GetInfo(ctx).WorkflowExecution.RunID)
+	if err := openSession(ctx, id, in); err != nil {
+		return Decision{}, err
+	}
+	opts := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: id})
 	var decision Decision
-	if err := workflow.ExecuteChildWorkflow(opts, SessionWorkflow, in).Get(opts, &decision); err != nil {
+	input := SessionInput{Round: in.Round, Place: in.Place}
+	if err := workflow.ExecuteChildWorkflow(opts, SessionWorkflow, input).Get(opts, &decision); err != nil {
 		return Decision{}, fmt.Errorf("wait for the operator's decision on the %s round: %w", in.Round, err)
 	}
 	return decision, nil

@@ -95,6 +95,10 @@ type ReviewState struct {
 	// the zero time whenever it is not waiting. It is what makes a run that is
 	// technically still running report that it needs a human.
 	WaitingSince time.Time
+	// WaitingSession is the steering session that wait is in, and empty whenever the
+	// pass is not waiting. It travels with the wait so a surface can go straight from
+	// the run that is asking to the question it is asking.
+	WaitingSession string
 	// Place is where the review pass runs.
 	Place place.Facts
 	// Instructions is which stored instruction version each of the loop's keys
@@ -130,6 +134,9 @@ type PilotState struct {
 	// WaitingSince is when this pass started waiting for an operator's decision, and
 	// the zero time whenever it is not waiting.
 	WaitingSince time.Time
+	// WaitingSession is the steering session that wait is in, and empty whenever the
+	// pass is not waiting.
+	WaitingSession string
 	// Place is where the pilot pass runs.
 	Place place.Facts
 	// Instructions is which stored instruction version the pass addressed comments
@@ -176,8 +183,8 @@ func (a *Activities) PersistReviewWorkflowState(ctx context.Context, in ReviewSt
 	}
 	detail := execstore.Detail{
 		Pass: in.Pass, Converged: in.Converged, Ending: string(in.Ending), Error: in.Error,
-		WaitingSince: waitingSince(in.WaitingSince),
-		Directory:    in.Place.Directory, Repository: in.Place.Repository,
+		WaitingSince: waitingSince(in.WaitingSince), WaitingSession: in.WaitingSession,
+		Directory: in.Place.Directory, Repository: in.Place.Repository,
 		Instructions: instructionUses(in.Instructions),
 	}
 	return a.Store.SaveExecution(ctx, execstore.Execution{
@@ -200,8 +207,8 @@ func (a *Activities) PersistPilotWorkflowState(ctx context.Context, in PilotStat
 	}
 	detail := execstore.Detail{
 		PRURL: in.PRURL, Addressed: in.Addressed, Ending: string(in.Ending), Error: in.Error,
-		WaitingSince: waitingSince(in.WaitingSince),
-		Directory:    in.Place.Directory, Repository: in.Place.Repository,
+		WaitingSince: waitingSince(in.WaitingSince), WaitingSession: in.WaitingSession,
+		Directory: in.Place.Directory, Repository: in.Place.Repository,
 		Instructions: instructionUses(in.Instructions),
 	}
 	return a.Store.SaveExecution(ctx, execstore.Execution{
@@ -360,7 +367,7 @@ func finishReviewState(ctx workflow.Context, st ReviewState, err error) error {
 	st.Status = wfrecord.StatusOf(err)
 	st.Error = wfrecord.FailureText(err)
 	// A settled pass is not waiting for anybody, however it settled.
-	st.WaitingSince = time.Time{}
+	st.WaitingSince, st.WaitingSession = time.Time{}, ""
 
 	dctx, cancel := wfrecord.TerminalOptions(ctx)
 	defer cancel()
@@ -408,7 +415,7 @@ func finishPilotState(ctx workflow.Context, st PilotState, err error) error {
 	st.Status = wfrecord.StatusOf(err)
 	st.Error = wfrecord.FailureText(err)
 	// A settled pass is not waiting for anybody, however it settled.
-	st.WaitingSince = time.Time{}
+	st.WaitingSince, st.WaitingSession = time.Time{}, ""
 
 	dctx, cancel := wfrecord.TerminalOptions(ctx)
 	defer cancel()

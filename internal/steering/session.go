@@ -37,9 +37,9 @@ var ErrUnavailable = errors.New("the steering store could not be reached")
 // stands. Like a refused decision, it always names what is wrong.
 var ErrInvalidMessage = errors.New("invalid conversation message")
 
-// State is where a session stands. There are exactly two, because a session's whole
-// life is "waiting for a human" and then "answered": it has no in-between, and it
-// never expires.
+// State is where a session stands. A session waits for a human, and then it has
+// been answered — or the work it was waiting for is gone, which is the one other
+// way a wait can end.
 type State string
 
 const (
@@ -48,6 +48,10 @@ const (
 	// StateDecided is a session an operator has answered. The decision it recorded
 	// is final: the first one wins, and the loop acted on it.
 	StateDecided State = "decided"
+	// StateAbandoned is a session whose loop ended before anybody answered — it was
+	// cancelled, or it failed. It is recorded rather than left waiting, because a
+	// round nobody can answer must not keep asking.
+	StateAbandoned State = "abandoned"
 )
 
 // Role says who produced one message of the conversation.

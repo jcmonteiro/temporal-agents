@@ -13,6 +13,7 @@ import (
 	"temporal-agents/internal/instruction"
 	"temporal-agents/internal/scoped/scopedpg"
 	"temporal-agents/internal/setting"
+	"temporal-agents/internal/steering/steeringpg"
 )
 
 // databaseURLEnv names the environment variable carrying the execution store's
@@ -133,6 +134,28 @@ func openPublishedConfiguration(ctx context.Context) *scopedpg.Store {
 	if err := setting.PublishDefaults(publishCtx, store); err != nil {
 		store.Close()
 		fatalf("could not publish the settings this build ships: %v", err)
+	}
+	return store
+}
+
+// openSteeringStore connects the worker to the steering store: where a paused round
+// is written for an operator to read, and where the decision that answers it is
+// recorded.
+//
+// It is fail-fast for the same reason the execution store is. A worker that cannot
+// reach it can still run every loop nobody asked to steer, but a loop that *was*
+// asked to steer would stop for a decision nobody could see, and that is precisely
+// the stuck run this feature exists to remove.
+func openSteeringStore(ctx context.Context) *steeringpg.Store {
+	dsn, err := databaseURL()
+	if err != nil {
+		fatalf("%v", err)
+	}
+	connectCtx, cancel := context.WithTimeout(ctx, storeConnectTimeout)
+	defer cancel()
+	store, err := steeringpg.Open(connectCtx, dsn)
+	if err != nil {
+		fatalf("could not reach the steering store: %v", err)
 	}
 	return store
 }
