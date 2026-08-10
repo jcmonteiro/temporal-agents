@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
@@ -18,8 +19,9 @@ import {
   type WorkItemStatus,
 } from "../../domain/work-item";
 import { Icon } from "../../components/Icon";
-import { prefersReducedMotion } from "../../platform/motion";
+import { onEachFrame, prefersReducedMotion } from "../../platform/motion";
 import { layoutOrbit } from "./layout";
+import { advanced, positionAt } from "./orbit-motion";
 import {
   IDENTITY,
   panned,
@@ -99,7 +101,42 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
     return () => window.removeEventListener("keydown", onKey);
   }, [clearSelection]);
 
-  const layout = layoutOrbit(items, { width: size.w, height: size.h });
+  const layout = useMemo(
+    () => layoutOrbit(items, { width: size.w, height: size.h }),
+    [items, size.w, size.h],
+  );
+
+  // How far the constellation has turned, in radians. One angle drives every
+  // satellite: a satellite only travels along its ring, so its icon and label
+  // can never tilt, however long the canvas turns.
+  const rotation = useRef(0);
+
+  // The satellite groups, by item key. The motion writes their positions
+  // straight to the DOM, so turning costs no React render per frame.
+  const satellites = useRef(new Map<string, SVGGElement>());
+
+  const placeSatellites = useCallback(() => {
+    for (const slot of layout.slots) {
+      const el = satellites.current.get(itemKey(slot.item));
+      if (!el) continue;
+      const at = positionAt(slot, layout.center, rotation.current);
+      el.setAttribute("transform", `translate(${at.x}, ${at.y})`);
+    }
+  }, [layout]);
+
+  // The orbital motion. Stopping simply drops the frame loop, which holds the
+  // constellation at its current angle.
+  useEffect(() => {
+    if (!playing) return;
+    let previous: number | null = null;
+    return onEachFrame((now) => {
+      if (previous !== null) {
+        rotation.current = advanced(rotation.current, now - previous);
+        placeSatellites();
+      }
+      previous = now;
+    });
+  }, [playing, placeSatellites]);
 
   // Zoom around a focal point (screen coords) so content under the cursor
   // stays put — the standard pan/zoom feel.
@@ -263,25 +300,25 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
             </defs>
           </g>
 
-          {/* Satellites, carried by a rotor group that provides the shared
-              orbital motion: the whole constellation turns as one rigid body,
-              and each satellite counter-rotates so its icon and label stay
-              upright. Pausing holds the current position. */}
-          <g
-            className="orbit-rotor"
-            style={{
-              transformOrigin: `${layout.center.x}px ${layout.center.y}px`,
-              animationPlayState: playing ? "running" : "paused",
-            }}
-          >
-            {layout.slots.map(({ item, x, y }) => {
+          {/* Satellites. The whole constellation turns as one rigid body, but
+              each satellite is only carried along its ring: no satellite ever
+              turns about its own centre, so icons and labels stay upright. */}
+          <g>
+            {layout.slots.map((slot) => {
+              const { item } = slot;
               const isSelected = sameItem(item, selected);
+              const at = positionAt(slot, layout.center, rotation.current);
               return (
                 <g
                   key={itemKey(item)}
+                  ref={(el) => {
+                    const key = itemKey(item);
+                    if (el) satellites.current.set(key, el);
+                    else satellites.current.delete(key);
+                  }}
                   className="satellite"
                   data-selected={isSelected || undefined}
-                  transform={`translate(${x}, ${y})`}
+                  transform={`translate(${at.x}, ${at.y})`}
                   style={{ cursor: "pointer" }}
                   onClick={() => {
                     // Suppress the click that ends a pan gesture.
@@ -301,56 +338,49 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
                     }
                   }}
                 >
+                  {/* Circular focus ring, shown only for keyboard focus. */}
+                  <circle
+                    className="satellite-focus"
+                    r={35}
+                    fill="none"
+                    stroke="var(--color-accent)"
+                    strokeWidth={2}
+                  />
+                  <circle
+                    r={30}
+                    fill="var(--color-surface)"
+                    stroke={
+                      isSelected ? "var(--color-accent)" : "var(--color-border-strong)"
+                    }
+                    strokeWidth={isSelected ? 2 : 1.25}
+                  />
                   <g
-                    className="satellite-upright"
-                    style={{ animationPlayState: playing ? "running" : "paused" }}
+                    transform="translate(-12, -12)"
+                    color="var(--color-text)"
+                    style={{ pointerEvents: "none" }}
                   >
-                    {/* Circular focus ring, shown only for keyboard focus. */}
+                    <Icon name={item.icon} size={24} />
+                  </g>
+                  <g transform="translate(0, 52)" style={{ pointerEvents: "none" }}>
                     <circle
-                      className="satellite-focus"
-                      r={35}
+                      cx={-6}
+                      cy={-4}
+                      r={4}
                       fill="none"
-                      stroke="var(--color-accent)"
-                      strokeWidth={2}
+                      stroke={STATUS_VAR[item.status]}
+                      strokeWidth={1.5}
                     />
-                    <circle
-                      r={30}
-                      fill="var(--color-surface)"
-                      stroke={
-                        isSelected
-                          ? "var(--color-accent)"
-                          : "var(--color-border-strong)"
-                      }
-                      strokeWidth={isSelected ? 2 : 1.25}
-                    />
-                    <g
-                      transform="translate(-12, -12)"
-                      color="var(--color-text)"
-                      style={{ pointerEvents: "none" }}
+                    <text
+                      x={2}
+                      y={0}
+                      fill="var(--color-text-muted)"
+                      style={{
+                        fontFamily: "var(--font-sans)",
+                        fontSize: 11,
+                      }}
                     >
-                      <Icon name={item.icon} size={24} />
-                    </g>
-                    <g transform="translate(0, 52)" style={{ pointerEvents: "none" }}>
-                      <circle
-                        cx={-6}
-                        cy={-4}
-                        r={4}
-                        fill="none"
-                        stroke={STATUS_VAR[item.status]}
-                        strokeWidth={1.5}
-                      />
-                      <text
-                        x={2}
-                        y={0}
-                        fill="var(--color-text-muted)"
-                        style={{
-                          fontFamily: "var(--font-sans)",
-                          fontSize: 11,
-                        }}
-                      >
-                        {STATUS_LABEL[item.status]}
-                      </text>
-                    </g>
+                      {STATUS_LABEL[item.status]}
+                    </text>
                   </g>
                 </g>
               );

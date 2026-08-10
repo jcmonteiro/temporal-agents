@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { fireEvent } from "@testing-library/dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkItem } from "../../domain/work-item";
 import { Orbit } from "./Orbit";
+import { ORBIT_PERIOD_MS } from "./orbit-motion";
 
 const FLEET: WorkItem = {
   id: "fleet-1",
@@ -43,8 +44,36 @@ function showOrbit(
   return { onSelect, onClear };
 }
 
+/** The satellite of the given work item, as the operator picks it out. */
+function satellite(label: string): SVGGElement {
+  return screen.getByRole("button", { name: label }) as unknown as SVGGElement;
+}
+
+/** The place a satellite occupies on the canvas. */
+function placeOf(el: SVGGElement): { x: number; y: number } {
+  const transform = el.getAttribute("transform") ?? "";
+  const place = /^translate\(\s*(-?[\d.e+-]+)\s*,\s*(-?[\d.e+-]+)\s*\)$/.exec(transform);
+  if (!place) throw new Error(`the satellite is not simply placed: "${transform}"`);
+  return { x: Number(place[1]), y: Number(place[2]) };
+}
+
+/** Every transform on the satellite and on everything it carries. */
+function transformsWithin(el: SVGGElement): string[] {
+  return [el, ...Array.from(el.querySelectorAll("*"))]
+    .map((node) => node.getAttribute("transform") ?? "")
+    .filter((transform) => transform !== "");
+}
+
+/** Lets the given amount of orbital motion happen, frame by frame. */
+function letItTurn(ms: number): void {
+  act(() => {
+    vi.advanceTimersByTime(ms);
+  });
+}
+
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -69,6 +98,49 @@ describe("the orbit motion", () => {
     fireEvent.click(screen.getByRole("button", { name: "Pause orbit animation" }));
 
     expect(screen.getByRole("button", { name: "Play orbit animation" })).toBeTruthy();
+  });
+
+  it("carries a satellite once around the centre per period", () => {
+    vi.useFakeTimers();
+    showOrbit();
+    const target = satellite("Checkout revamp, In Progress");
+    const start = placeOf(target);
+
+    letItTurn(ORBIT_PERIOD_MS / 4);
+    const quarterWay = placeOf(target);
+    letItTurn((ORBIT_PERIOD_MS * 3) / 4);
+    const fullTurn = placeOf(target);
+
+    // A quarter of a period takes the satellite well away from where it began,
+    // and a whole period brings it back (bar the odd frame of travel).
+    expect(Math.hypot(quarterWay.x - start.x, quarterWay.y - start.y)).toBeGreaterThan(100);
+    expect(Math.hypot(fullTurn.x - start.x, fullTurn.y - start.y)).toBeLessThan(1);
+  });
+
+  it("holds the satellite still while the motion is stopped", () => {
+    vi.useFakeTimers();
+    showOrbit();
+    const target = satellite("Checkout revamp, In Progress");
+    fireEvent.click(screen.getByRole("button", { name: "Pause orbit animation" }));
+    const stopped = placeOf(target);
+
+    letItTurn(ORBIT_PERIOD_MS / 4);
+
+    expect(placeOf(target)).toEqual(stopped);
+  });
+
+  it("never tilts a satellite, however many turns it makes", () => {
+    vi.useFakeTimers();
+    showOrbit();
+    const target = satellite("Checkout revamp, In Progress");
+    const upright = transformsWithin(target).slice(1);
+
+    letItTurn(ORBIT_PERIOD_MS * 20);
+
+    // The satellite is only ever placed, never turned, and nothing it carries
+    // moves relative to it: its icon and label therefore stay upright.
+    expect(placeOf(target)).toBeTruthy();
+    expect(transformsWithin(target).slice(1)).toEqual(upright);
   });
 });
 
