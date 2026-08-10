@@ -3,6 +3,7 @@ import type {
   FleetNode,
   LocatedCollection,
   LocationResource,
+  PlaceDTO,
   RunDTO,
   ScheduleDTO,
 } from "../clients/api";
@@ -40,6 +41,18 @@ export class FakeApi {
   signInConfigured = true;
   /** How many times the session endpoint was asked, so a loop is visible. */
   sessionReads = 0;
+  /**
+   * The places an operator registered. They are separate from `locations`: a
+   * registered place is published by the places resource, and by the work
+   * collections only once work has run there.
+   */
+  registered: PlaceDTO[] = [];
+  /**
+   * The directories this machine holds, and what the probe answers about each.
+   * A directory that is not here does not exist; one mapped to null exists but
+   * no repository holds it. This is how a test drives the two refusals.
+   */
+  directories: Record<string, LocationResource | null> = {};
 
   private original: typeof globalThis.fetch | undefined;
 
@@ -58,6 +71,9 @@ export class FakeApi {
       }
       if (this.signInConfigured && this.principal === null) {
         return Promise.resolve(this.unauthenticated());
+      }
+      if (path === "/api/v1/places") {
+        return Promise.resolve(this.places(method, init?.body));
       }
       const body = this.bodyFor(path);
       if (!body) {
@@ -89,6 +105,80 @@ export class FakeApi {
     });
   }
 
+  /**
+   * Answers the places resource: where the hub may work, and registering one
+   * more. The refusals are the server's own, in the same order it applies them:
+   * the request's own rules first, then what this machine holds.
+   */
+  private places(method: string, body: BodyInit | null | undefined): Response {
+    if (method === "GET") {
+      return this.json({
+        items: this.registered,
+        count: this.registered.length,
+        limit: this.registered.length,
+        locations: this.registeredLocations(),
+      } satisfies LocatedCollection<PlaceDTO>);
+    }
+    const directory = String(JSON.parse(String(body ?? "{}")).directory ?? "");
+    if (!directory.startsWith("/")) {
+      return this.problem(400, "invalid-request",
+        `the directory ${directory} must be an absolute path`);
+    }
+    const location = this.directories[directory];
+    if (location === undefined) {
+      return this.problem(422, "not-a-place", `no such directory: ${directory}`);
+    }
+    if (location === null) {
+      return this.problem(422, "not-a-place", `not a repository: ${directory}`);
+    }
+    const existing = this.registered.find((place) => place.locationId === location.id);
+    if (existing) {
+      return this.json({ ...existing, locations: [theUnknownPlace(), location] }, 201);
+    }
+    const place: PlaceDTO = {
+      locationId: location.id,
+      registeredAt: "2026-08-06T12:00:00Z",
+      registeredBy: this.principal?.id,
+    };
+    this.registered.push(place);
+    if (!this.locations.some((known) => known.id === location.id)) {
+      this.locations = [...this.locations, location];
+    }
+    return this.json({ ...place, locations: [theUnknownPlace(), location] }, 201);
+  }
+
+  /** The registry the places resource publishes for what it holds. */
+  private registeredLocations(): LocationResource[] {
+    const referenced = new Set(this.registered.map((place) => place.locationId));
+    for (const location of [...this.locations].reverse()) {
+      if (referenced.has(location.id) && location.parentId) referenced.add(location.parentId);
+    }
+    return this.locations.filter(
+      (location) => location.id === "unknown" || referenced.has(location.id),
+    );
+  }
+
+  /** A JSON body, as the API sends one. */
+  private json(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  /** A problem document, as the API refuses with one. */
+  private problem(status: number, code: string, detail: string): Response {
+    return new Response(
+      JSON.stringify({
+        type: `/api/v1/problems/${code}`,
+        title: code,
+        status,
+        detail,
+      }),
+      { status, headers: { "content-type": "application/problem+json" } },
+    );
+  }
+
   /** The problem document the API answers a refused credential with. */
   private unauthenticated(): Response {
     return new Response(
@@ -118,12 +208,28 @@ export class FakeApi {
     }
   }
 
+  /**
+   * One work collection, with the registry of the places its items refer to.
+   *
+   * The registry is closed over the referenced places and their ancestors, and
+   * carries nothing else, exactly as the server's is: a place nothing runs in
+   * appears in no work collection at all, which is the whole reason the places
+   * resource exists.
+   */
   private collection<T>(items: T[]): LocatedCollection<T> {
+    const referenced = new Set(
+      items.map((item) => (item as { locationId?: string }).locationId ?? "unknown"),
+    );
+    for (const location of [...this.locations].reverse()) {
+      if (referenced.has(location.id) && location.parentId) referenced.add(location.parentId);
+    }
     return {
       items,
       count: items.length,
       limit: 100,
-      locations: this.locations,
+      locations: this.locations.filter(
+        (location) => location.id === "unknown" || referenced.has(location.id),
+      ),
     };
   }
 }

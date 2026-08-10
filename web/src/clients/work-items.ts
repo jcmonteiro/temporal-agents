@@ -5,6 +5,7 @@ import { err, ok, type Result } from "../utils/result";
 import type {
   FleetDTO,
   LocatedCollection,
+  PlaceDTO,
   RunDTO,
   ScheduleDTO,
 } from "./api";
@@ -34,10 +35,11 @@ export interface OverviewData {
  * mapping.ts.
  */
 export async function loadOverview(): Promise<Result<OverviewData, Error>> {
-  const [fleets, runs, schedules] = await Promise.all([
+  const [fleets, runs, schedules, registered] = await Promise.all([
     fetchJSON<LocatedCollection<FleetDTO>>("/fleets"),
     fetchJSON<LocatedCollection<RunDTO>>("/runs"),
     fetchJSON<LocatedCollection<ScheduleDTO>>("/schedules"),
+    fetchJSON<LocatedCollection<PlaceDTO>>("/places"),
   ]);
 
   if (!fleets.ok) return err(fleets.error);
@@ -51,12 +53,19 @@ export async function loadOverview(): Promise<Result<OverviewData, Error>> {
   ];
 
   // Each response carries its own registry, closed under ancestry and ordered
-  // parents-first. Identity is the server's, so concatenating the three keeps
-  // that order and the registry collapses the copies of a shared place.
+  // parents-first. Identity is the server's, so concatenating them keeps that
+  // order and the registry collapses the copies of a shared place.
+  //
+  // The registered places are read alongside the work, because a place an
+  // operator registered and never used runs nothing and would therefore appear
+  // in no work collection at all — which is exactly the place the operator most
+  // needs to see. A registry that cannot be read costs those places and not the
+  // page: the overview is about work, and it still has all of it.
   const published: Place[] = [
     ...(fleets.value.locations ?? []),
     ...(runs.value.locations ?? []),
     ...(schedules.value.locations ?? []),
+    ...(registered.ok ? (registered.value.locations ?? []) : []),
   ].map(fromLocation);
 
   return ok({

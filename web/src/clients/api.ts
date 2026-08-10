@@ -99,3 +99,15 @@ export interface ScheduleDTO {
   nextRunAt: string | null;
   dismissible: boolean;
 }
+
+// One place an operator registered: which place it is, and the provenance of
+// the registration. The place itself is published once, in the response's
+// registry, and referenced here by id.
+export interface PlaceDTO {
+  locationId: string;
+  registeredAt: string | null;
+  registeredBy?: string;
+  // Present when the place is served on its own, because there is then no
+  // envelope to carry the registry.
+  locations?: LocationResource[];
+}

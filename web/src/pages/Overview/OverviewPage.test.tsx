@@ -229,6 +229,20 @@ describe("the places on the Overview", () => {
     ]);
   });
 
+  it("draws a place an operator registered, though nothing has run there", async () => {
+    // The place exists because somebody said the hub may work there. Nothing has
+    // run in it, so no work collection mentions it — and it is exactly the place
+    // an operator is about to start the first run in.
+    api.registered = [{ locationId: "repo", registeredAt: "2026-08-06T12:00:00Z" }];
+
+    await showOverview();
+
+    expect(placeNames()).toEqual([
+      "Unknown, place, 0 items",
+      "checkout, place, 0 items",
+    ]);
+  });
+
   it("folds the worktrees into their repository on request", async () => {
     api.runs = [
       aRun({ id: "run-1", locationId: "repo" }),

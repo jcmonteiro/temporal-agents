@@ -1106,6 +1106,25 @@ func TestOverviewResourcesKeepTheFieldNamesTheWebClientReads(t *testing.T) {
 		}
 	}
 
+	// The places resource is read by the hub's own settings page, which lists where
+	// the hub may work and registers one more.
+	places := request(t, server, http.MethodGet, BasePath+"/places", nil)
+	var registry map[string]any
+	decodeResponse(t, places, &registry)
+	for _, key := range []string{"items", "count", "limit", "locations"} {
+		if _, ok := registry[key]; !ok {
+			t.Errorf("/places: collection has no %q", key)
+		}
+	}
+	registered := registerPlace(t, server, "/srv/repos/pricing")
+	var place map[string]any
+	decodeResponse(t, registered, &place)
+	for _, key := range []string{"locationId", "registeredAt", "locations"} {
+		if _, ok := place[key]; !ok {
+			t.Errorf("/places: the registered place has no %q, which the web client reads", key)
+		}
+	}
+
 	// The up-next entries the rail lists carry their own identity and status.
 	response := request(t, server, http.MethodGet, BasePath+"/fleets", nil)
 	var document struct {

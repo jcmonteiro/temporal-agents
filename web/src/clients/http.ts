@@ -30,6 +30,14 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /**
+     * What the server said is wrong, in words meant for a person. It is the
+     * problem document's detail, and it is empty when the server sent none: a
+     * refusal an operator can act on says which directory, which field, which
+     * conflict, and inventing that text here would say something the server did
+     * not.
+     */
+    readonly detail = "",
   ) {
     super(message);
     this.name = "ApiError";
@@ -87,6 +95,18 @@ export async function fetchJSON<T>(path: string): Promise<Result<T, Error>> {
   }
 }
 
+/** POSTs a JSON document and reads the created resource back. */
+export async function postJSON<T>(path: string, body: unknown): Promise<Result<T, Error>> {
+  const res = await request(path, { method: "POST", body });
+  if (!res.ok) return err(res.error);
+  if (res.value.status === 204) return ok(undefined as T);
+  try {
+    return ok((await res.value.json()) as T);
+  } catch (e) {
+    return err(e instanceof Error ? e : new Error(String(e)));
+  }
+}
+
 /** Sends a request that changes something and reads no body. */
 export async function send(
   path: string,
@@ -103,15 +123,20 @@ export async function send(
  */
 async function request(
   path: string,
-  init: { method: string },
+  init: { method: string; body?: unknown },
 ): Promise<Result<Response, Error>> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
   try {
+    const headers: Record<string, string> = { Accept: "application/json" };
+    // A body makes the request one a browser will not send cross-site without
+    // asking first, which is the rule the API enforces on every change.
+    if (init.body !== undefined) headers["Content-Type"] = "application/json";
     const res = await fetch(BASE + path, {
       method: init.method,
       credentials: CREDENTIALS,
-      headers: { Accept: "application/json" },
+      headers,
+      body: init.body === undefined ? undefined : JSON.stringify(init.body),
       signal: controller.signal,
     });
     if (res.status === 401) {
@@ -119,12 +144,36 @@ async function request(
       return err(new UnauthenticatedError(`${init.method} ${path}`));
     }
     if (!res.ok) {
-      return err(new ApiError(res.status, `${init.method} ${path} → ${res.status}`));
+      return err(
+        new ApiError(
+          res.status,
+          `${init.method} ${path} → ${res.status}`,
+          await problemDetail(res),
+        ),
+      );
     }
     return ok(res);
   } catch (e) {
     return err(e instanceof Error ? e : new Error(String(e)));
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * The explanation a refusal carries, or nothing.
+ *
+ * Every failure this API reports is a problem document (RFC 9457), and its
+ * `detail` is the sentence written for the operator. A body that is not one, or
+ * that cannot be read at all, yields nothing rather than a fragment of markup on
+ * screen.
+ */
+async function problemDetail(response: Response): Promise<string> {
+  if (!(response.headers.get("content-type") ?? "").includes("json")) return "";
+  try {
+    const document = (await response.json()) as { detail?: unknown };
+    return typeof document.detail === "string" ? document.detail : "";
+  } catch {
+    return "";
   }
 }

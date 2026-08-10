@@ -26,6 +26,10 @@ beforeEach(() => {
       directory: "/srv/feature",
     }),
   ];
+  // The hub knows the worktree — and, through it, the repository above — because
+  // an operator registered it. Without that, a place nothing has ever run in is
+  // published by nothing and the page would rightly say it knows no such place.
+  api.registered = [{ locationId: "tree", registeredAt: "2026-08-06T12:00:00Z" }];
 });
 
 afterEach(() => {
