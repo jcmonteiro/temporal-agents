@@ -112,6 +112,21 @@ func TestBuildPlanPrompt_IncludesGoalAndForbidsCodeChanges(t *testing.T) {
 	require.Contains(t, p, `"dependsOn"`)
 }
 
+// The two ways a plan document has been observed to go wrong are an omitted
+// "dependsOn" (which silently turns a layered plan into a flat fan-out no
+// validation can catch, because a fully parallel plan is legal) and an invented
+// extra key (which the strict decoder refuses outright). Both are spelled out as
+// rules, so the prompt states them rather than leaving them to be inferred from
+// the shape block.
+func TestBuildPlanPrompt_DemandsDependsOnEverywhereAndNoExtraKeys(t *testing.T) {
+	p := BuildPlanPrompt("add multi-tenant support")
+	require.Contains(t, p, `Include "dependsOn" on EVERY node`)
+	require.Contains(t, p, "never leave the key out")
+	require.Contains(t, p, "Output exactly the keys shown")
+	require.Contains(t, p, "Any other key makes the plan unusable")
+	require.Contains(t, p, "Nothing downstream can recover an edge you leave out")
+}
+
 func TestParsePlan_BareJSON(t *testing.T) {
 	plan, err := ParsePlan(`{"goal":"g","nodes":[{"id":"a","prompt":"p"}]}`)
 	require.NoError(t, err)

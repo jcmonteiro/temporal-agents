@@ -382,6 +382,16 @@ func groupThousands(n int) string {
 // matching FleetPlan so ParsePlan can read the agent's final message, and steers
 // the decomposition toward small, independently reviewable slices with explicit
 // dependencies.
+//
+// The schema rules are stated as requirements rather than as a shape to imitate,
+// because both observed failure modes are schema drift in a long answer: a plan
+// that reasoned its way to a correct layering but then emitted every node without
+// a "dependsOn" key, and one that invented an extra top-level key the strict
+// decoder refuses. The first is the dangerous one: a fully parallel plan is legal
+// and executable, so dropped edges cannot be caught by validation and are only
+// visible once every slice has been developed from the bare base. So the prompt
+// makes the key mandatory on every node, forbids any key outside the schema, and
+// asks for the ordering to be expressed rather than left implicit.
 func BuildPlanPrompt(goal string) string {
 	return `Decompose the software change described below into a dependency graph of small, independently reviewable slices of work (a "fleet plan"). Prefer a horizontal slice that establishes shared/domain foundations first, followed by vertical slices, and use dependencies to order the foundational slice ahead of the slices that logically build on it.
 
@@ -402,7 +412,9 @@ Do NOT make any code changes. Read the referenced code and relevant in-repo docu
 
 Rules:
 - Each "id" must be a unique short slug using only letters, digits, '-' or '_'.
-- "dependsOn" lists the ids of slices that must succeed before this one starts; omit or use [] when the slice has no prerequisites.
+- Include "dependsOn" on EVERY node: the ids of the slices that must succeed before this one starts, or [] when the slice has no prerequisites — never leave the key out. A missing key reads as "no prerequisites", so an omitted dependency silently drops the ordering and the layering you decided on.
+- Output exactly the keys shown: "goal" and "nodes" at the top level, "id", "prompt" and "dependsOn" in each node. Any other key makes the plan unusable, so do not add notes, comments, counts or explanations anywhere in the object.
+- Express the ordering you decided on: a slice left with an empty "dependsOn" is developed in parallel with the others from the bare base, with no foundation landing first, so leave it empty only when the slice genuinely has no prerequisite. Nothing downstream can recover an edge you leave out.
 - The graph must be acyclic.
 - Each "prompt" must be a complete instruction for a coding agent. A slice may assume the committed work of the slices it "dependsOn" is already present on its branch; a slice with no dependencies must be self-contained from the repository base.
 
