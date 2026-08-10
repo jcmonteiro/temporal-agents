@@ -12,7 +12,7 @@ that several features depend on.
 |---|--|------|---------|-----------|
 | 1 | DONE | [`locations`](./archive/locations/) | every item reports where it runs; the overview groups work into planets per location, collapsing toward parents | — |
 | 2 | DONE | [`authentication`](./archive/authentication/) | the hub authenticates through an OIDC provider, SSO-ready, with server-held tokens | 1 (nothing hard, ships beside it) |
-| 3 | IN-PROGRESS | [`prompts`](./active/prompts/) — foundation slices | prompts are stored, scoped per location, versioned, and every run records which prompt version it used | 1 |
+| 3 | DONE | [`prompts`](./active/prompts/) — foundation slices | prompts are stored, scoped per location, versioned, and every run records which prompt version it used | 1 |
 | 4 | TODO | [`launching-work`](./active/launching-work/) | an operator starts and re-runs agent work from a dedicated page | 1, 2 |
 | 5 | TODO | [`steering`](./active/steering/) | a review round waits for the operator, who guides it by text or by being grilled, then builds | 1, 2, 3 (foundation) |
 | 6 | TODO | [`prompts`](./active/prompts/) — configuration slices | prompts are editable globally and per location, with resets to inherited and to factory | 3 |
