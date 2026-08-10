@@ -8,5 +8,7 @@ export default defineConfig({
     root: fileURLToPath(new URL(".", import.meta.url)),
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     environment: "node",
+    // Fills the browser API gaps of jsdom for the DOM test files.
+    setupFiles: ["src/test/setup.ts"],
   },
 });
