@@ -40,28 +40,3 @@ button {
 .satellite[data-selected] .satellite-focus {
   opacity: 0;
 }
-
-/* Shared orbital motion. The whole constellation turns as one rigid body: the
-   rotor spins around the orbit centre, and each satellite's content spins back
-   at the same rate so icons and labels stay upright. Both run as CSS
-   animations, so no React render happens per frame; pausing is a matter of
-   animation-play-state and holds the current position. */
-@keyframes orbit-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-@keyframes orbit-spin-back {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(-360deg); }
-}
-
-.orbit-rotor {
-  animation: orbit-spin var(--orbit-period) linear infinite;
-}
-
-.satellite-upright {
-  /* Rotate about the satellite's own origin, not the SVG view box centre. */
-  transform-origin: 0px 0px;
-  animation: orbit-spin-back var(--orbit-period) linear infinite;
-}

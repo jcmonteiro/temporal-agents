@@ -21,9 +21,6 @@
   --font-size-lg: 16px;
   --font-size-xl: 20px;
 
-  /* Motion: one gentle orbital revolution every four minutes. */
-  --orbit-period: 240s;
-
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
