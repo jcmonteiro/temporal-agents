@@ -2,6 +2,13 @@
 
 Hexagonal Architecture!
 
+## Plans
+
+`plans/README.md` is the index and the only plan file to read unhinted. Load a
+feature's plan only while working on that feature, and never load
+`plans/archive/**` unless it is asked for by name. The rules live in
+`plans/AGENTS.md` and `plans/archive/AGENTS.md`.
+
 ## Testing
 
 - Tests follow the definitions of "Unit Testing Principles, Practices, and Patterns - Vladimir Khorikov"
