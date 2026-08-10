@@ -19,6 +19,14 @@ import {
 } from "../../domain/work-item";
 import { Icon } from "../../components/Icon";
 import { layoutOrbit } from "./layout";
+import {
+  IDENTITY,
+  panned,
+  wheelZoomFactor,
+  zoomedAround,
+  ZOOM_STEP,
+  type View,
+} from "./view";
 import { Starfield } from "./Starfield";
 
 const STATUS_VAR: Record<WorkItemStatus, string> = {
@@ -30,26 +38,6 @@ const STATUS_VAR: Record<WorkItemStatus, string> = {
   done: "var(--status-done)",
   failed: "var(--status-failed)",
 };
-
-const MIN_ZOOM = 0.4;
-const MAX_ZOOM = 3;
-const ZOOM_STEP = 1.2; // per button press
-// Wheel zoom sensitivity: multiplier per unit of wheel delta. Small = gentle.
-const WHEEL_ZOOM_SENSITIVITY = 0.0015;
-
-
-interface View {
-  // Screen offset of the content origin, and the scale factor.
-  x: number;
-  y: number;
-  k: number;
-}
-
-const IDENTITY: View = { x: 0, y: 0, k: 1 };
-
-function clampZoom(k: number): number {
-  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k));
-}
 
 interface Props {
   items: WorkItem[];
@@ -118,15 +106,7 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
   // Zoom around a focal point (screen coords) so content under the cursor
   // stays put — the standard pan/zoom feel.
   const zoomAround = useCallback((factor: number, fx: number, fy: number) => {
-    setView((v) => {
-      const k = clampZoom(v.k * factor);
-      const actual = k / v.k; // clamped ratio
-      return {
-        k,
-        x: fx - (fx - v.x) * actual,
-        y: fy - (fy - v.y) * actual,
-      };
-    });
+    setView((v) => zoomedAround(v, factor, fx, fy));
   }, []);
 
   const zoomAtCenter = useCallback(
@@ -140,12 +120,7 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
       const rect = hostRef.current?.getBoundingClientRect();
       const fx = rect ? e.clientX - rect.left : size.w / 2;
       const fy = rect ? e.clientY - rect.top : size.h / 2;
-      // Gentle exponential zoom proportional to wheel delta. The low
-      // sensitivity keeps a normal scroll notch from jumping too far; the
-      // clamp stops a fast flick (or a line/page-mode wheel) from overshooting.
-      const delta = Math.max(-40, Math.min(40, e.deltaY));
-      const factor = Math.exp(-delta * WHEEL_ZOOM_SENSITIVITY);
-      zoomAround(factor, fx, fy);
+      zoomAround(wheelZoomFactor(e.deltaY), fx, fy);
     },
     [zoomAround, size.w, size.h],
   );
@@ -180,7 +155,7 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
       hostRef.current?.setPointerCapture(e.pointerId);
     }
     if (!d.moved) return;
-    setView({ k: d.origin.k, x: d.origin.x + dx, y: d.origin.y + dy });
+    setView(panned(d.origin, dx, dy));
   }, []);
 
   // Set true when a pan ends, so the click event that immediately follows a
