@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"temporal-agents/internal/agenthub"
+	"temporal-agents/internal/setting"
 )
 
 // This file holds the wire representations: the published shape of every resource,
@@ -479,4 +480,39 @@ func timestamp(t time.Time) *string {
 	}
 	rendered := t.UTC().Format(time.RFC3339)
 	return &rendered
+}
+
+// settingResource is one governed setting as the API publishes it: what it is here,
+// and where that answer came from.
+type settingResource struct {
+	// Key is the governed setting, e.g. "steering.enabled".
+	Key string `json:"key"`
+	// Purpose is what the setting decides, for a person about to change it.
+	Purpose string `json:"purpose"`
+	// Enabled is the effective value.
+	Enabled bool `json:"enabled"`
+	// Source is the kind of scope the value came from — a place, the installation, or
+	// the value this build ships. It is the kind and not the scope itself: a scope
+	// names an absolute path on the server, and this field is read for "where was this
+	// set", not for the machine's directory layout.
+	Source string `json:"source"`
+	// Version is which stored version answered, or 0 when the answer is what the build
+	// ships and storage holds none.
+	Version int `json:"version"`
+}
+
+// settingFrom projects a resolved setting onto its representation. The purpose comes
+// from the catalogue, so the API describes a setting with the same words every other
+// surface does.
+func settingFrom(value setting.Value) settingResource {
+	resource := settingResource{
+		Key:     string(value.Key),
+		Enabled: value.Enabled,
+		Source:  value.Scope.Kind(),
+		Version: value.Version,
+	}
+	if spec, ok := setting.SpecFor(value.Key); ok {
+		resource.Purpose = spec.Purpose
+	}
+	return resource
 }

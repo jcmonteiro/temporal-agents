@@ -148,6 +148,7 @@ move to it deliberately.
 | `GET /api/v1/dismissals` | View-state dismissals in force |
 | `POST /api/v1/dismissals` | Hide one finished fleet or run |
 | `DELETE /api/v1/dismissals/{id}` | Make the item visible again |
+| `GET /api/v1/settings` | What the tool is configured to do, and where each value came from |
 
 Collections accept `limit` from 1 to 200 and default to 25. Existing fleet, run,
 schedule, and dismissal collections keep their original v1 envelope with `items`,
@@ -322,6 +323,32 @@ The response is `201 Created`, with a `Location` header such as:
 
 The identity is derived from kind and item ID. Repeating the same POST is idempotent
 and keeps the original dismissal time. Delete the returned resource to undo it.
+
+## Settings
+
+A setting is what the tool is configured to *do*, as opposed to what an agent is
+*told* (that is an instruction, and it is configured through the same chain). Every
+setting resolves through the place work runs in, then the repository that place
+belongs to, then the installation, then the value this build ships — per setting, so
+a place can override one and inherit the rest.
+
+```http
+GET /api/v1/settings
+```
+
+```json
+{"items":[{"key":"steering.enabled","purpose":"Stop a review round …",
+           "enabled":false,"source":"factory","version":1}],"count":1,"limit":1}
+```
+
+`source` is the *kind* of scope the value came from — `directory`, `global`, or
+`factory` — never the scope itself: a scope names an absolute path on the server, and
+this field is read for "where was this set". `version` is which stored version
+answered, or `0` when storage holds none and the answer is the value the build ships.
+
+The server resolves inheritance, so a consumer never re-derives it. Reading a
+setting as it applies to one place, and writing one, arrive with the configuration
+surface.
 
 ## Errors
 

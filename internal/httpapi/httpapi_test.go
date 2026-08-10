@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"temporal-agents/internal/agenthub"
+	"temporal-agents/internal/setting"
 )
 
 // fixedNow makes timestamps and access-log durations deterministic.
@@ -180,6 +181,10 @@ func newTestServer(t *testing.T, view WorkView, mutate ...func(*Options)) *Serve
 		// is the only way to get one: a server that neither authenticates nor was asked
 		// not to does not build (see TestAServerThatNeitherAuthenticatesNorWasAskedNotToDoesNotBuild).
 		AllowUnauthenticated: true,
+		// Every deployment that publishes configuration serves the settings resource, so
+		// the default test server has one: a resource served by production and by no test
+		// would be a resource nothing keeps honest.
+		Settings: settingsStub{},
 	}
 	for _, change := range mutate {
 		change(&options)
@@ -1581,4 +1586,109 @@ func TestTheRegistryIsPublishedAsAModelOfItsOwn(t *testing.T) {
 	if bytes.Contains(encoded, []byte("#/components/schemas/")) {
 		t.Error("the union's discriminator still points into the OpenAPI document")
 	}
+}
+
+// settingsStub answers the settings read with what the catalogue ships, which is
+// what an installation that has configured nothing resolves to.
+type settingsStub struct {
+	err error
+}
+
+func (s settingsStub) Settings(context.Context) (setting.Resolution, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	resolution := make(setting.Resolution, 0, len(setting.Specs()))
+	for _, spec := range setting.Specs() {
+		resolution = append(resolution, setting.Value{
+			Key: spec.Key, Enabled: spec.Factory, Scope: setting.FactoryScope, Version: 1,
+		})
+	}
+	return resolution, nil
+}
+
+// The configuration surface reads what the tool is set to do, and — as importantly —
+// where each answer came from, so it can say "inherited from the installation"
+// without deriving inheritance itself.
+func TestSettingsArePublishedWithTheScopeEachValueCameFrom(t *testing.T) {
+	server := newTestServer(t, &viewStub{}, func(options *Options) {
+		options.Settings = fixedSettings{setting.Resolution{{
+			Key:     setting.KeySteeringEnabled,
+			Enabled: true,
+			Scope:   setting.GlobalScope,
+			Version: 4,
+		}}}
+	})
+
+	response := request(t, server, http.MethodGet, BasePath+"/settings", nil)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
+	}
+	var document struct {
+		Items []struct {
+			Key     string `json:"key"`
+			Purpose string `json:"purpose"`
+			Enabled bool   `json:"enabled"`
+			Source  string `json:"source"`
+			Version int    `json:"version"`
+		} `json:"items"`
+	}
+	decodeResponse(t, response, &document)
+	if len(document.Items) != 1 {
+		t.Fatalf("published %d setting(s), want the one that was resolved", len(document.Items))
+	}
+	published := document.Items[0]
+	if published.Key != string(setting.KeySteeringEnabled) || !published.Enabled {
+		t.Fatalf("published %+v, want the resolved value", published)
+	}
+	if published.Source != "global" || published.Version != 4 {
+		t.Fatalf("published source %q v%d, want the installation's version 4", published.Source, published.Version)
+	}
+	if published.Purpose == "" {
+		t.Fatal("a setting is published without saying what it decides")
+	}
+}
+
+// A scope names an absolute path on the server. What a consumer needs is which kind
+// of scope answered, so the path never leaves the machine it describes.
+func TestAPlacesSettingIsPublishedAsAPlaceAndNotAsAPath(t *testing.T) {
+	server := newTestServer(t, &viewStub{}, func(options *Options) {
+		options.Settings = fixedSettings{setting.Resolution{{
+			Key:   setting.KeySteeringEnabled,
+			Scope: setting.DirectoryScope("/src/agents"),
+		}}}
+	})
+
+	response := request(t, server, http.MethodGet, BasePath+"/settings", nil)
+
+	if body := response.Body.String(); !strings.Contains(body, `"source":"directory"`) {
+		t.Fatalf("the source is not published as a kind: %s", body)
+	} else if strings.Contains(body, "/src/agents") {
+		t.Fatalf("the server's directory layout was published: %s", body)
+	}
+}
+
+// A configuration store that cannot answer is a dependency failure, reported as one
+// rather than as an empty configuration: an operator reading "nothing is configured"
+// would draw exactly the wrong conclusion.
+func TestASettingsStoreThatCannotAnswerIsADependencyFailure(t *testing.T) {
+	server := newTestServer(t, &viewStub{}, func(options *Options) {
+		options.Settings = settingsStub{err: agenthub.ErrUnavailable}
+	})
+
+	response := request(t, server, http.MethodGet, BasePath+"/settings", nil)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", response.Code)
+	}
+}
+
+// fixedSettings answers with exactly what a test states.
+type fixedSettings struct {
+	resolution setting.Resolution
+}
+
+func (f fixedSettings) Settings(context.Context) (setting.Resolution, error) {
+	return f.resolution, nil
 }

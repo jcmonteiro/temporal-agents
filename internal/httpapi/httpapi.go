@@ -33,6 +33,7 @@ import (
 
 	"temporal-agents/internal/agenthub"
 	"temporal-agents/internal/identity"
+	"temporal-agents/internal/setting"
 )
 
 // BasePath is where the API lives. The major version is in the path on purpose: a
@@ -83,6 +84,18 @@ type WorkView interface {
 	Dismiss(ctx context.Context, kind agenthub.ItemKind, itemID string) (agenthub.Dismissal, error)
 	// Undismiss brings a dismissed item back.
 	Undismiss(ctx context.Context, kind agenthub.ItemKind, itemID string) error
+}
+
+// SettingsView is the read the configuration surface answers from: what every
+// governed setting is, and where each answer came from.
+//
+// The source travels with the value because a consumer must never re-derive
+// inheritance: "off because the installation says so" and "off because nobody has
+// ever set it" are different facts, and two consumers each deriving which is which
+// would eventually disagree with the server and with each other.
+type SettingsView interface {
+	// Settings returns every governed setting as it applies to this installation.
+	Settings(ctx context.Context) (setting.Resolution, error)
 }
 
 // HealthCheck is one dependency the health resource reports on. The wiring supplies
@@ -144,6 +157,11 @@ type Options struct {
 	// path, for local convenience. The API itself never depends on it: the same bundle
 	// can be served by anything else without the API changing.
 	WebDir string
+	// Settings is the read of what the tool is configured to do. It is nil for a
+	// deployment that publishes no configuration, which then serves no settings
+	// resource, exactly as a deployment with no identity provider serves no sign-in
+	// routes.
+	Settings SettingsView
 	// HealthChecks are the dependencies the health resource probes.
 	HealthChecks []HealthCheck
 	// DeprecatedSince and SunsetAt announce the API's lifecycle when an operator sets
@@ -171,6 +189,7 @@ type Server struct {
 	signIn          SignIn
 	secureCookies   bool
 	webDir          string
+	settings        SettingsView
 	healthChecks    []HealthCheck
 	deprecatedSince time.Time
 	sunsetAt        time.Time
@@ -206,6 +225,7 @@ func New(view WorkView, options Options) (*Server, error) {
 		signIn:          options.SignIn,
 		secureCookies:   options.SecureCookies,
 		webDir:          options.WebDir,
+		settings:        options.Settings,
 		healthChecks:    options.HealthChecks,
 		deprecatedSince: options.DeprecatedSince,
 		sunsetAt:        options.SunsetAt,
@@ -305,6 +325,12 @@ func (s *Server) resources() []resource {
 			methods:      map[string]http.HandlerFunc{http.MethodGet: s.handleAPICatalog},
 			undocumented: true,
 		},
+	}
+	if s.settings != nil {
+		list = append(list, resource{
+			pattern: s.basePath + "/settings",
+			methods: map[string]http.HandlerFunc{http.MethodGet: s.handleSettings},
+		})
 	}
 	return append(list, s.authRoutes()...)
 }
@@ -531,6 +557,23 @@ func (s *Server) handleUndismiss(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleSettings answers what the tool is configured to do, and where each answer
+// came from. It is a read of configuration, not of work, so it carries no location
+// registry: a setting resolved for one place arrives with the surface that addresses
+// places.
+func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	resolved, err := s.settings.Settings(r.Context())
+	if err != nil {
+		s.writeServiceProblem(w, r, err)
+		return
+	}
+	items := make([]settingResource, 0, len(resolved))
+	for _, value := range resolved {
+		items = append(items, settingFrom(value))
+	}
+	s.writeJSON(w, r, http.StatusOK, modelSettingCollection, newCollection(items, len(items)))
 }
 
 // handleHealth reports whether the server can reach what it reads through. It probes

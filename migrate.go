@@ -119,7 +119,7 @@ func workerSchemaContexts() []schemaContext {
 
 // serveSchemaContexts are the schemas the API server reads and writes through.
 func serveSchemaContexts() []schemaContext {
-	return []schemaContext{executionStoreSchema, agentHubSchema, identitySchema}
+	return []schemaContext{executionStoreSchema, agentHubSchema, identitySchema, scopedConfigSchema}
 }
 
 // migrateHelp writes the command's usage.

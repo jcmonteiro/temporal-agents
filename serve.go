@@ -22,6 +22,8 @@ import (
 	"temporal-agents/internal/agenthub/hubrecords"
 	"temporal-agents/internal/agenthub/hubtemporal"
 	"temporal-agents/internal/httpapi"
+	"temporal-agents/internal/scoped/scopedpg"
+	"temporal-agents/internal/setting"
 )
 
 // The serve command is the composition root for the Agent Hub API. The core and
@@ -359,6 +361,16 @@ func runAPIServer(options serveOptions) error {
 	}
 	defer dismissals.Close()
 
+	// What the tool is configured to do is read from the same database, through the
+	// catalogue that owns the rules: the API answers the effective value and the scope
+	// it came from, so no consumer re-derives inheritance.
+	config, err := scopedpg.Open(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("could not reach the configuration store: %w", err)
+	}
+	defer config.Close()
+	settings := &setting.Resolver{Store: config}
+
 	// Signing in is opened before anything is served, so a hub configured with a
 	// provider it cannot reach stops here with a message instead of failing at an
 	// operator's first click.
@@ -407,6 +419,7 @@ func runAPIServer(options serveOptions) error {
 		SecureCookies:        options.tlsCert != "",
 		AllowUnauthenticated: openForLocalUse,
 		WebDir:               options.webDir,
+		Settings:             settings,
 		HealthChecks: append([]httpapi.HealthCheck{
 			{
 				Name: "temporal",
@@ -432,6 +445,13 @@ func runAPIServer(options serveOptions) error {
 				Name: "dismissal-store",
 				Check: func(ctx context.Context) error {
 					_, err := dismissals.Dismissals(ctx)
+					return err
+				},
+			},
+			{
+				Name: "scoped-config",
+				Check: func(ctx context.Context) error {
+					_, err := settings.Settings(ctx)
 					return err
 				},
 			},

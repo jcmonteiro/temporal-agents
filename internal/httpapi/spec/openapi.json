@@ -53,6 +53,10 @@
     {
       "name": "Authentication",
       "description": "Signing in with the identity provider, and the session that results. Identity only: this API has no roles and no scopes."
+    },
+    {
+      "name": "Settings",
+      "description": "What the tool is configured to do, resolved through the places work runs in. Each setting reports the scope its value came from, so a consumer never re-derives inheritance."
     }
   ],
   "paths": {
@@ -964,6 +968,51 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/v1/settings": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "List the effective settings",
+        "description": "Every governed setting as it applies to this installation, with the scope each value came from. Resolution walks the place, the repository it belongs to, the installation, and the value this build ships; the server resolves it so no consumer re-derives inheritance.",
+        "operationId": "listSettings",
+        "responses": {
+          "200": {
+            "description": "The effective settings.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Link": {
+                "$ref": "#/components/headers/DescribedBy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingCollection"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
           },
           "401": {
             "$ref": "#/components/responses/AuthenticationRequired"
@@ -2169,6 +2218,73 @@
         "properties": {
           "principal": {
             "$ref": "#/components/schemas/Principal"
+          }
+        }
+      },
+      "SettingSource": {
+        "type": "string",
+        "description": "The kind of scope a setting's value came from: the place work runs in, the installation, or the value this build ships.",
+        "enum": [
+          "directory",
+          "global",
+          "factory"
+        ]
+      },
+      "Setting": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "purpose",
+          "enabled",
+          "source",
+          "version"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The governed setting, e.g. \"steering.enabled\"."
+          },
+          "purpose": {
+            "type": "string",
+            "description": "What the setting decides, for a person about to change it."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "The effective value here."
+          },
+          "source": {
+            "$ref": "#/components/schemas/SettingSource"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Which stored version answered, or 0 when the answer is the value this build ships and storage holds none."
+          }
+        }
+      },
+      "SettingCollection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "count",
+          "limit"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Setting"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       }

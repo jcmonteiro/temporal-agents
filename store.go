@@ -12,6 +12,7 @@ import (
 	"temporal-agents/internal/execstore/execpg"
 	"temporal-agents/internal/instruction"
 	"temporal-agents/internal/scoped/scopedpg"
+	"temporal-agents/internal/setting"
 )
 
 // databaseURLEnv names the environment variable carrying the execution store's
@@ -128,6 +129,10 @@ func openPublishedConfiguration(ctx context.Context) *scopedpg.Store {
 	if err := instruction.PublishDefaults(publishCtx, store); err != nil {
 		store.Close()
 		fatalf("could not publish the instructions this build ships: %v", err)
+	}
+	if err := setting.PublishDefaults(publishCtx, store); err != nil {
+		store.Close()
+		fatalf("could not publish the settings this build ships: %v", err)
 	}
 	return store
 }

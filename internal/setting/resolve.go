@@ -193,6 +193,13 @@ func resolve(spec Spec, scopes []Scope, records []scoped.Record) (Value, error) 
 	}, nil
 }
 
+// Settings is the installation-wide read the API answers: every governed setting as
+// it applies where no place was named. A setting resolved for one place arrives with
+// the surface that addresses places.
+func (r *Resolver) Settings(ctx context.Context) (Resolution, error) {
+	return r.Resolve(ctx, Request{})
+}
+
 // Activity drives resolution as a Temporal activity, for the workflows that need to
 // know whether a behaviour is switched on where they run. It is registered once per
 // worker, exactly as the location probe and the instruction resolution are.
