@@ -377,6 +377,17 @@ func groupThousands(n int) string {
 	return neg + b.String()
 }
 
+// planPromptExample is the worked example BuildPlanPrompt shows: a whole plan, not
+// a fragment, so the agent sees the two shapes the rules describe in prose — a real
+// dependency edge and an explicit empty list — rather than inferring them.
+//
+// It is compact single-line JSON because that is also what the prompt asks for, and
+// a test parses it with ParsePlan and ValidatePlan, so the example cannot drift from
+// the schema the parser actually accepts.
+const planPromptExample = `{"goal":"expose pricing over REST","nodes":[` +
+	`{"id":"pricing-domain","prompt":"Add the pricing domain to the core: the price type, the rounding rules and their unit tests. Do not add any transport.","dependsOn":[]},` +
+	`{"id":"pricing-rest","prompt":"Expose the pricing domain over REST. The domain is already committed on your branch, so use it as it stands instead of re-deriving it.","dependsOn":["pricing-domain"]}]}`
+
 // BuildPlanPrompt renders the instruction handed to the Pi agent to decompose a
 // high-level goal into a dependency graph. It asks for a strict JSON object
 // matching FleetPlan so ParsePlan can read the agent's final message, and steers
@@ -392,12 +403,24 @@ func groupThousands(n int) string {
 // visible once every slice has been developed from the bare base. So the prompt
 // makes the key mandatory on every node, forbids any key outside the schema, and
 // asks for the ordering to be expressed rather than left implicit.
+//
+// The output contract is kept in one section, separate from the decomposition
+// strategy, and it declares the schema instead of only illustrating it: the value
+// types, the JSON escaping each long prompt string needs, and a worked two-slice
+// example carrying both dependency shapes (an edge and an explicit empty list).
+// The contract also says where commentary belongs, because an agent with something
+// to qualify and no place to put it bends the schema instead — which is exactly how
+// the observed run produced an invented top-level key.
 func BuildPlanPrompt(goal string) string {
 	return `Decompose the software change described below into a dependency graph of small, independently reviewable slices of work (a "fleet plan"). Prefer a horizontal slice that establishes shared/domain foundations first, followed by vertical slices, and use dependencies to order the foundational slice ahead of the slices that logically build on it.
 
 IMPORTANT: dependencies control both execution ORDER and code layering. Each slice is developed on its own branch, which is seeded with the committed work of the slices it depends on (the branch is the repository base plus a merge of each dependency's branch). So a slice IS developed on top of the reviewed code produced by the slices it "dependsOn", and does not need to re-establish that work. Use "dependsOn" both to sequence slices (a foundation is reviewed and lands first) and to build a slice on top of its prerequisites — put shared/foundational work in a slice that later slices depend on rather than duplicating it into every prompt. A slice with no "dependsOn" is developed from the bare base, so its prompt must be self-contained.
 
-Do NOT make any code changes. Read the referenced code and relevant in-repo documentation to inform the decomposition, then output ONLY a single JSON object (no prose, no code fences) matching exactly this shape:
+Do NOT make any code changes. Read the referenced code and relevant in-repo documentation to inform the decomposition, then answer with the plan alone.
+
+--- Output contract ---
+
+Output ONLY a single JSON object: no prose before or after it, no code fences, no notes. The object is parsed strictly, so anything outside this schema fails the whole plan:
 
 {
   "goal": "<restate the overall goal in one sentence>",
@@ -410,13 +433,22 @@ Do NOT make any code changes. Read the referenced code and relevant in-repo docu
   ]
 }
 
-Rules:
-- Each "id" must be a unique short slug using only letters, digits, '-' or '_'.
-- Include "dependsOn" on EVERY node: the ids of the slices that must succeed before this one starts, or [] when the slice has no prerequisites — never leave the key out. A missing key reads as "no prerequisites", so an omitted dependency silently drops the ordering and the layering you decided on.
+Schema:
+- "goal" is a string. "nodes" is a non-empty array of objects, one per slice — emit as many as the decomposition needs, not the single one the shape above shows.
+- In each node: "id" is a string, "prompt" is a string, "dependsOn" is an array of strings. "dependsOn" is never a bare string: write ["core"], not "core".
 - Output exactly the keys shown: "goal" and "nodes" at the top level, "id", "prompt" and "dependsOn" in each node. Any other key makes the plan unusable, so do not add notes, comments, counts or explanations anywhere in the object.
+- There is no field for commentary, and none will be added: if something needs saying — an assumption, a risk, a caveat, a piece of context — say it inside the "prompt" of the slice it concerns, where the coding agent will actually read it.
+- Every string must be valid JSON: escape a newline as \n, a quote as \" and a backslash as \\. A literal newline inside a string breaks the parse, so prefer keeping each "prompt" on one line.
+- Each "id" must be unique and use only letters, digits, '-' or '_'. Keep it short (roughly 40 characters or less): it is used verbatim as a workflow id and a branch name.
+- Include "dependsOn" on EVERY node: the ids of the slices that must succeed before this one starts, or [] when the slice has no prerequisites — never leave the key out. A missing key reads as "no prerequisites", so an omitted dependency silently drops the ordering and the layering you decided on.
+- List DIRECT prerequisites only; ordering is transitive, so a slice that depends on B (which depends on A) must not also list A.
 - Express the ordering you decided on: a slice left with an empty "dependsOn" is developed in parallel with the others from the bare base, with no foundation landing first, so leave it empty only when the slice genuinely has no prerequisite. Nothing downstream can recover an edge you leave out.
 - The graph must be acyclic.
 - Each "prompt" must be a complete instruction for a coding agent. A slice may assume the committed work of the slices it "dependsOn" is already present on its branch; a slice with no dependencies must be self-contained from the repository base.
+
+A complete example — two slices, the second developed on top of the first, showing both dependency shapes:
+
+` + planPromptExample + `
 
 --- Goal ---
 ` + strings.TrimSpace(goal)
