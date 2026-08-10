@@ -2,32 +2,48 @@ package instruction
 
 import (
 	"context"
-	"errors"
 	"fmt"
+
+	"temporal-agents/internal/scoped"
 )
 
-// ErrNotConfigured is returned when resolution is asked of a process that was wired
-// without a store. Resolution then fails, loudly, instead of quietly substituting a
-// default: a silent substitution changes what the agent was told with no record that
-// it happened, which is the one failure this feature exists to prevent.
-var ErrNotConfigured = errors.New("instruction store is not configured (is DATABASE_URL set?)")
+// The vocabulary an instruction shares with every other configured value is the
+// scoped package's, and is re-exported here so a caller that only deals in
+// instructions names one package. Aliases, not copies: they are the same types, so a
+// value crosses between the two without conversion and no second definition can
+// drift from the first.
+type (
+	// Scope is where a stored instruction was set.
+	Scope = scoped.Scope
+	// Record is one stored instruction version as the port reports it.
+	Record = scoped.Record
+	// Reader is the driven port resolution reads through.
+	Reader = scoped.Reader
+	// Publisher is the driven port the shipped defaults are published through.
+	Publisher = scoped.Publisher
+	// Store is both halves, for the composition root that owns one adapter.
+	Store = scoped.Store
+)
 
-// Record is one stored instruction version as the port reports it: the text a
-// (key, scope) currently points at, and which version that is.
-type Record struct {
-	// Key is the governed instruction.
-	Key Key
-	// Scope is where the value was set.
-	Scope Scope
-	// Version is which version of that (key, scope) this is. Versions are
-	// append-only and start at 1, so a version number, once recorded, always names
-	// the same text.
-	Version int
-	// Text is the instruction itself.
-	Text string
-	// Hash is the content hash of Text (see Hash).
-	Hash string
-}
+const (
+	// GlobalScope is the installation-wide value.
+	GlobalScope = scoped.GlobalScope
+	// FactoryScope is the shipped default as published into storage.
+	FactoryScope = scoped.FactoryScope
+)
+
+var (
+	// ErrNotConfigured reports resolution asked of a process wired without a store.
+	ErrNotConfigured = scoped.ErrNotConfigured
+	// ErrNoSuchVersion reports a provenance naming a version the store does not hold.
+	ErrNoSuchVersion = scoped.ErrNoSuchVersion
+	// DirectoryScope is the scope of one directory place.
+	DirectoryScope = scoped.DirectoryScope
+	// Chain is the order a value is resolved in for work that runs in a place.
+	Chain = scoped.Chain
+	// Hash is the content hash recorded beside a resolved instruction.
+	Hash = scoped.Hash
+)
 
 // Value is one resolved instruction: the text a unit of work will use, and the
 // provenance of where it came from.
@@ -86,45 +102,9 @@ func Render(resolution Resolution, key Key, data Data) (string, error) {
 	return spec.Render(resolution.Text(key), data)
 }
 
-// ErrNoSuchVersion is returned when a recorded provenance names a version the store
-// does not hold. It is a sentinel of its own so a caller can tell "that version was
-// never stored" apart from a store outage, and report each honestly.
-var ErrNoSuchVersion = errors.New("no such instruction version")
-
-// Reader is the driven port resolution reads through. An adapter answers only what
-// it stores: which version each (key, scope) currently points at, and what one named
-// version says. Deciding which of them wins is the core's rule, stated once in
-// resolve, never in SQL.
-type Reader interface {
-	// Current returns the pointed-at version of every (key, scope) pair that has one.
-	// A pair with no pointer is simply absent; that is a gap in the chain, not an
-	// error.
-	Current(ctx context.Context, keys []Key, scopes []Scope) ([]Record, error)
-	// Version returns one stored version, reporting ErrNoSuchVersion when there is
-	// none. It is what turns an execution's recorded provenance — key, scope, version
-	// — back into the instruction that produced it, which is why the text is never
-	// copied into an execution's own row.
-	Version(ctx context.Context, key Key, scope Scope, version int) (Record, error)
-}
-
-// Publisher is the driven port the shipped defaults are published through at
-// startup.
-type Publisher interface {
-	// PublishFactory records text as the factory value of key, appending a version
-	// only when the shipped text has actually changed. It must be idempotent and safe
-	// to run concurrently: two processes starting together both call it.
-	PublishFactory(ctx context.Context, key Key, text string) (Record, error)
-}
-
-// Store is both halves, for the composition root that owns one adapter.
-type Store interface {
-	Reader
-	Publisher
-}
-
-// PublishDefaults publishes every shipped default into storage, so an upgrade that
-// improves an instruction reaches every place that has not overridden it, and
-// "return to the shipped default" means the default this build carries.
+// PublishDefaults publishes every shipped instruction into storage, so an upgrade
+// that improves one reaches every place that has not overridden it, and "return to
+// the shipped default" means the default this build carries.
 //
 // A default that does not satisfy its own key's rules is a build defect, so it is
 // refused here rather than published: the check costs nothing at startup and turns a
@@ -137,8 +117,8 @@ func PublishDefaults(ctx context.Context, publisher Publisher) error {
 		if err := spec.Validate(spec.Factory); err != nil {
 			return fmt.Errorf("the shipped default for %s is not usable: %w", spec.Key, err)
 		}
-		if _, err := publisher.PublishFactory(ctx, spec.Key, spec.Factory); err != nil {
-			return fmt.Errorf("publish the shipped default for %s: %w", spec.Key, err)
+		if err := scoped.PublishDefault(ctx, publisher, spec.Key, spec.Factory); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -192,24 +172,16 @@ func (a *Activity) Resolve(ctx context.Context, req Request) (Resolution, error)
 	return resolution, nil
 }
 
-// resolve is the resolution rule itself: the first scope of the chain that has a
-// stored value for the key wins, and the value the build ships is the last resort.
-//
-// It is a free function over values so the rule is unit testable without a store,
-// and so no adapter can express a different one by ordering its rows.
+// resolve answers one key: the chain decides which stored value wins, and the value
+// the build ships is the last resort.
 func resolve(spec Spec, scopes []Scope, records []Record) Value {
-	for _, scope := range scopes {
-		for _, record := range records {
-			if record.Key != spec.Key || record.Scope != scope {
-				continue
-			}
-			return Value{
-				Key:     spec.Key,
-				Text:    record.Text,
-				Scope:   record.Scope,
-				Version: record.Version,
-				Hash:    record.Hash,
-			}
+	if record, ok := scoped.Winner(records, spec.Key, scopes); ok {
+		return Value{
+			Key:     spec.Key,
+			Text:    record.Text,
+			Scope:   record.Scope,
+			Version: record.Version,
+			Hash:    record.Hash,
 		}
 	}
 	// Nothing is stored for this key anywhere in the chain, not even the published

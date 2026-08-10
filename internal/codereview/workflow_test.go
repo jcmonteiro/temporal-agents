@@ -13,10 +13,10 @@ import (
 
 	"temporal-agents/internal/execstore/execstoretest"
 	"temporal-agents/internal/instruction"
-	"temporal-agents/internal/instruction/instructiontest"
 	"temporal-agents/internal/notification"
 	"temporal-agents/internal/place"
 	"temporal-agents/internal/place/placetest"
+	"temporal-agents/internal/scoped/scopedtest"
 	"temporal-agents/internal/wftest"
 )
 
@@ -43,7 +43,7 @@ func newEnvWithStore(t *testing.T, store *execstoretest.Store) *testsuite.TestWo
 	env.RegisterActivity(&Activities{Store: store})
 	env.RegisterActivity(&notification.Activity{})
 	env.RegisterActivity(&place.Activity{Prober: placetest.New()})
-	env.RegisterActivity(&instruction.Activity{Store: instructiontest.New()})
+	env.RegisterActivity(&instruction.Activity{Store: scopedtest.New()})
 	env.RegisterWorkflow(PilotWorkflow)
 	return env
 }

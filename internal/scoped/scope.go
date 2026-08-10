@@ -1,10 +1,32 @@
-package instruction
+// Package scoped owns the mechanism the tool's per-place configuration resolves
+// through: the chain of scopes a value is looked for in, the append-only versioned
+// storage it lives in, and the port that storage is reached through.
+//
+// It is the mechanism and nothing else. What values exist, what they mean, and what
+// each one ships as belong to the catalogues built on top of it — the instructions
+// the agent is given (see the instruction package) and the settings that switch
+// behaviour on (see the setting package). One mechanism serves both on purpose: two
+// copies of "which scope wins" would be two rules an operator has to learn, and
+// they would disagree the first time one of them changed.
+//
+// Nothing here knows SQL or Temporal. The driven adapter lives in the nested
+// scopedpg package, and the workflow-side helper that schedules resolution lives in
+// wfinstruction.
+package scoped
 
-import "strings"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strings"
+)
 
-// A scope is where a stored instruction was set. Scopes form the chain a value is
-// resolved through: the most specific place first, then the places it belongs to,
-// then the installation, and finally what the build ships.
+// Key names one configured value. Keys are stable and stored, and every catalogue
+// shares one key space, so a key is chosen once and can never mean two things.
+type Key string
+
+// A scope is where a value was set. Scopes form the chain a value is resolved
+// through: the most specific place first, then the places it belongs to, then the
+// installation, and finally what the build ships.
 //
 // A place is a scope of its own rather than a group of its own: a second grouping
 // concept beside places could disagree with places, and the disagreement would be
@@ -68,4 +90,13 @@ func Chain(directory, repository string) []Scope {
 		chain = append(chain, DirectoryScope(repository))
 	}
 	return append(chain, GlobalScope, FactoryScope)
+}
+
+// Hash is the content hash recorded beside a resolved value, so "which value
+// produced this run?" can be answered even if the version it names were ever
+// doubted. It is the full SHA-256 of the stored text, hex-encoded: a short digest
+// invites collisions in a record that is kept forever.
+func Hash(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
 }

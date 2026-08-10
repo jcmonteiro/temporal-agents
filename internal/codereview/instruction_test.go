@@ -11,10 +11,10 @@ import (
 	"temporal-agents/internal/execstore"
 	"temporal-agents/internal/execstore/execstoretest"
 	"temporal-agents/internal/instruction"
-	"temporal-agents/internal/instruction/instructiontest"
 	"temporal-agents/internal/notification"
 	"temporal-agents/internal/place"
 	"temporal-agents/internal/place/placetest"
+	"temporal-agents/internal/scoped/scopedtest"
 )
 
 // The review and pilot loops are the first workflows whose instructions come out of
@@ -27,7 +27,7 @@ import (
 // newLoopEnv builds a review environment around a given instruction store and
 // execution store, so a test can configure what is stored and read what was
 // recorded.
-func newLoopEnv(t *testing.T, instructions *instructiontest.Store, records *execstoretest.Store) *testsuite.TestWorkflowEnvironment {
+func newLoopEnv(t *testing.T, instructions *scopedtest.Store, records *execstoretest.Store) *testsuite.TestWorkflowEnvironment {
 	t.Helper()
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestWorkflowEnvironment()
@@ -44,7 +44,7 @@ func newLoopEnv(t *testing.T, instructions *instructiontest.Store, records *exec
 // hands the resolved instruction to the agent step in its own input, which is what
 // lets it keep using it after a later edit.
 func TestAReviewPassRunsUnderTheInstructionStoredForWhereItRuns(t *testing.T) {
-	instructions := instructiontest.New()
+	instructions := scopedtest.New()
 	instructions.Set(instruction.KeyReviewPerform, instruction.GlobalScope, "Review only the public API")
 	env := newLoopEnv(t, instructions, execstoretest.New())
 	var told ReviewInput
@@ -63,7 +63,7 @@ func TestAReviewPassRunsUnderTheInstructionStoredForWhereItRuns(t *testing.T) {
 // instruction edited mid-loop change what a later pass did, while the passes already
 // recorded name the version the loop began under.
 func TestALaterPassUsesWhatTheLoopResolvedRatherThanWhatIsStoredNow(t *testing.T) {
-	instructions := instructiontest.New()
+	instructions := scopedtest.New()
 	instructions.Set(instruction.KeyReviewImplement, instruction.GlobalScope, "the edit made mid-loop {{.Review}}")
 	env := newLoopEnv(t, instructions, execstoretest.New())
 	carried := instruction.Resolution{{
@@ -95,7 +95,7 @@ func TestALaterPassUsesWhatTheLoopResolvedRatherThanWhatIsStoredNow(t *testing.T
 // record to say it happened, which is exactly what stored instructions exist to
 // prevent.
 func TestAPassWhoseInstructionsCannotBeResolvedFailsBeforeTheAgentRuns(t *testing.T) {
-	instructions := instructiontest.New()
+	instructions := scopedtest.New()
 	instructions.Err = errors.New("postgres is down")
 	env := newLoopEnv(t, instructions, execstoretest.New())
 
@@ -111,7 +111,7 @@ func TestAPassWhoseInstructionsCannotBeResolvedFailsBeforeTheAgentRuns(t *testin
 // text itself is not copied into the row — it stays in the version record those
 // three fields name.
 func TestASettledReviewPassRecordsWhichInstructionVersionItUsed(t *testing.T) {
-	instructions := instructiontest.New()
+	instructions := scopedtest.New()
 	stored := instructions.Set(instruction.KeyReviewPerform, instruction.GlobalScope, "Review only the public API")
 	records := execstoretest.New()
 	env := newLoopEnv(t, instructions, records)
@@ -135,7 +135,7 @@ func TestASettledReviewPassRecordsWhichInstructionVersionItUsed(t *testing.T) {
 
 // The pilot loop is governed the same way, and its record answers the same question.
 func TestASettledPilotPassRecordsWhichInstructionVersionItUsed(t *testing.T) {
-	instructions := instructiontest.New()
+	instructions := scopedtest.New()
 	stored := instructions.Set(instruction.KeyPilotAddress, instruction.GlobalScope, "Address the test comments first")
 	records := execstoretest.New()
 	env := newLoopEnv(t, instructions, records)

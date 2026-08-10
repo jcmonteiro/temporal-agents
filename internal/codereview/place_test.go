@@ -11,10 +11,10 @@ import (
 	"temporal-agents/internal/execstore"
 	"temporal-agents/internal/execstore/execstoretest"
 	"temporal-agents/internal/instruction"
-	"temporal-agents/internal/instruction/instructiontest"
 	"temporal-agents/internal/notification"
 	"temporal-agents/internal/place"
 	"temporal-agents/internal/place/placetest"
+	"temporal-agents/internal/scoped/scopedtest"
 )
 
 // Where the code workflows say they run. The probe is driven through the real
@@ -30,7 +30,7 @@ func newDevelopEnvIn(t *testing.T, store *execstoretest.Store, prober place.Prob
 	env.RegisterActivity(&Activities{Store: store})
 	env.RegisterActivity(&notification.Activity{})
 	env.RegisterActivity(&place.Activity{Prober: prober})
-	env.RegisterActivity(&instruction.Activity{Store: instructiontest.New()})
+	env.RegisterActivity(&instruction.Activity{Store: scopedtest.New()})
 	env.RegisterWorkflow(DevelopWorkflow)
 	env.RegisterWorkflow(ReviewWorkflow)
 	return env
@@ -117,7 +117,7 @@ func TestPilotWorkflow_RecordsThePlaceThePassRunsIn(t *testing.T) {
 	env.RegisterActivity(&Activities{Store: store})
 	env.RegisterActivity(&notification.Activity{})
 	env.RegisterActivity(&place.Activity{Prober: placetest.New()})
-	env.RegisterActivity(&instruction.Activity{Store: instructiontest.New()})
+	env.RegisterActivity(&instruction.Activity{Store: scopedtest.New()})
 	env.RegisterWorkflow(PilotWorkflow)
 	pr := PullRequest{Number: 7, URL: "https://github.com/o/r/pull/7", HeadRef: "feat/x"}
 	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)

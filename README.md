@@ -79,7 +79,7 @@ is fixed: **`migrate` first, then `worker` and `serve`**.
 - Each context owns its migrations inside its own adapter package
   (`internal/execstore/execpg/migrations`, `internal/agenthub/hubpg/migrations`,
   `internal/identity/identitypg/migrations`,
-  `internal/instruction/instructionpg/migrations`),
+  `internal/scoped/scopedpg/migrations`),
   recorded under its own namespace, with no foreign keys between contexts. A
   process is only stopped by the contexts it actually uses: a stale dismissal
   schema stops `serve`, not `worker`.
@@ -96,7 +96,7 @@ $ temporal-agents migrate
 execution-store  brought 4 migration(s) up to date  schema 0004_execution_first_run_id.sql
 agent-hub        brought 1 migration(s) up to date  schema 0001_dismissals.sql
 identity         brought 1 migration(s) up to date  schema 0001_identity.sql
-instructions     brought 1 migration(s) up to date  schema 0001_instructions.sql
+scoped-config    brought 1 migration(s) up to date  schema 0001_scoped_values.sql
 ```
 
 **Upgrading a running installation to this workflow:** a build from before the

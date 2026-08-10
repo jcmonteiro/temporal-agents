@@ -12,8 +12,8 @@ import (
 	"temporal-agents/internal/agenthub/hubpg"
 	"temporal-agents/internal/execstore/execpg"
 	"temporal-agents/internal/identity/identitypg"
-	"temporal-agents/internal/instruction/instructionpg"
 	"temporal-agents/internal/schema"
+	"temporal-agents/internal/scoped/scopedpg"
 )
 
 // Schema application is a deliberate step, not something a starting process does on
@@ -90,15 +90,16 @@ var identitySchema = schemaContext{
 	},
 }
 
-// instructionSchema is the schema behind the instructions the agent is given: every
-// version of each, and which version a scope currently uses. The worker resolves
-// through it at the start of every unit of work and publishes the shipped defaults
-// into it at startup, so it is the worker's dependency and not the API server's —
-// until the configuration surface arrives.
-var instructionSchema = schemaContext{
-	name: "instructions",
+// scopedConfigSchema is the schema behind what the tool is configured with per
+// place: every version of every value — the instructions the agent is given, the
+// settings that switch behaviour on — and which version a scope currently uses. The
+// worker resolves through it at the start of every unit of work and publishes the
+// shipped defaults into it at startup, so it is the worker's dependency and not the
+// API server's — until the configuration surface arrives.
+var scopedConfigSchema = schemaContext{
+	name: "scoped-config",
 	open: func(ctx context.Context, dsn string) (contextSchema, error) {
-		return instructionpg.Open(ctx, dsn)
+		return scopedpg.Open(ctx, dsn)
 	},
 }
 
@@ -106,14 +107,14 @@ var instructionSchema = schemaContext{
 // order `migrate` reports them. Adding a context means adding it here and nowhere
 // else.
 func allSchemaContexts() []schemaContext {
-	return []schemaContext{executionStoreSchema, agentHubSchema, identitySchema, instructionSchema}
+	return []schemaContext{executionStoreSchema, agentHubSchema, identitySchema, scopedConfigSchema}
 }
 
 // workerSchemaContexts are the schemas the worker writes through. It never touches
 // the hub's dismissals, so it must not be stopped by their version: a context a
 // process does not use is not that process's dependency.
 func workerSchemaContexts() []schemaContext {
-	return []schemaContext{executionStoreSchema, instructionSchema}
+	return []schemaContext{executionStoreSchema, scopedConfigSchema}
 }
 
 // serveSchemaContexts are the schemas the API server reads and writes through.

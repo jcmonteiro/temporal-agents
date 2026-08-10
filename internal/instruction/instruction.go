@@ -9,21 +9,24 @@
 // be inserted into each, which part of each is the system's own, and how long one may
 // be.
 //
-// The package is the application core of its own bounded context: standard library
-// only, no SQL, no Temporal. The driven adapter lives in the nested instructionpg
-// package, and the workflow-side helper that schedules the resolve activity lives in
-// wfinstruction, so this package stays free of both a driver and an SDK — exactly the
-// split the place and execstore packages already keep.
+// It is a catalogue, not a mechanism: which scope wins, how a version is stored and
+// how the shipped default is published are the scoped package's, shared with every
+// other kind of configured value. This package says what instructions exist and what
+// each one may contain.
+//
+// It holds no SQL and no Temporal: the driven adapter lives in scoped/scopedpg, and
+// the workflow-side helper that schedules the resolve activity lives in
+// wfinstruction — the same split the place and execstore packages keep.
 package instruction
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
 	"text/template"
 	"unicode/utf8"
+
+	"temporal-agents/internal/scoped"
 )
 
 // ErrUnknownKey reports an instruction key this build does not govern. The
@@ -36,10 +39,10 @@ var ErrUnknownKey = errors.New("unknown instruction key")
 // wrong, because an operator cannot act on "invalid".
 var ErrInvalidText = errors.New("invalid instruction")
 
-// Key names one governed instruction. It is stable and stored: renaming a key
-// orphans every override an operator saved under the old name, so a key is chosen
-// once.
-type Key string
+// Key names one governed instruction. It is an alias of the scoped key every kind
+// of configured value shares, because instructions and settings live in one key
+// space: a key is chosen once and can never mean two things.
+type Key = scoped.Key
 
 const (
 	// KeyReviewPerform is what the agent is told when it reviews a branch.
@@ -269,12 +272,3 @@ func (s Spec) sentinels() Data {
 // characters no instruction would contain, so a text that happens to quote an
 // insert's name cannot be mistaken for one that renders it.
 func sentinel(name string) string { return "\x00insert:" + name + "\x00" }
-
-// Hash is the content hash recorded beside a resolved instruction, so "which
-// instruction produced this run?" can be answered even if the version it points at
-// were ever doubted. It is the full SHA-256 of the text, hex-encoded: a short digest
-// invites collisions in a record that is kept forever.
-func Hash(text string) string {
-	sum := sha256.Sum256([]byte(text))
-	return hex.EncodeToString(sum[:])
-}

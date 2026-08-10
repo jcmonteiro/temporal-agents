@@ -1,4 +1,4 @@
-package instructionpg
+package scopedpg
 
 import (
 	"context"
@@ -25,7 +25,7 @@ import (
 func TestMain(m *testing.M) { os.Exit(pgtest.Run(m)) }
 
 // newTestStore gives the calling test a database of its own on the shared container,
-// with the instruction schema applied, and closes it afterwards.
+// with the scoped configuration schema applied, and closes it afterwards.
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	store := openTestStore(t, pgtest.NewDatabase(t))

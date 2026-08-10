@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"temporal-agents/internal/instruction"
-	"temporal-agents/internal/instruction/instructiontest"
+	"temporal-agents/internal/scoped/scopedtest"
 )
 
 // The chain is the whole feature: a value set once covers everything under it, and a
@@ -86,7 +86,7 @@ func TestAValueResolvesThroughThePlaceItRunsInBeforeAnythingBroader(t *testing.T
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			store := instructiontest.New()
+			store := scopedtest.New()
 			for scope, text := range tc.stored {
 				if text == "" {
 					// A scope that has versions but no pointer: reset to what it inherits.
@@ -126,7 +126,7 @@ func TestAValueResolvesThroughThePlaceItRunsInBeforeAnythingBroader(t *testing.T
 // does, so the two must not travel together.
 func TestOverridingOneInstructionLeavesTheOthersInherited(t *testing.T) {
 	const worktree = "/src/agents"
-	store := instructiontest.New()
+	store := scopedtest.New()
 	store.Set(instruction.KeyReviewPerform, instruction.GlobalScope, "review everywhere")
 	store.Set(instruction.KeyReviewPerform, instruction.DirectoryScope(worktree), "review here")
 	store.Set(instruction.KeyReviewImplement, instruction.GlobalScope, "implement {{.Review}} everywhere")
@@ -155,7 +155,7 @@ func TestOverridingOneInstructionLeavesTheOthersInherited(t *testing.T) {
 // record to say it happened.
 func TestResolutionFailsRatherThanSubstitutingADefault(t *testing.T) {
 	outage := errors.New("connection refused")
-	store := instructiontest.New()
+	store := scopedtest.New()
 	store.Err = outage
 
 	_, err := (&instruction.Activity{Store: store}).Resolve(context.Background(), instruction.Request{
@@ -182,7 +182,7 @@ func TestAWorkerWithoutAStoreCannotResolveAnything(t *testing.T) {
 // A key this build does not govern cannot be answered with anything: a stale stored
 // row or a caller's typo must not resolve to some other key's text.
 func TestAKeyThisBuildDoesNotGovernIsRefused(t *testing.T) {
-	_, err := (&instruction.Activity{Store: instructiontest.New()}).Resolve(context.Background(),
+	_, err := (&instruction.Activity{Store: scopedtest.New()}).Resolve(context.Background(),
 		instruction.Request{Keys: []instruction.Key{"review.invented"}})
 
 	if !errors.Is(err, instruction.ErrUnknownKey) {
@@ -194,7 +194,7 @@ func TestAKeyThisBuildDoesNotGovernIsRefused(t *testing.T) {
 // text actually changed — otherwise the version history would grow by one per
 // restart and "which version produced this run?" would stop meaning anything.
 func TestPublishingTheShippedDefaultsTwiceAddsNoVersion(t *testing.T) {
-	store := instructiontest.New()
+	store := scopedtest.New()
 	ctx := context.Background()
 
 	if err := instruction.PublishDefaults(ctx, store); err != nil {
@@ -215,7 +215,7 @@ func TestPublishingTheShippedDefaultsTwiceAddsNoVersion(t *testing.T) {
 // overrode it, and it does so by appending a version rather than by rewriting the
 // one earlier runs recorded.
 func TestAChangedShippedDefaultIsPublishedAsANewVersion(t *testing.T) {
-	store := instructiontest.New()
+	store := scopedtest.New()
 	ctx := context.Background()
 	if _, err := store.PublishFactory(ctx, instruction.KeyReviewPerform, "the previous release's wording"); err != nil {
 		t.Fatalf("publish: %v", err)

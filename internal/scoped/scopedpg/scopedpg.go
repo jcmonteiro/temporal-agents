@@ -1,6 +1,7 @@
-// Package instructionpg is the Postgres adapter behind the instruction context: the
-// append-only versions of every governed instruction and the pointer that says which
-// version a scope currently uses.
+// Package scopedpg is the Postgres adapter behind the tool's per-place
+// configuration: the append-only versions of every configured value — the
+// instructions the agent is given, the settings that switch behaviour on — and the
+// pointer that says which version a scope currently uses.
 //
 // Two properties of this adapter are load-bearing rather than incidental. A version
 // is only ever inserted — the adapter has no statement that updates or deletes one —
@@ -8,7 +9,7 @@
 // publishing the shipped defaults takes a lock per key and compares the text before
 // writing, so two processes starting together publish one version between them
 // rather than one each.
-package instructionpg
+package scopedpg
 
 import (
 	"context"
@@ -21,9 +22,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"temporal-agents/internal/instruction"
 	"temporal-agents/internal/pgmigrate"
 	"temporal-agents/internal/schema"
+	"temporal-agents/internal/scoped"
 )
 
 // migrationFS holds this context's schema as embedded SQL, so the migrate step
@@ -36,7 +37,7 @@ var migrationFS embed.FS
 // this context numbers its files from 0001 independently of every other.
 const (
 	migrationDir       = "migrations"
-	migrationNamespace = "instruction"
+	migrationNamespace = "scoped"
 )
 
 // publishLockClass is the advisory-lock class this adapter takes its per-key locks
@@ -44,18 +45,18 @@ const (
 // collide with the single-argument lock the migration step holds.
 const publishLockClass int32 = 8_060_927
 
-// Store is the driven adapter implementing the instruction context's ports over one
+// Store is the driven adapter implementing the scoped configuration ports over one
 // connection pool.
 type Store struct {
 	pool *pgxpool.Pool
 }
 
 // Compile-time proof the adapter satisfies the ports it is injected as.
-var _ instruction.Store = (*Store)(nil)
+var _ scoped.Store = (*Store)(nil)
 
 // Open connects to the Postgres instance at dsn and verifies the connection is
 // usable, so a misconfigured DSN stops the worker at startup rather than the first
-// time a workflow resolves an instruction.
+// time a workflow resolves an scoped.
 //
 // The DSN is required and never logged: it commonly carries credentials.
 func Open(ctx context.Context, dsn string) (*Store, error) {
@@ -65,11 +66,11 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		// Deliberately not wrapping with the DSN: it may embed a password.
-		return nil, fmt.Errorf("configure the instruction store connection: %w", err)
+		return nil, fmt.Errorf("configure the scoped value store connection: %w", err)
 	}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("connect to the instruction store: %w", err)
+		return nil, fmt.Errorf("connect to the scoped value store: %w", err)
 	}
 	return &Store{pool: pool}, nil
 }
@@ -99,39 +100,39 @@ func (s *Store) SchemaState(ctx context.Context) (schema.State, error) {
 // decides it.
 const currentSQL = `
 SELECT p.key, p.scope, p.version, v.body, v.hash
-FROM instruction_pointers p
-JOIN instruction_versions v ON v.key = p.key AND v.scope = p.scope AND v.version = p.version
+FROM scoped_pointers p
+JOIN scoped_values v ON v.key = p.key AND v.scope = p.scope AND v.version = p.version
 WHERE p.key = ANY($1) AND p.scope = ANY($2)`
 
-// Current implements instruction.Reader.
-func (s *Store) Current(ctx context.Context, keys []instruction.Key, scopes []instruction.Scope) ([]instruction.Record, error) {
+// Current implements scoped.Reader.
+func (s *Store) Current(ctx context.Context, keys []scoped.Key, scopes []scoped.Scope) ([]scoped.Record, error) {
 	if len(keys) == 0 || len(scopes) == 0 {
 		return nil, nil
 	}
 	rows, err := s.pool.Query(ctx, currentSQL, texts(keys), texts(scopes))
 	if err != nil {
-		return nil, fmt.Errorf("read the stored instructions: %w", err)
+		return nil, fmt.Errorf("read the stored values: %w", err)
 	}
 	records, err := pgx.CollectRows(rows, scanRecord)
 	if err != nil {
-		return nil, fmt.Errorf("read the stored instructions: %w", err)
+		return nil, fmt.Errorf("read the stored values: %w", err)
 	}
 	return records, nil
 }
 
-// Version implements instruction.Reader: it recovers one stored version, which is
+// Version implements scoped.Reader: it recovers one stored version, which is
 // how a recorded provenance becomes readable text again.
-func (s *Store) Version(ctx context.Context, key instruction.Key, scope instruction.Scope, version int) (instruction.Record, error) {
+func (s *Store) Version(ctx context.Context, key scoped.Key, scope scoped.Scope, version int) (scoped.Record, error) {
 	rows, err := s.pool.Query(ctx, versionSQL, string(key), string(scope), int64(version))
 	if err != nil {
-		return instruction.Record{}, fmt.Errorf("read the stored instruction version: %w", err)
+		return scoped.Record{}, fmt.Errorf("read the stored version: %w", err)
 	}
 	records, err := pgx.CollectRows(rows, scanRecord)
 	if err != nil {
-		return instruction.Record{}, fmt.Errorf("read the stored instruction version: %w", err)
+		return scoped.Record{}, fmt.Errorf("read the stored version: %w", err)
 	}
 	if len(records) == 0 {
-		return instruction.Record{}, fmt.Errorf("%w: %s at %s v%d", instruction.ErrNoSuchVersion, key, scope, version)
+		return scoped.Record{}, fmt.Errorf("%w: %s at %s v%d", scoped.ErrNoSuchVersion, key, scope, version)
 	}
 	return records[0], nil
 }
@@ -139,54 +140,54 @@ func (s *Store) Version(ctx context.Context, key instruction.Key, scope instruct
 // versionSQL reads one stored version by its identity.
 const versionSQL = `
 SELECT key, scope, version, body, hash
-FROM instruction_versions
+FROM scoped_values
 WHERE key = $1 AND scope = $2 AND version = $3`
 
 // pointedAtFactorySQL reads what the factory scope currently points at, which is
 // what publication compares the build's text against.
 const pointedAtFactorySQL = `
 SELECT p.key, p.scope, p.version, v.body, v.hash
-FROM instruction_pointers p
-JOIN instruction_versions v ON v.key = p.key AND v.scope = p.scope AND v.version = p.version
+FROM scoped_pointers p
+JOIN scoped_values v ON v.key = p.key AND v.scope = p.scope AND v.version = p.version
 WHERE p.key = $1 AND p.scope = $2`
 
 // appendVersionSQL inserts the next version of one (key, scope). The number is
 // computed from the rows themselves, under the caller's lock, so versions stay dense
 // and are never reused.
 const appendVersionSQL = `
-INSERT INTO instruction_versions (key, scope, version, body, hash)
+INSERT INTO scoped_values (key, scope, version, body, hash)
 SELECT $1, $2, COALESCE(MAX(version), 0) + 1, $3, $4
-FROM instruction_versions WHERE key = $1 AND scope = $2
+FROM scoped_values WHERE key = $1 AND scope = $2
 RETURNING key, scope, version, body, hash`
 
 // pointSQL moves one scope's pointer to a version, which is the only write that ever
 // changes what a scope resolves to.
 const pointSQL = `
-INSERT INTO instruction_pointers (key, scope, version)
+INSERT INTO scoped_pointers (key, scope, version)
 VALUES ($1, $2, $3)
 ON CONFLICT (key, scope) DO UPDATE SET version = EXCLUDED.version, updated_at = now()`
 
-// PublishFactory implements instruction.Publisher.
+// PublishFactory implements scoped.Publisher.
 //
 // It appends a version only when the shipped text differs from the one the factory
 // scope already points at, so a restart adds nothing and an upgrade adds exactly
 // one version. The comparison and the insert share a transaction and a per-key
 // advisory lock, because two processes starting together would otherwise both read
 // "nothing published" and both insert version 1.
-func (s *Store) PublishFactory(ctx context.Context, key instruction.Key, text string) (instruction.Record, error) {
+func (s *Store) PublishFactory(ctx context.Context, key scoped.Key, text string) (scoped.Record, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return instruction.Record{}, fmt.Errorf("publish the shipped instruction: %w", err)
+		return scoped.Record{}, fmt.Errorf("publish the shipped value: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, publishLockClass, lockKey(key)); err != nil {
-		return instruction.Record{}, fmt.Errorf("take the publication lock for %s: %w", key, err)
+		return scoped.Record{}, fmt.Errorf("take the publication lock for %s: %w", key, err)
 	}
 
 	current, err := publishedFactory(ctx, tx, key)
 	if err != nil {
-		return instruction.Record{}, err
+		return scoped.Record{}, err
 	}
 	if current.Text == text && current.Version > 0 {
 		// Already published, unchanged: publication is a no-op, which is what makes it
@@ -194,19 +195,19 @@ func (s *Store) PublishFactory(ctx context.Context, key instruction.Key, text st
 		return current, nil
 	}
 
-	rows, err := tx.Query(ctx, appendVersionSQL, string(key), string(instruction.FactoryScope), text, instruction.Hash(text))
+	rows, err := tx.Query(ctx, appendVersionSQL, string(key), string(scoped.FactoryScope), text, scoped.Hash(text))
 	if err != nil {
-		return instruction.Record{}, fmt.Errorf("append the shipped instruction for %s: %w", key, err)
+		return scoped.Record{}, fmt.Errorf("append the shipped value for %s: %w", key, err)
 	}
 	appended, err := pgx.CollectExactlyOneRow(rows, scanRecord)
 	if err != nil {
-		return instruction.Record{}, fmt.Errorf("append the shipped instruction for %s: %w", key, err)
+		return scoped.Record{}, fmt.Errorf("append the shipped value for %s: %w", key, err)
 	}
-	if _, err := tx.Exec(ctx, pointSQL, string(key), string(instruction.FactoryScope), appended.Version); err != nil {
-		return instruction.Record{}, fmt.Errorf("point %s at its shipped instruction: %w", key, err)
+	if _, err := tx.Exec(ctx, pointSQL, string(key), string(scoped.FactoryScope), appended.Version); err != nil {
+		return scoped.Record{}, fmt.Errorf("point %s at its shipped value: %w", key, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return instruction.Record{}, fmt.Errorf("publish the shipped instruction for %s: %w", key, err)
+		return scoped.Record{}, fmt.Errorf("publish the shipped value for %s: %w", key, err)
 	}
 	return appended, nil
 }
@@ -214,32 +215,32 @@ func (s *Store) PublishFactory(ctx context.Context, key instruction.Key, text st
 // publishedFactory reads what the factory scope points at, reporting "nothing
 // published yet" as the zero record rather than as an error: a fresh database is not
 // a failure.
-func publishedFactory(ctx context.Context, tx pgx.Tx, key instruction.Key) (instruction.Record, error) {
-	rows, err := tx.Query(ctx, pointedAtFactorySQL, string(key), string(instruction.FactoryScope))
+func publishedFactory(ctx context.Context, tx pgx.Tx, key scoped.Key) (scoped.Record, error) {
+	rows, err := tx.Query(ctx, pointedAtFactorySQL, string(key), string(scoped.FactoryScope))
 	if err != nil {
-		return instruction.Record{}, fmt.Errorf("read the published instruction for %s: %w", key, err)
+		return scoped.Record{}, fmt.Errorf("read the published value for %s: %w", key, err)
 	}
 	records, err := pgx.CollectRows(rows, scanRecord)
 	if err != nil {
-		return instruction.Record{}, fmt.Errorf("read the published instruction for %s: %w", key, err)
+		return scoped.Record{}, fmt.Errorf("read the published value for %s: %w", key, err)
 	}
 	if len(records) == 0 {
-		return instruction.Record{}, nil
+		return scoped.Record{}, nil
 	}
 	return records[0], nil
 }
 
 // scanRecord maps one row onto the port's record type, so the port's types are the
 // only ones that leave this package.
-func scanRecord(row pgx.CollectableRow) (instruction.Record, error) {
+func scanRecord(row pgx.CollectableRow) (scoped.Record, error) {
 	var key, scope string
-	var record instruction.Record
+	var record scoped.Record
 	var version int64
 	if err := row.Scan(&key, &scope, &version, &record.Text, &record.Hash); err != nil {
-		return instruction.Record{}, err
+		return scoped.Record{}, err
 	}
-	record.Key = instruction.Key(key)
-	record.Scope = instruction.Scope(scope)
+	record.Key = scoped.Key(key)
+	record.Scope = scoped.Scope(scope)
 	record.Version = int(version)
 	return record, nil
 }
@@ -254,10 +255,10 @@ func texts[T ~string](values []T) []string {
 	return plain
 }
 
-// lockKey maps an instruction key onto the second half of the advisory lock. A
+// lockKey maps a key onto the second half of the advisory lock. A
 // collision between two keys would only serialize two publications that could have
 // run at once, so a fast non-cryptographic hash is the right tool.
-func lockKey(key instruction.Key) int32 {
+func lockKey(key scoped.Key) int32 {
 	digest := fnv.New32a()
 	_, _ = digest.Write([]byte(key))
 	return int32(digest.Sum32())
