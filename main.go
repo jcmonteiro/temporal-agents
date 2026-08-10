@@ -29,6 +29,8 @@ import (
 	"temporal-agents/internal/notify"
 	"temporal-agents/internal/piagent"
 	"temporal-agents/internal/place"
+	"temporal-agents/internal/setting"
+	"temporal-agents/internal/steering"
 	"temporal-agents/internal/wfid"
 )
 
@@ -529,6 +531,13 @@ func runWorker(opts notifyOptions) {
 		Store: store,
 	})
 
+	// The steering session: the durable wait a review round pauses in when an
+	// operator has switched steering on where the work runs. It is a child of the
+	// loop that pauses, and records an execution row of its own so what it costs is
+	// attributable without it becoming a second item on the overview.
+	w.RegisterWorkflow(steering.SessionWorkflow)
+	w.RegisterActivity(&steering.Activities{Store: store})
+
 	// The fleet workflows fan out over a dependency graph, reusing the codereview
 	// develop workflow for each node. FleetWorkflow runs codereview.DevelopWorkflow
 	// as children, which is already registered above.
@@ -548,6 +557,11 @@ func runWorker(opts notifyOptions) {
 	// It resolves once per unit of work, at its start, and the resolved text travels
 	// in the workflow's input from there (see wfinstruction).
 	w.RegisterActivity(&instruction.Activity{Store: config})
+
+	// A single setting resolution, shared by every workflow whose shape a setting
+	// decides. It resolves through the same store and the same chain the instructions
+	// do, so an operator learns one inheritance rule rather than two.
+	w.RegisterActivity(&setting.Activity{Resolver: setting.Resolver{Store: config}})
 
 	// A single location probe, shared by every workflow that owns a working
 	// directory. It answers over the same git adapter the code workflows drive, so

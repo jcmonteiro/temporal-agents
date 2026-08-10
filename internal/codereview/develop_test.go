@@ -15,6 +15,8 @@ import (
 	"temporal-agents/internal/place"
 	"temporal-agents/internal/place/placetest"
 	"temporal-agents/internal/scoped/scopedtest"
+	"temporal-agents/internal/setting"
+	"temporal-agents/internal/steering"
 )
 
 // The develop workflow tests exercise observable behavior — which activities
@@ -41,6 +43,9 @@ func newDevelopEnvWithStore(t *testing.T, store *execstoretest.Store) *testsuite
 	// makes a develop run record the place its worktree is in.
 	env.RegisterActivity(&place.Activity{Prober: placetest.New()})
 	env.RegisterActivity(&instruction.Activity{Store: scopedtest.New()})
+	env.RegisterActivity(&setting.Activity{Resolver: setting.Resolver{Store: scopedtest.New()}})
+	env.RegisterActivity(&steering.Activities{Store: store})
+	env.RegisterWorkflow(steering.SessionWorkflow)
 	env.RegisterWorkflow(DevelopWorkflow)
 	env.RegisterWorkflow(ReviewWorkflow)
 	env.RegisterWorkflow(OpenPRWorkflow)

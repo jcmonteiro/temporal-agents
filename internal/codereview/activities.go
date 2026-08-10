@@ -12,6 +12,7 @@ import (
 
 	"temporal-agents/internal/execstore"
 	"temporal-agents/internal/instruction"
+	"temporal-agents/internal/steering"
 )
 
 // errNoAdvance is the error type returned (non-retryable) when the agent
@@ -52,6 +53,9 @@ type RunAgentRequest struct {
 	Input   PilotInput
 	PR      PullRequest
 	Threads []ReviewThread
+	// Guidance is what the operator told this pass to keep in mind, or empty when
+	// the round was not steered or was let through without guidance.
+	Guidance string
 }
 
 // EnsureHeadAdvancedRequest is the input to EnsureHeadAdvanced.
@@ -187,6 +191,9 @@ type RunImplementRequest struct {
 	// Instructions are what the loop resolved at its start, so every pass renders
 	// the instruction the loop began under rather than whatever is stored now.
 	Instructions instruction.Resolution
+	// Guidance is what the operator told this pass to keep in mind, or empty when
+	// the round was not steered or was let through without guidance.
+	Guidance string
 }
 
 // SummarizeRequest is the input to SummarizeLastRun.
@@ -652,7 +659,14 @@ func (a *Activities) MarkHeadAndStash(ctx context.Context, in PilotInput) (Check
 // append/replace mode) together with the unresolved comments the system appends,
 // and hands it to the agent, which is expected to commit its work.
 func (a *Activities) RunAgent(ctx context.Context, req RunAgentRequest) (AgentResult, error) {
-	prompt, err := BuildPilotPrompt(req.Input.Instructions, req.Input.PromptMode, req.Input.PromptText, req.PR.Body, req.Threads)
+	prompt, err := BuildPilotPrompt(PilotPrompt{
+		Instructions: req.Input.Instructions,
+		Mode:         req.Input.PromptMode,
+		Text:         req.Input.PromptText,
+		Description:  req.PR.Body,
+		Threads:      req.Threads,
+		Guidance:     req.Guidance,
+	})
 	if err != nil {
 		return AgentResult{}, err
 	}
@@ -738,8 +752,10 @@ func (a *Activities) RunReviewAgent(ctx context.Context, in ReviewInput) (AgentR
 // HEAD-advanced check can confirm the change landed (or detect that there was
 // nothing to change).
 func (a *Activities) RunImplementAgent(ctx context.Context, req RunImplementRequest) (AgentResult, error) {
+	// The operator's guidance goes immediately in front of the review it applies to,
+	// wherever the instruction inserts that review.
 	prompt, err := instruction.Render(req.Instructions, instruction.KeyReviewImplement,
-		instruction.Data{"Review": req.Payload})
+		instruction.Data{"Review": steering.WithGuidance(req.Guidance, req.Payload)})
 	if err != nil {
 		return AgentResult{}, err
 	}

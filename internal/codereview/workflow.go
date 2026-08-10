@@ -12,9 +12,12 @@ import (
 
 	"temporal-agents/internal/instruction"
 	"temporal-agents/internal/notification"
+	"temporal-agents/internal/setting"
+	"temporal-agents/internal/steering"
 	"temporal-agents/internal/wfinstruction"
 	"temporal-agents/internal/wfnotify"
 	"temporal-agents/internal/wfrecord"
+	"temporal-agents/internal/wfsetting"
 )
 
 // reviewPollInterval is how long the workflow sleeps between checks for a
@@ -188,24 +191,43 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 	}
 	rec.Instructions = in.Instructions
 
-	var addressed bool
-	var tokens int
-	var prURL string
-	summary, addressed, tokens, prURL, err = runPilotOnce(ctx, in, &agentRan)
+	// What is switched on where this loop runs, resolved once and carried across
+	// every chained pass, so switching steering while the loop runs cannot change the
+	// loop that is already running.
+	if in.Settings, err = wfsetting.Ensure(ctx, in.Settings, rec.Place,
+		setting.KeySteeringEnabled); err != nil {
+		return "", err
+	}
+
+	var pass pilotPass
+	pass, err = runPilotOnce(ctx, in, &rec, &agentRan)
+	summary = pass.Summary
 	// Record only this pass's own token usage, never the inclusive total carried
 	// across chained passes, so summing the rows of a loop gives a true total.
-	rec.Tokens = tokens
-	rec.PRURL = prURL
+	rec.Tokens = pass.Tokens
+	rec.PRURL = pass.PRURL
 	if err != nil {
 		// The pass failed before deciding whether there were comments to address, so
 		// Addressed stays nil: the tri-state exists to keep "addressed nothing" apart
 		// from "never got that far", and recording false here would lose that.
 		return "", err
 	}
-	rec.Addressed = boolPtr(addressed)
+	rec.Addressed = boolPtr(pass.Addressed)
 	// Fold this pass's usage into the running total carried across chained runs.
-	total := in.TokensSoFar + tokens
-	if in.Chain && addressed {
+	total := in.TokensSoFar + pass.Tokens
+	if pass.Stopped {
+		// The operator ended the loop before the agent addressed the comments. The
+		// comments stay unresolved and the pass chains no further: this needs a human,
+		// and saying so is the point of stopping.
+		rec.Ending = EndingOperatorStopped
+		summary = withTokenTotal(pass.Summary, total)
+		if err = notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{
+			Title: "Copilot review chain stopped", Body: summary, URL: pass.PRURL}, in.ChainSummary); err != nil {
+			return "", err
+		}
+		return summary, nil
+	}
+	if in.Chain && pass.Addressed {
 		// This pass addressed comments, so the loop continues as new and never
 		// reaches the terminal notifyComplete below. Continue-as-new is normally a
 		// silent control signal, but --summary explicitly asks for a webhook summary
@@ -245,8 +267,8 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 		if in.Summary && summarizeBeforeChain {
 			wfnotify.NotifyBestEffort(ctx, notification.Notification{
 				Title:       "Copilot review pass complete",
-				Body:        summary,
-				URL:         prURL,
+				Body:        pass.Summary,
+				URL:         pass.PRURL,
 				WebhookBody: webhookBody,
 			})
 		}
@@ -255,22 +277,35 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 		next.ChainSummary = webhookBody
 		return "", workflow.NewContinueAsNewError(ctx, PilotWorkflow, next)
 	}
-	summary = withTokenTotal(summary, total)
-	if err = notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Copilot review chain complete", Body: summary, URL: prURL}, in.ChainSummary); err != nil {
+	summary = withTokenTotal(pass.Summary, total)
+	if err = notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Copilot review chain complete", Body: summary, URL: pass.PRURL}, in.ChainSummary); err != nil {
 		return "", err
 	}
 	return summary, nil
 }
 
-// runPilotOnce performs a single pass of the loop. It returns a human-readable
-// summary, whether it actually addressed any comments (false when the PR had no
-// unresolved comments, which the caller uses to decide whether to chain), the
-// pass's total agent token usage, and a hyperlink to the PR the pass operated
-// on (empty when it failed before determining the PR) so the caller can include
-// it in the completion notification. It sets *agentRan to true once the Pi
-// agent has run in this pass, so callers know a resumable Pi session exists for
-// the optional last-run summary.
-func runPilotOnce(ctx workflow.Context, in PilotInput, agentRan *bool) (string, bool, int, string, error) {
+// pilotPass is what one pass of the pilot loop produced.
+type pilotPass struct {
+	// Summary is the pass's human-readable summary line.
+	Summary string
+	// Addressed reports whether the pass actually addressed comments (false when
+	// the PR had none left), which the caller uses to decide whether to chain.
+	Addressed bool
+	// Tokens is the pass's own agent token usage.
+	Tokens int
+	// PRURL is the pull request the pass operated on, and is empty when the pass
+	// failed before determining it.
+	PRURL string
+	// Stopped reports that the operator ended the loop at the pause point instead
+	// of letting the pass address the comments.
+	Stopped bool
+}
+
+// runPilotOnce performs a single pass of the loop. It sets *agentRan to true once
+// the Pi agent has run in this pass, so callers know a resumable Pi session exists
+// for the optional last-run summary, and updates *rec while the pass waits for an
+// operator, so the run reports that it needs input.
+func runPilotOnce(ctx workflow.Context, in PilotInput, rec *PilotState, agentRan *bool) (pilotPass, error) {
 	// Quick, deterministic git/GitHub steps. They are idempotent enough to
 	// retry, but should not run forever.
 	quick := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
@@ -294,7 +329,7 @@ func runPilotOnce(ctx workflow.Context, in PilotInput, agentRan *bool) (string, 
 
 	var pr PullRequest
 	if err := workflow.ExecuteActivity(quick, a.DeterminePR, in).Get(quick, &pr); err != nil {
-		return "", false, 0, "", err
+		return pilotPass{}, err
 	}
 
 	// Wait out any review still in progress so we act on a settled comment set.
@@ -303,33 +338,59 @@ func runPilotOnce(ctx workflow.Context, in PilotInput, agentRan *bool) (string, 
 	for {
 		var ongoing bool
 		if err := workflow.ExecuteActivity(quick, a.CheckOngoingReview, pr).Get(quick, &ongoing); err != nil {
-			return "", false, 0, "", err
+			return pilotPass{}, err
 		}
 		if !ongoing {
 			break
 		}
 		if err := workflow.Sleep(ctx, reviewPollInterval); err != nil {
-			return "", false, 0, "", err
+			return pilotPass{}, err
 		}
 	}
 
 	var loaded LoadCommentsResult
 	if err := workflow.ExecuteActivity(quick, a.LoadUnresolvedComments, pr).Get(quick, &loaded); err != nil {
-		return "", false, 0, "", err
+		return pilotPass{}, err
 	}
 	if len(loaded.Threads) == 0 {
-		return fmt.Sprintf("No unresolved comments on PR #%d; nothing to do.", pr.Number), false, 0, pr.URL, nil
+		return pilotPass{
+			Summary: fmt.Sprintf("No unresolved comments on PR #%d; nothing to do.", pr.Number),
+			PRURL:   pr.URL,
+		}, nil
+	}
+
+	// The comments the agent is about to address are settled and loaded: this is the
+	// pause point. Like the local review's, it sits before the checkpoint, so a human
+	// thinking for days is never thinking with the developer's changes in a stash.
+	var guidance string
+	if steered(in.Settings) {
+		decision, err := pause(ctx, steering.RoundRemoteComments, rec.Place, func(since time.Time) {
+			rec.WaitingSince = since
+			recordPilotWaiting(ctx, *rec)
+		})
+		if err != nil {
+			return pilotPass{}, err
+		}
+		if !decision.Proceeds() {
+			return pilotPass{
+				Summary: fmt.Sprintf("Stopped by the operator with %d unresolved comment(s) on PR #%d still to address.",
+					len(loaded.Threads), pr.Number),
+				PRURL:   pr.URL,
+				Stopped: true,
+			}, nil
+		}
+		guidance = decision.Guidance
 	}
 
 	var cp Checkpoint
 	if err := workflow.ExecuteActivity(quick, a.MarkHeadAndStash, in).Get(quick, &cp); err != nil {
-		return "", false, 0, "", err
+		return pilotPass{}, err
 	}
 
 	var agentResult AgentResult
-	agentReq := RunAgentRequest{Input: in, PR: pr, Threads: loaded.Threads}
+	agentReq := RunAgentRequest{Input: in, PR: pr, Threads: loaded.Threads, Guidance: guidance}
 	if err := workflow.ExecuteActivity(agentCtx, a.RunAgent, agentReq).Get(agentCtx, &agentResult); err != nil {
-		return "", false, 0, "", err
+		return pilotPass{}, err
 	}
 	// The agent has run: a Pi session now exists for this run that a later
 	// SummarizeLastRun step could resume.
@@ -338,23 +399,23 @@ func runPilotOnce(ctx workflow.Context, in PilotInput, agentRan *bool) (string, 
 	var commits []string
 	advReq := EnsureHeadAdvancedRequest{WorkDir: in.WorkDir, Checkpoint: cp}
 	if err := workflow.ExecuteActivity(quick, a.EnsureHeadAdvanced, advReq).Get(quick, &commits); err != nil {
-		return "", false, 0, "", err
+		return pilotPass{}, err
 	}
 
 	// Publish the new commits to the PR branch before answering comments and
 	// requesting a fresh review, so both see the pushed work.
 	pushReq := PushBranchRequest{WorkDir: in.WorkDir, Branch: pr.HeadRef}
 	if err := workflow.ExecuteActivity(quick, a.PushBranch, pushReq).Get(quick, nil); err != nil {
-		return "", false, 0, "", err
+		return pilotPass{}, err
 	}
 
 	replyReq := ReplyAndResolveRequest{PR: pr, Threads: loaded.Threads, CommitSHAs: commits}
 	if err := workflow.ExecuteActivity(quick, a.ReplyAndResolve, replyReq).Get(quick, nil); err != nil {
-		return "", false, 0, "", err
+		return pilotPass{}, err
 	}
 
 	if err := workflow.ExecuteActivity(quick, a.RequestCopilotReview, pr).Get(quick, nil); err != nil {
-		return "", false, 0, "", err
+		return pilotPass{}, err
 	}
 
 	// Put the developer's pre-existing local changes back. This is best-effort:
@@ -367,8 +428,13 @@ func runPilotOnce(ctx workflow.Context, in PilotInput, agentRan *bool) (string, 
 		}
 	}
 
-	return fmt.Sprintf("Addressed %d comment(s) on PR #%d with %d commit(s); requested Copilot review.",
-		len(loaded.Threads), pr.Number, len(commits)), true, agentResult.Tokens, pr.URL, nil
+	return pilotPass{
+		Summary: fmt.Sprintf("Addressed %d comment(s) on PR #%d with %d commit(s); requested Copilot review.",
+			len(loaded.Threads), pr.Number, len(commits)),
+		Addressed: true,
+		Tokens:    agentResult.Tokens,
+		PRURL:     pr.URL,
+	}, nil
 }
 
 // OpenPRWorkflow publishes the current branch, ensures an open pull request
@@ -898,6 +964,15 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome,
 	}
 	rec.Instructions = in.Instructions
 
+	// What is switched on where this loop runs, resolved once and carried the same
+	// way, for the same reason: a loop must not change shape halfway through. Whether
+	// the loop stops for the operator is decided here, once, and every later pass
+	// obeys what this one resolved.
+	if in.Settings, err = wfsetting.Ensure(ctx, in.Settings, rec.Place,
+		setting.KeySteeringEnabled); err != nil {
+		return ReviewOutcome{}, err
+	}
+
 	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
 	// should not run forever.
 	quick := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
@@ -929,12 +1004,44 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome,
 	// so the branch has converged and the loop ends successfully.
 	var cp Checkpoint
 	if strings.TrimSpace(in.Payload) != "" {
+		// The review has produced its findings and the agent is about to act on them:
+		// this is the pause point. It is before the checkpoint on purpose — a human may
+		// think for days, and the developer's own changes must not sit in a stash for
+		// them.
+		var guidance string
+		if steered(in.Settings) {
+			decision, derr := pause(ctx, steering.RoundLocalReview, rec.Place, func(since time.Time) {
+				rec.WaitingSince = since
+				recordReviewWaiting(ctx, rec)
+			})
+			if derr != nil {
+				return ReviewOutcome{}, derr
+			}
+			if !decision.Proceeds() {
+				// The operator ended the loop. That is not convergence and not a failure: the
+				// branch is left as it is, with the review's findings outstanding, needing a
+				// human.
+				rec.Converged = boolPtr(false)
+				rec.Ending = EndingOperatorStopped
+				summary := withTokenTotal("Review stopped by the operator before the review's findings were implemented.", total)
+				if err := notifyComplete(ctx, in.Summary, agentRan, in.WorkDir,
+					notification.Notification{Title: "Local review chain stopped", Body: summary}, ""); err != nil {
+					return ReviewOutcome{}, err
+				}
+				return EndedBy(EndingOperatorStopped, summary), nil
+			}
+			guidance = decision.Guidance
+		}
+
 		if err := workflow.ExecuteActivity(quick, a.MarkHeadAndStash, PilotInput{WorkDir: in.WorkDir}).Get(quick, &cp); err != nil {
 			return ReviewOutcome{}, err
 		}
 
 		var implResult AgentResult
-		implReq := RunImplementRequest{WorkDir: in.WorkDir, Payload: in.Payload, Instructions: in.Instructions}
+		implReq := RunImplementRequest{
+			WorkDir: in.WorkDir, Payload: in.Payload,
+			Instructions: in.Instructions, Guidance: guidance,
+		}
 		if err := workflow.ExecuteActivity(agentCtx, a.RunImplementAgent, implReq).Get(agentCtx, &implResult); err != nil {
 			return ReviewOutcome{}, err
 		}
@@ -956,13 +1063,14 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome,
 			if errors.As(err, &appErr) && appErr.Type() == errNoAdvance {
 				// The loop has converged: the implement pass found nothing left to change.
 				rec.Converged = boolPtr(true)
+				rec.Ending = EndingConverged
 				summary := withTokenTotal("Review complete; the implement pass found nothing to commit.", total)
 				// No carried summary here: this terminal pass ran the implement agent, so
 				// agentRan is true and summarizeForWebhook summarizes this run directly.
 				if err := notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary}, ""); err != nil {
 					return ReviewOutcome{}, err
 				}
-				return ReviewOutcome{Summary: summary, Converged: true}, nil
+				return EndedBy(EndingConverged, summary), nil
 			}
 			return ReviewOutcome{}, err
 		}
@@ -998,13 +1106,14 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome,
 		// The loop stopped at the pass cap with feedback still outstanding, which is
 		// explicitly not convergence.
 		rec.Converged = boolPtr(false)
+		rec.Ending = EndingPassCap
 		summary := withTokenTotal(fmt.Sprintf("Review stopped after %d pass(es).", MaxReviewPasses), total)
 		// No carried summary here: this terminal pass ran the review agent, so
 		// agentRan is true and summarizeForWebhook summarizes this run directly.
 		if err := notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary}, ""); err != nil {
 			return ReviewOutcome{}, err
 		}
-		return ReviewOutcome{Summary: summary, Converged: false}, nil
+		return EndedBy(EndingPassCap, summary), nil
 	}
 	// The next pass inherits everything this one carried, including the instructions
 	// the loop resolved at its start.

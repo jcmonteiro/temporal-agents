@@ -88,6 +88,13 @@ type ReviewState struct {
 	// settles: an intermediate pass that continues as new has not answered the
 	// question, and recording it as "did not converge" would misreport it.
 	Converged *bool
+	// Ending names why the loop ended, which the boolean above cannot: a loop can
+	// also be stopped or accepted by an operator. It is empty until the loop settles.
+	Ending Ending
+	// WaitingSince is when this pass started waiting for an operator's decision, and
+	// the zero time whenever it is not waiting. It is what makes a run that is
+	// technically still running report that it needs a human.
+	WaitingSince time.Time
 	// Place is where the review pass runs.
 	Place place.Facts
 	// Instructions is which stored instruction version each of the loop's keys
@@ -117,6 +124,12 @@ type PilotState struct {
 	// to finding none left). It is nil while the pass has not reached that
 	// decision yet.
 	Addressed *bool
+	// Ending names why the loop ended, when it ended for a named reason. Only an
+	// operator stopping a pass gives the pilot loop one today.
+	Ending Ending
+	// WaitingSince is when this pass started waiting for an operator's decision, and
+	// the zero time whenever it is not waiting.
+	WaitingSince time.Time
 	// Place is where the pilot pass runs.
 	Place place.Facts
 	// Instructions is which stored instruction version the pass addressed comments
@@ -162,8 +175,9 @@ func (a *Activities) PersistReviewWorkflowState(ctx context.Context, in ReviewSt
 		return execstore.ErrNotConfigured
 	}
 	detail := execstore.Detail{
-		Pass: in.Pass, Converged: in.Converged, Error: in.Error,
-		Directory: in.Place.Directory, Repository: in.Place.Repository,
+		Pass: in.Pass, Converged: in.Converged, Ending: string(in.Ending), Error: in.Error,
+		WaitingSince: waitingSince(in.WaitingSince),
+		Directory:    in.Place.Directory, Repository: in.Place.Repository,
 		Instructions: instructionUses(in.Instructions),
 	}
 	return a.Store.SaveExecution(ctx, execstore.Execution{
@@ -185,8 +199,9 @@ func (a *Activities) PersistPilotWorkflowState(ctx context.Context, in PilotStat
 		return execstore.ErrNotConfigured
 	}
 	detail := execstore.Detail{
-		PRURL: in.PRURL, Addressed: in.Addressed, Error: in.Error,
-		Directory: in.Place.Directory, Repository: in.Place.Repository,
+		PRURL: in.PRURL, Addressed: in.Addressed, Ending: string(in.Ending), Error: in.Error,
+		WaitingSince: waitingSince(in.WaitingSince),
+		Directory:    in.Place.Directory, Repository: in.Place.Repository,
 		Instructions: instructionUses(in.Instructions),
 	}
 	return a.Store.SaveExecution(ctx, execstore.Execution{
@@ -303,6 +318,39 @@ func startReviewState(ctx workflow.Context, in ReviewInput) (ReviewState, error)
 	return st, nil
 }
 
+// recordReviewWaiting upserts the review pass's row while it waits for an
+// operator, and again once it no longer does, so a run that needs a human says so
+// on the overview instead of looking like a run that is quietly working.
+//
+// It is best-effort, exactly as recordDevelopPlace is: losing the write costs a
+// waiting run its "needs input" badge until it settles, while failing the pass for
+// it would throw away the round the operator is being asked about.
+func recordReviewWaiting(ctx workflow.Context, st ReviewState) {
+	if !wfrecord.Enabled(ctx) {
+		return
+	}
+	opts := wfrecord.WithOptions(ctx)
+	var a *Activities
+	if err := workflow.ExecuteActivity(opts, a.PersistReviewWorkflowState, st).Get(opts, nil); err != nil {
+		workflow.GetLogger(ctx).Warn(
+			"could not record that the review pass is waiting for an operator", "error", err)
+	}
+}
+
+// recordPilotWaiting is recordReviewWaiting for the pilot loop, with the same
+// best-effort policy and for the same reason.
+func recordPilotWaiting(ctx workflow.Context, st PilotState) {
+	if !wfrecord.Enabled(ctx) {
+		return
+	}
+	opts := wfrecord.WithOptions(ctx)
+	var a *Activities
+	if err := workflow.ExecuteActivity(opts, a.PersistPilotWorkflowState, st).Get(opts, nil); err != nil {
+		workflow.GetLogger(ctx).Warn(
+			"could not record that the pilot pass is waiting for an operator", "error", err)
+	}
+}
+
 // finishReviewState records the review pass's terminal state.
 func finishReviewState(ctx workflow.Context, st ReviewState, err error) error {
 	if !wfrecord.Enabled(ctx) {
@@ -311,6 +359,8 @@ func finishReviewState(ctx workflow.Context, st ReviewState, err error) error {
 	st.EndedAt = workflow.Now(ctx)
 	st.Status = wfrecord.StatusOf(err)
 	st.Error = wfrecord.FailureText(err)
+	// A settled pass is not waiting for anybody, however it settled.
+	st.WaitingSince = time.Time{}
 
 	dctx, cancel := wfrecord.TerminalOptions(ctx)
 	defer cancel()
@@ -357,6 +407,8 @@ func finishPilotState(ctx workflow.Context, st PilotState, err error) error {
 	st.EndedAt = workflow.Now(ctx)
 	st.Status = wfrecord.StatusOf(err)
 	st.Error = wfrecord.FailureText(err)
+	// A settled pass is not waiting for anybody, however it settled.
+	st.WaitingSince = time.Time{}
 
 	dctx, cancel := wfrecord.TerminalOptions(ctx)
 	defer cancel()
@@ -370,6 +422,15 @@ func finishPilotState(ctx workflow.Context, st PilotState, err error) error {
 // boolPtr returns a pointer to a copy of b, for the record fields that must tell
 // "false" apart from "not decided yet".
 func boolPtr(b bool) *bool { return &b }
+
+// waitingSince renders a wait for the record: the moment it began, or nothing at
+// all when the execution is not waiting for anybody.
+func waitingSince(since time.Time) *time.Time {
+	if since.IsZero() {
+		return nil
+	}
+	return &since
+}
 
 // instructionUses renders a resolution as the provenance the durable record keeps:
 // which key resolved to which version, from which scope, and the hash of the text it

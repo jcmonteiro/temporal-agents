@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"temporal-agents/internal/instruction"
+	"temporal-agents/internal/steering"
 )
 
 // pilotFactory is the shipped instruction the pilot loop uses when nothing is
@@ -27,7 +28,10 @@ func pilotFactory(t *testing.T) string {
 func TestThePilotPromptCarriesTheInstructionTheDescriptionAndTheComments(t *testing.T) {
 	threads := []ReviewThread{{Path: "main.go", Line: 12, Author: "octocat", Body: "rename this"}}
 
-	got, err := BuildPilotPrompt(nil, PromptDefault, "ignored when mode is default", "Adds the widget feature", threads)
+	got, err := BuildPilotPrompt(PilotPrompt{
+		Mode: PromptDefault, Text: "ignored when mode is default",
+		Description: "Adds the widget feature", Threads: threads,
+	})
 
 	if err != nil {
 		t.Fatalf("BuildPilotPrompt: %v", err)
@@ -50,7 +54,7 @@ func TestAResolvedInstructionReplacesTheShippedOneButNotTheComments(t *testing.T
 	}}
 	threads := []ReviewThread{{Path: "main.go", Body: "rename this"}}
 
-	got, err := BuildPilotPrompt(resolved, PromptDefault, "", "", threads)
+	got, err := BuildPilotPrompt(PilotPrompt{Instructions: resolved, Threads: threads})
 
 	if err != nil {
 		t.Fatalf("BuildPilotPrompt: %v", err)
@@ -67,7 +71,7 @@ func TestAResolvedInstructionReplacesTheShippedOneButNotTheComments(t *testing.T
 }
 
 func TestThePilotPromptOmitsTheDescriptionSectionWhenThereIsNone(t *testing.T) {
-	got, err := BuildPilotPrompt(nil, PromptDefault, "", "  ", nil)
+	got, err := BuildPilotPrompt(PilotPrompt{Description: "  "})
 	if err != nil {
 		t.Fatalf("BuildPilotPrompt: %v", err)
 	}
@@ -79,7 +83,7 @@ func TestThePilotPromptOmitsTheDescriptionSectionWhenThereIsNone(t *testing.T) {
 // The per-run modes the CLI already offers keep working against whatever the pass
 // resolved: append adds to it, replace stands in for it.
 func TestThePerRunModesCombineWithTheResolvedInstruction(t *testing.T) {
-	appended, err := BuildPilotPrompt(nil, PromptAppend, "prefer table-driven tests", "", nil)
+	appended, err := BuildPilotPrompt(PilotPrompt{Mode: PromptAppend, Text: "prefer table-driven tests"})
 	if err != nil {
 		t.Fatalf("BuildPilotPrompt: %v", err)
 	}
@@ -87,7 +91,7 @@ func TestThePerRunModesCombineWithTheResolvedInstruction(t *testing.T) {
 		t.Fatalf("append should keep the instruction and add the caller text:\n%s", appended)
 	}
 
-	replaced, err := BuildPilotPrompt(nil, PromptReplace, "only fix naming", "", nil)
+	replaced, err := BuildPilotPrompt(PilotPrompt{Mode: PromptReplace, Text: "only fix naming"})
 	if err != nil {
 		t.Fatalf("BuildPilotPrompt: %v", err)
 	}
@@ -230,5 +234,41 @@ func TestFormatReplyBody(t *testing.T) {
 				t.Fatalf("FormatReplyBody(%v) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// The operator's guidance is added to the prompt, never merged into it: the
+// instruction is what it was, the comments are what they were, and the guidance
+// sits between them — immediately in front of the material it is about.
+func TestGuidanceIsAddedToThePilotPromptWithoutChangingWhatWasThereBefore(t *testing.T) {
+	threads := []ReviewThread{{Path: "main.go", Body: "rename this"}}
+	unguided, err := BuildPilotPrompt(PilotPrompt{Threads: threads})
+	if err != nil {
+		t.Fatalf("BuildPilotPrompt: %v", err)
+	}
+
+	guided, err := BuildPilotPrompt(PilotPrompt{Threads: threads, Guidance: "ignore the naming comment"})
+	if err != nil {
+		t.Fatalf("BuildPilotPrompt: %v", err)
+	}
+
+	if !strings.Contains(guided, pilotFactory(t)) {
+		t.Fatalf("the instruction changed when guidance was added:\n%s", guided)
+	}
+	guidance := strings.Index(guided, "ignore the naming comment")
+	comments := strings.Index(guided, "rename this")
+	instructionEnd := strings.Index(guided, pilotFactory(t)) + len(pilotFactory(t))
+	switch {
+	case guidance < 0:
+		t.Fatalf("the guidance never reached the agent:\n%s", guided)
+	case guidance < instructionEnd:
+		t.Fatalf("the guidance landed inside the instruction:\n%s", guided)
+	case guidance > comments:
+		t.Fatalf("the guidance landed after the comments it applies to:\n%s", guided)
+	}
+	// Everything the pass was already given is still there, unchanged, with only the
+	// guidance block added.
+	if strings.ReplaceAll(guided, steering.Block("ignore the naming comment")+"\n", "") != unguided {
+		t.Fatalf("adding guidance changed a section that already existed:\n%s", guided)
 	}
 }

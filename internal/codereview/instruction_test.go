@@ -15,6 +15,8 @@ import (
 	"temporal-agents/internal/place"
 	"temporal-agents/internal/place/placetest"
 	"temporal-agents/internal/scoped/scopedtest"
+	"temporal-agents/internal/setting"
+	"temporal-agents/internal/steering"
 )
 
 // The review and pilot loops are the first workflows whose instructions come out of
@@ -35,6 +37,11 @@ func newLoopEnv(t *testing.T, instructions *scopedtest.Store, records *execstore
 	env.RegisterActivity(&notification.Activity{})
 	env.RegisterActivity(&place.Activity{Prober: placetest.New()})
 	env.RegisterActivity(&instruction.Activity{Store: instructions})
+	// The settings resolve through a store of their own here, so a test that counts
+	// reads of the instruction store counts instruction reads and nothing else.
+	env.RegisterActivity(&setting.Activity{Resolver: setting.Resolver{Store: scopedtest.New()}})
+	env.RegisterActivity(&steering.Activities{Store: records})
+	env.RegisterWorkflow(steering.SessionWorkflow)
 	env.RegisterWorkflow(ReviewWorkflow)
 	env.RegisterWorkflow(PilotWorkflow)
 	return env

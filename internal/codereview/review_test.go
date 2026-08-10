@@ -16,6 +16,8 @@ import (
 	"temporal-agents/internal/place"
 	"temporal-agents/internal/place/placetest"
 	"temporal-agents/internal/scoped/scopedtest"
+	"temporal-agents/internal/setting"
+	"temporal-agents/internal/steering"
 )
 
 // The review workflow tests exercise observable behavior — which activities run
@@ -39,6 +41,9 @@ func newReviewEnvWithStore(t *testing.T, store *execstoretest.Store) *testsuite.
 	env.RegisterActivity(&notification.Activity{})
 	env.RegisterActivity(&place.Activity{Prober: placetest.New()})
 	env.RegisterActivity(&instruction.Activity{Store: scopedtest.New()})
+	env.RegisterActivity(&setting.Activity{Resolver: setting.Resolver{Store: scopedtest.New()}})
+	env.RegisterActivity(&steering.Activities{Store: store})
+	env.RegisterWorkflow(steering.SessionWorkflow)
 	env.RegisterWorkflow(ReviewWorkflow)
 	return env
 }

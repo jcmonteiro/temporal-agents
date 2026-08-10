@@ -27,6 +27,8 @@ import (
 	"time"
 
 	"temporal-agents/internal/instruction"
+	"temporal-agents/internal/setting"
+	"temporal-agents/internal/steering"
 )
 
 // PromptMode selects how the caller-provided prompt text combines with the
@@ -78,6 +80,12 @@ type PilotInput struct {
 	// cannot change what a later pass did. It is empty for a loop started before
 	// instructions were stored, which then uses what the build ships.
 	Instructions instruction.Resolution
+	// Settings are the settings this loop runs under, resolved once at its start and
+	// carried across every continue-as-new for the same reason the instructions are:
+	// a loop must not change shape while it runs. It is empty for a loop started
+	// before settings were resolved, which then reads every setting as what the
+	// build ships.
+	Settings setting.Resolution
 }
 
 // PullRequest identifies the open PR the loop operates on.
@@ -114,6 +122,23 @@ type Checkpoint struct {
 	Stashed bool
 }
 
+// PilotPrompt is everything one pilot pass renders its prompt from.
+type PilotPrompt struct {
+	// Instructions is what the loop resolved at its start.
+	Instructions instruction.Resolution
+	// Mode and Text are the caller's own prompt override, if any.
+	Mode PromptMode
+	Text string
+	// Description is the pull request's description, given to the agent as context.
+	Description string
+	// Threads are the unresolved review threads the pass addresses.
+	Threads []ReviewThread
+	// Guidance is what the operator told this pass to keep in mind, or empty when
+	// the round was not steered. It is added as a block of its own in front of the
+	// comments, so nothing the pass was already given changes.
+	Guidance string
+}
+
 // BuildPilotPrompt combines the instruction the pass resolved (or the caller's own
 // text, in append/replace mode) with the pull request's description and its
 // unresolved review threads.
@@ -121,13 +146,13 @@ type Checkpoint struct {
 // The comments are the system's own block: their shape is produced by the code that
 // read them, so an override changes how the agent addresses a comment, never whether
 // it is given the comments at all.
-func BuildPilotPrompt(resolved instruction.Resolution, mode PromptMode, text, prDescription string, threads []ReviewThread) (string, error) {
-	base := resolved.Text(instruction.KeyPilotAddress)
-	switch mode {
+func BuildPilotPrompt(in PilotPrompt) (string, error) {
+	base := in.Instructions.Text(instruction.KeyPilotAddress)
+	switch in.Mode {
 	case PromptReplace:
-		base = strings.TrimSpace(text)
+		base = strings.TrimSpace(in.Text)
 	case PromptAppend:
-		if t := strings.TrimSpace(text); t != "" {
+		if t := strings.TrimSpace(in.Text); t != "" {
 			base += "\n\n" + t
 		}
 	}
@@ -135,7 +160,10 @@ func BuildPilotPrompt(resolved instruction.Resolution, mode PromptMode, text, pr
 	if !ok {
 		return "", fmt.Errorf("%w: %s", instruction.ErrUnknownKey, instruction.KeyPilotAddress)
 	}
-	return spec.Render(base, instruction.Data{"Comments": formatComments(prDescription, threads)})
+	// The operator's guidance goes immediately in front of the material it applies
+	// to, which is where the insert puts it wherever the instruction places it.
+	comments := steering.WithGuidance(in.Guidance, formatComments(in.Description, in.Threads))
+	return spec.Render(base, instruction.Data{"Comments": comments})
 }
 
 // formatComments renders the material the pilot pass acts on: the pull request's
@@ -258,20 +286,60 @@ type ReviewInput struct {
 	// change what a later pass did. It is empty for a loop started before
 	// instructions were stored, which then uses what the build ships.
 	Instructions instruction.Resolution
+	// Settings are the settings this loop runs under, resolved once by its first
+	// pass and carried across every continue-as-new, so switching steering on or off
+	// while a loop runs cannot change the loop that is already running.
+	Settings setting.Resolution
 }
 
+// Ending names why a review loop ended. A single "converged" flag cannot express
+// the endings a steered loop can reach, and both the interface and the durable
+// record have to explain why a loop stopped rather than merely that it did.
+type Ending string
+
+const (
+	// EndingConverged is the loop's own ending: an implement pass found nothing left
+	// to change.
+	EndingConverged Ending = "converged"
+	// EndingOperatorAccepted is an operator deciding, at the pass cap, that the work
+	// is finished.
+	EndingOperatorAccepted Ending = "operator-accepted"
+	// EndingOperatorStopped is an operator stopping the loop deliberately, leaving
+	// the work needing a human.
+	EndingOperatorStopped Ending = "operator-stopped"
+	// EndingPassCap is the loop reaching MaxReviewPasses with feedback still
+	// outstanding.
+	EndingPassCap Ending = "pass-cap"
+)
+
+// Converged reports whether the ending is the loop converging on its own. It is
+// what keeps the older boolean flag exactly as truthful as it always was, now that
+// the ending says more than the flag can.
+func (e Ending) Converged() bool { return e == EndingConverged }
+
 // ReviewOutcome is the result of ReviewWorkflow. Summary is the human-readable
-// summary line (carrying the token-total the fleet parses). Converged is an
-// explicit signal of *why* the loop ended: true only when the review agent
-// found nothing left to change, false when the loop stopped at MaxReviewPasses
-// with feedback still outstanding. The fleet gates a node's dependents on
-// Converged so a pass-capped node does not read as a clean success.
+// summary line (carrying the token-total the fleet parses). Ending names why the
+// loop ended, and Converged says the same thing about the one ending that existed
+// before a human could end a loop: true only when the review agent found nothing
+// left to change. The fleet gates a node's dependents on Converged so a pass-capped
+// — or operator-stopped — node does not read as a clean success.
 type ReviewOutcome struct {
 	// Summary is the terminal pass's human-readable summary line.
 	Summary string
-	// Converged reports whether the loop ended by converging (true) rather than
-	// by reaching the pass cap with outstanding feedback (false).
+	// Converged reports whether the loop ended by converging (true) rather than by
+	// any of the endings that leave work outstanding (false). It is kept beside
+	// Ending, rather than derived by each consumer, because it is the field every
+	// existing consumer already reads.
 	Converged bool
+	// Ending names why the loop ended. It is empty for an outcome produced before
+	// endings were named, which Converged still describes.
+	Ending Ending
+}
+
+// EndedBy builds the outcome of a loop that ended the named way, keeping the older
+// convergence flag written so no consumer of it has to change.
+func EndedBy(ending Ending, summary string) ReviewOutcome {
+	return ReviewOutcome{Summary: summary, Converged: ending.Converged(), Ending: ending}
 }
 
 // ReviewPrompt and the implement instruction it feeds are governed instructions now

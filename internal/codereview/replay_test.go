@@ -122,3 +122,33 @@ func TestPilotWorkflow_ReplaysAHistoryFromBeforeStoredInstructions(t *testing.T)
 
 	require.NoError(t, err, "a pilot pass started before instructions were stored must still replay")
 }
+
+// Steering added a fourth gate, protecting a fourth kind of history: an execution
+// started after recording, the probe and stored instructions, but before a setting
+// was ever resolved. Such a history carries all three earlier markers and no
+// settings marker, so replaying it must schedule neither the settings resolution
+// nor a steering session — which is also what makes "steering off behaves exactly
+// as before" true for the executions that were already running.
+//
+// The fixtures are the same pre-instructions histories: a history without the
+// instructions marker necessarily has no settings marker either, so it is the
+// oldest shape the gate must survive, and the one an in-flight loop is most likely
+// to be in.
+
+func TestReviewWorkflow_ReplaysAHistoryFromBeforeSteering(t *testing.T) {
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(ReviewWorkflow)
+
+	err := wftest.ReplayHistoryFile(t, replayer, "testdata/review_workflow_before_instructions.json", "review-fixture")
+
+	require.NoError(t, err, "a review pass started before steering existed must still replay")
+}
+
+func TestPilotWorkflow_ReplaysAHistoryFromBeforeSteering(t *testing.T) {
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(PilotWorkflow)
+
+	err := wftest.ReplayHistoryFile(t, replayer, "testdata/pilot_workflow_before_instructions.json", "pilot-fixture")
+
+	require.NoError(t, err, "a pilot pass started before steering existed must still replay")
+}
