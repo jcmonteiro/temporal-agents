@@ -18,6 +18,7 @@ import {
   type WorkItemStatus,
 } from "../../domain/work-item";
 import { Icon } from "../../components/Icon";
+import { prefersReducedMotion } from "../../platform/motion";
 import { layoutOrbit } from "./layout";
 import {
   IDENTITY,
@@ -50,12 +51,9 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
   const hostRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 900, h: 640 });
   const [view, setView] = useState<View>(IDENTITY);
-  // Whether the orbital animation is running. Starts paused when the user
+  // Whether the orbital animation is running. Starts paused when the operator
   // prefers reduced motion; otherwise plays.
-  const prefersReducedMotion =
-    typeof window !== "undefined" &&
-    (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
-  const [playing, setPlaying] = useState(!prefersReducedMotion);
+  const [playing, setPlaying] = useState(() => !prefersReducedMotion());
 
   // Whether a pan is in progress. This drives the cursor, so it is state: the
   // ref below alone would leave the cursor stuck on "grabbing" after pointer-up,
