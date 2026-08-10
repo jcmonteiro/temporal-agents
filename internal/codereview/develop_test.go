@@ -10,6 +10,8 @@ import (
 	"go.temporal.io/sdk/testsuite"
 
 	"temporal-agents/internal/execstore/execstoretest"
+	"temporal-agents/internal/instruction"
+	"temporal-agents/internal/instruction/instructiontest"
 	"temporal-agents/internal/notification"
 	"temporal-agents/internal/place"
 	"temporal-agents/internal/place/placetest"
@@ -38,6 +40,7 @@ func newDevelopEnvWithStore(t *testing.T, store *execstoretest.Store) *testsuite
 	// The location probe is a driven adapter like any other: registering the fake
 	// makes a develop run record the place its worktree is in.
 	env.RegisterActivity(&place.Activity{Prober: placetest.New()})
+	env.RegisterActivity(&instruction.Activity{Store: instructiontest.New()})
 	env.RegisterWorkflow(DevelopWorkflow)
 	env.RegisterWorkflow(ReviewWorkflow)
 	env.RegisterWorkflow(OpenPRWorkflow)

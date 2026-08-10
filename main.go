@@ -24,6 +24,7 @@ import (
 	"temporal-agents/internal/fleet"
 	"temporal-agents/internal/ghcli"
 	"temporal-agents/internal/gitcli"
+	"temporal-agents/internal/instruction"
 	"temporal-agents/internal/notification"
 	"temporal-agents/internal/notify"
 	"temporal-agents/internal/piagent"
@@ -490,6 +491,12 @@ func runWorker(opts notifyOptions) {
 	store := openVerifiedStore(context.Background())
 	defer store.Close()
 
+	// The instructions the agent is given live in storage too. Opening publishes what
+	// this build ships, so a worker that starts is a worker whose defaults are the
+	// current ones, and every workflow resolves through the same store afterwards.
+	instructions := openPublishedInstructions(context.Background())
+	defer instructions.Close()
+
 	// Flush heartbeats promptly so `watch` sees near-real-time Pi progress
 	// instead of the SDK's default ~30s throttle.
 	//
@@ -535,6 +542,11 @@ func runWorker(opts notifyOptions) {
 
 	// A single notification activity, shared by every workflow that notifies.
 	w.RegisterActivity(&notification.Activity{Notifier: buildNotifier(opts)})
+
+	// A single instruction resolution, shared by every workflow that runs an agent.
+	// It resolves once per unit of work, at its start, and the resolved text travels
+	// in the workflow's input from there (see wfinstruction).
+	w.RegisterActivity(&instruction.Activity{Store: instructions})
 
 	// A single location probe, shared by every workflow that owns a working
 	// directory. It answers over the same git adapter the code workflows drive, so

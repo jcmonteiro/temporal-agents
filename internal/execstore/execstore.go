@@ -215,6 +215,31 @@ type Detail struct {
 	// It is never derived from one path containing the other: git puts a worktree
 	// outside its repository by default.
 	Repository string `json:"repository,omitempty"`
+	// Instructions is which stored instruction each governed key of this execution
+	// resolved to. It is empty for an execution that resolves none, and for one
+	// started before instructions were stored.
+	Instructions []InstructionUse `json:"instructions,omitempty"`
+}
+
+// InstructionUse is one instruction an execution ran under, recorded as values
+// rather than as a reference: the record and the instruction store are separate
+// contexts, so neither may key into the other's tables.
+//
+// The text is deliberately absent. It stays in the version record the three
+// identifying fields name, so a row cannot grow with the instruction it used and one
+// instruction's text is stored once however many executions used it. The hash makes
+// the naming verifiable even by hand.
+type InstructionUse struct {
+	// Key is the governed instruction ("review.perform").
+	Key string `json:"key"`
+	// Scope is where the value that won came from ("global", "factory",
+	// "directory:<path>").
+	Scope string `json:"scope"`
+	// Version is which version of that (key, scope) was used. It is 0 when the
+	// execution used the value its build ships, because storage held none yet.
+	Version int `json:"version,omitempty"`
+	// Hash is the content hash of the instruction text that was used.
+	Hash string `json:"hash,omitempty"`
 }
 
 // NodeOutcome is one fleet node's outcome inside a fleet parent's Detail.

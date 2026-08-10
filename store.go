@@ -10,6 +10,8 @@ import (
 
 	"temporal-agents/internal/execstore"
 	"temporal-agents/internal/execstore/execpg"
+	"temporal-agents/internal/instruction"
+	"temporal-agents/internal/instruction/instructionpg"
 )
 
 // databaseURLEnv names the environment variable carrying the execution store's
@@ -96,6 +98,36 @@ func openVerifiedStore(ctx context.Context) *execpg.Postgres {
 	store, err := openStore(ctx)
 	if err != nil {
 		fatalf("%v", err)
+	}
+	return store
+}
+
+// openPublishedInstructions connects the worker to the instruction store and
+// publishes the instructions this build ships into it, so an upgrade that improves
+// one reaches every place that has not overridden it.
+//
+// Both halves are fail-fast, and for the same reason the execution store is: an
+// instruction is what the agent is told, so a worker that cannot reach the store —
+// or cannot publish what it ships — must not take work and resolve to something
+// nobody chose. Publication applies no DDL (the schema is the explicit migrate
+// step's) and is safe to run while another worker starts: it takes a lock per key
+// and writes only when the shipped text actually changed.
+func openPublishedInstructions(ctx context.Context) *instructionpg.Store {
+	dsn, err := databaseURL()
+	if err != nil {
+		fatalf("%v", err)
+	}
+	connectCtx, cancel := context.WithTimeout(ctx, storeConnectTimeout)
+	defer cancel()
+	store, err := instructionpg.Open(connectCtx, dsn)
+	if err != nil {
+		fatalf("could not reach the instruction store: %v", err)
+	}
+	publishCtx, cancelPublish := context.WithTimeout(ctx, storeConnectTimeout)
+	defer cancelPublish()
+	if err := instruction.PublishDefaults(publishCtx, store); err != nil {
+		store.Close()
+		fatalf("could not publish the instructions this build ships: %v", err)
 	}
 	return store
 }

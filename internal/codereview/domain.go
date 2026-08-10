@@ -25,6 +25,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"temporal-agents/internal/instruction"
 )
 
 // PromptMode selects how the caller-provided prompt text combines with the
@@ -71,6 +73,11 @@ type PilotInput struct {
 	// here, and the terminal notification attaches this preserved summary
 	// instead. It is set only when both Chain and Summary are enabled.
 	ChainSummary string
+	// Instructions are the instructions this pass runs under, resolved once at the
+	// start of the loop and carried across every continue-as-new so a mid-loop edit
+	// cannot change what a later pass did. It is empty for a loop started before
+	// instructions were stored, which then uses what the build ships.
+	Instructions instruction.Resolution
 }
 
 // PullRequest identifies the open PR the loop operates on.
@@ -107,33 +114,34 @@ type Checkpoint struct {
 	Stashed bool
 }
 
-// DefaultPrompt is the built-in instruction handed to the Pi agent. It is
-// intentionally not surfaced in the CLI help.
-const DefaultPrompt = `- For each comment below, read the referenced code for context, then fix it. Read the code and relevant in-repo documentation to decide on the solution.
-- Confirm lint/typecheck/build (and synth, if infra) pass first.
-- Commit all the fixes.
-- Summarize your work once you are done explaining WHAT changed (not HOW)`
-
-// BuildPrompt combines the base prompt (default, appended, or replaced) with
-// the PR description (as context) and a formatted rendering of the unresolved
-// review threads.
-func BuildPrompt(mode PromptMode, text, prDescription string, threads []ReviewThread) string {
-	var base string
+// BuildPilotPrompt combines the instruction the pass resolved (or the caller's own
+// text, in append/replace mode) with the pull request's description and its
+// unresolved review threads.
+//
+// The comments are the system's own block: their shape is produced by the code that
+// read them, so an override changes how the agent addresses a comment, never whether
+// it is given the comments at all.
+func BuildPilotPrompt(resolved instruction.Resolution, mode PromptMode, text, prDescription string, threads []ReviewThread) (string, error) {
+	base := resolved.Text(instruction.KeyPilotAddress)
 	switch mode {
 	case PromptReplace:
 		base = strings.TrimSpace(text)
 	case PromptAppend:
-		base = DefaultPrompt
 		if t := strings.TrimSpace(text); t != "" {
 			base += "\n\n" + t
 		}
-	default:
-		base = DefaultPrompt
 	}
+	spec, ok := instruction.SpecFor(instruction.KeyPilotAddress)
+	if !ok {
+		return "", fmt.Errorf("%w: %s", instruction.ErrUnknownKey, instruction.KeyPilotAddress)
+	}
+	return spec.Render(base, instruction.Data{"Comments": formatComments(prDescription, threads)})
+}
 
+// formatComments renders the material the pilot pass acts on: the pull request's
+// description as context, then one section per unresolved thread.
+func formatComments(prDescription string, threads []ReviewThread) string {
 	var b strings.Builder
-	b.WriteString(base)
-	b.WriteString("\n")
 	if d := strings.TrimSpace(prDescription); d != "" {
 		b.WriteString("\n--- Pull request description ---\n")
 		b.WriteString(d)
@@ -245,6 +253,11 @@ type ReviewInput struct {
 	// (on success or failure) that summarizes the last Pi execution and sends
 	// that summary as the webhook notification's body (only the webhook).
 	Summary bool
+	// Instructions are the instructions this loop runs under, resolved once by its
+	// first pass and carried across every continue-as-new so a mid-loop edit cannot
+	// change what a later pass did. It is empty for a loop started before
+	// instructions were stored, which then uses what the build ships.
+	Instructions instruction.Resolution
 }
 
 // ReviewOutcome is the result of ReviewWorkflow. Summary is the human-readable
@@ -261,9 +274,11 @@ type ReviewOutcome struct {
 	Converged bool
 }
 
-// ReviewPrompt is the instruction handed to the Pi agent to review the current
-// branch. It is deliberately terse; the agent decides how to review.
-const ReviewPrompt = "Perform a thorough code review of the current branch"
+// ReviewPrompt and the implement instruction it feeds are governed instructions now
+// (instruction.KeyReviewPerform and instruction.KeyReviewImplement): a pass resolves
+// them once and carries them, so an operator can tune how a repository is reviewed
+// without a rebuild. Both keep their shipped wording, so a loop that configures
+// nothing runs exactly as it did.
 
 // SummarizePrompt is handed to the Pi agent, resuming the workflow run's
 // session, to condense the work it just performed. Because piagent keys the
@@ -510,12 +525,6 @@ func BuildMergeConflictPrompt(branch string) string {
 	return `A git merge of the branch "` + branch + `" into the current branch has stopped with conflicts. Resolve every conflict by reconciling both sides' intent (do not discard either side's changes), keep lint/typecheck/build (and synth, if infra) passing, then stage the resolved files and commit to complete the merge. Do not push and do not abort the merge.`
 }
 
-// BuildImplementPrompt renders the instruction that has the Pi agent act on a
-// code review's raw output. It asks the agent to commit its work so the
-// workflow's HEAD-advanced check can confirm the change landed, and to make no
-// commit when nothing needs changing so the loop can recognize convergence.
-func BuildImplementPrompt(review string) string {
-	return `Implement the actionable changes called for by the code review below. Read the referenced code for context and make the changes. Confirm lint/typecheck/build (and synth, if infra) pass, then commit all your work. If nothing in the review requires a code change, do not commit anything.
-
-` + review
-}
+// BuildImplementPrompt is a governed instruction now: see
+// instruction.KeyReviewImplement, whose shipped default is this text with the
+// review inserted where the instruction says.

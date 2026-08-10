@@ -5,74 +5,114 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"temporal-agents/internal/instruction"
 )
 
-func TestBuildPrompt_DefaultIncludesBuiltInPromptDescriptionAndComments(t *testing.T) {
+// pilotFactory is the shipped instruction the pilot loop uses when nothing is
+// configured, read from the catalogue so the tests state what they expect without
+// copying the text.
+func pilotFactory(t *testing.T) string {
+	t.Helper()
+	spec, ok := instruction.SpecFor(instruction.KeyPilotAddress)
+	if !ok {
+		t.Fatal("the catalogue does not govern the pilot instruction")
+	}
+	return spec.Factory
+}
+
+// A pass that resolved nothing behaves exactly as it did before instructions were
+// stored: the shipped instruction, the pull request's description as context, and
+// one section per unresolved comment.
+func TestThePilotPromptCarriesTheInstructionTheDescriptionAndTheComments(t *testing.T) {
 	threads := []ReviewThread{{Path: "main.go", Line: 12, Author: "octocat", Body: "rename this"}}
 
-	got := BuildPrompt(PromptDefault, "ignored when mode is default", "Adds the widget feature", threads)
+	got, err := BuildPilotPrompt(nil, PromptDefault, "ignored when mode is default", "Adds the widget feature", threads)
 
-	// Default mode ignores caller text and uses the built-in prompt.
-	if !strings.Contains(got, DefaultPrompt) {
-		t.Fatalf("default prompt not present:\n%s", got)
+	if err != nil {
+		t.Fatalf("BuildPilotPrompt: %v", err)
 	}
-	if !strings.Contains(got, "Adds the widget feature") {
-		t.Fatalf("PR description not present:\n%s", got)
-	}
-	if !strings.Contains(got, "rename this") {
-		t.Fatalf("comment body not present:\n%s", got)
-	}
-	if !strings.Contains(got, "main.go:12") {
-		t.Fatalf("comment location not present:\n%s", got)
-	}
-	if !strings.Contains(got, "@octocat") {
-		t.Fatalf("comment author not present:\n%s", got)
+	for _, want := range []string{pilotFactory(t), "Adds the widget feature", "rename this", "main.go:12", "@octocat"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("%q not present:\n%s", want, got)
+		}
 	}
 }
 
-func TestBuildPrompt_OmitsDescriptionSectionWhenEmpty(t *testing.T) {
-	got := BuildPrompt(PromptDefault, "", "  ", nil)
+// The instruction an operator stored for this place is what the pass is told, while
+// the comments — whose shape the code produces — are appended whatever the
+// instruction says.
+func TestAResolvedInstructionReplacesTheShippedOneButNotTheComments(t *testing.T) {
+	resolved := instruction.Resolution{{
+		Key:   instruction.KeyPilotAddress,
+		Text:  "Address only the comments about tests.",
+		Scope: instruction.DirectoryScope("/src/agents"),
+	}}
+	threads := []ReviewThread{{Path: "main.go", Body: "rename this"}}
+
+	got, err := BuildPilotPrompt(resolved, PromptDefault, "", "", threads)
+
+	if err != nil {
+		t.Fatalf("BuildPilotPrompt: %v", err)
+	}
+	if !strings.Contains(got, "Address only the comments about tests.") {
+		t.Fatalf("the resolved instruction is not what the agent was told:\n%s", got)
+	}
+	if strings.Contains(got, pilotFactory(t)) {
+		t.Fatalf("the shipped instruction survived the override:\n%s", got)
+	}
+	if !strings.Contains(got, "rename this") {
+		t.Fatalf("the comments were dropped by the override:\n%s", got)
+	}
+}
+
+func TestThePilotPromptOmitsTheDescriptionSectionWhenThereIsNone(t *testing.T) {
+	got, err := BuildPilotPrompt(nil, PromptDefault, "", "  ", nil)
+	if err != nil {
+		t.Fatalf("BuildPilotPrompt: %v", err)
+	}
 	if strings.Contains(got, "Pull request description") {
 		t.Fatalf("empty description should not add a section:\n%s", got)
 	}
 }
 
-func TestBuildPrompt_AppendKeepsDefaultAndAddsText(t *testing.T) {
-	got := BuildPrompt(PromptAppend, "prefer table-driven tests", "", nil)
-
-	if !strings.Contains(got, DefaultPrompt) {
-		t.Fatalf("append should keep the default prompt:\n%s", got)
+// The per-run modes the CLI already offers keep working against whatever the pass
+// resolved: append adds to it, replace stands in for it.
+func TestThePerRunModesCombineWithTheResolvedInstruction(t *testing.T) {
+	appended, err := BuildPilotPrompt(nil, PromptAppend, "prefer table-driven tests", "", nil)
+	if err != nil {
+		t.Fatalf("BuildPilotPrompt: %v", err)
 	}
-	if !strings.Contains(got, "prefer table-driven tests") {
-		t.Fatalf("append should include the caller text:\n%s", got)
+	if !strings.Contains(appended, pilotFactory(t)) || !strings.Contains(appended, "prefer table-driven tests") {
+		t.Fatalf("append should keep the instruction and add the caller text:\n%s", appended)
+	}
+
+	replaced, err := BuildPilotPrompt(nil, PromptReplace, "only fix naming", "", nil)
+	if err != nil {
+		t.Fatalf("BuildPilotPrompt: %v", err)
+	}
+	if strings.Contains(replaced, pilotFactory(t)) {
+		t.Fatalf("replace should not include the instruction:\n%s", replaced)
+	}
+	if !strings.Contains(replaced, "only fix naming") {
+		t.Fatalf("replace should use the caller text:\n%s", replaced)
 	}
 }
 
-func TestBuildPrompt_ReplaceDropsDefault(t *testing.T) {
-	got := BuildPrompt(PromptReplace, "only fix naming", "", nil)
-
-	if strings.Contains(got, DefaultPrompt) {
-		t.Fatalf("replace should not include the default prompt:\n%s", got)
-	}
-	if !strings.Contains(got, "only fix naming") {
-		t.Fatalf("replace should use the caller text:\n%s", got)
-	}
-}
-
-func TestBuildImplementPrompt_EmbedsReviewAndAsksToCommit(t *testing.T) {
+// The review loop's convergence rests on this prompt: the agent must be asked to
+// commit its work, and told to commit nothing when there is nothing to change.
+func TestTheImplementPromptEmbedsTheReviewAndAsksToCommit(t *testing.T) {
 	review := "Rename X for clarity and add tests for Y."
-	got := BuildImplementPrompt(review)
 
-	if !strings.Contains(got, review) {
-		t.Fatalf("implement prompt should embed the review output:\n%s", got)
+	got, err := instruction.Render(nil, instruction.KeyReviewImplement, instruction.Data{"Review": review})
+
+	if err != nil {
+		t.Fatalf("Render: %v", err)
 	}
-	if !strings.Contains(got, "commit") {
-		t.Fatalf("implement prompt should ask the agent to commit:\n%s", got)
-	}
-	// It must tell the agent not to commit when nothing needs changing, so the
-	// workflow's no-commits success exit is reachable.
-	if !strings.Contains(got, "do not commit anything") {
-		t.Fatalf("implement prompt should permit making no commit when nothing changes:\n%s", got)
+	for _, want := range []string{review, "commit", "do not commit anything"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("%q not present:\n%s", want, got)
+		}
 	}
 }
 

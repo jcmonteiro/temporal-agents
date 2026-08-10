@@ -10,7 +10,9 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"temporal-agents/internal/instruction"
 	"temporal-agents/internal/notification"
+	"temporal-agents/internal/wfinstruction"
 	"temporal-agents/internal/wfnotify"
 	"temporal-agents/internal/wfrecord"
 )
@@ -164,7 +166,7 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 
 	// Record this pass as started before any work happens. Every pass continues as
 	// new, so each is a row of its own keyed on its Temporal run ID.
-	rec, perr := startPilotState(ctx, in.WorkDir)
+	rec, perr := startPilotState(ctx, in)
 	if perr != nil {
 		return "", perr
 	}
@@ -177,6 +179,14 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 			wfrecord.TerminalWriteFailed(ctx, "pilot pass", summary, err, perr)
 		}
 	}()
+
+	// Resolve the instruction this loop addresses comments under, once — see the same
+	// step in ReviewWorkflow for why it is neither repeated per pass nor best-effort.
+	if in.Instructions, err = wfinstruction.Ensure(ctx, in.Instructions, rec.Place,
+		instruction.KeyPilotAddress); err != nil {
+		return "", err
+	}
+	rec.Instructions = in.Instructions
 
 	var addressed bool
 	var tokens int
@@ -874,6 +884,20 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome,
 		}
 	}()
 
+	// Resolve the instructions this loop runs under, once. The first pass resolves
+	// them from where it runs; every later pass is handed what that pass resolved,
+	// through its own input, so an instruction edited while the loop runs cannot
+	// change what a later pass did — and the passes already recorded stay explainable.
+	//
+	// This is not best-effort: a store that cannot answer fails the pass here, before
+	// any agent runs, rather than letting it run under an instruction nobody chose. It
+	// is resolved after the record write so a pass that fails for it is already a row.
+	if in.Instructions, err = wfinstruction.Ensure(ctx, in.Instructions, rec.Place,
+		instruction.KeyReviewPerform, instruction.KeyReviewImplement); err != nil {
+		return ReviewOutcome{}, err
+	}
+	rec.Instructions = in.Instructions
+
 	// Quick, deterministic git/validation steps. Idempotent enough to retry, but
 	// should not run forever.
 	quick := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
@@ -910,7 +934,7 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome,
 		}
 
 		var implResult AgentResult
-		implReq := RunImplementRequest{WorkDir: in.WorkDir, Payload: in.Payload}
+		implReq := RunImplementRequest{WorkDir: in.WorkDir, Payload: in.Payload, Instructions: in.Instructions}
 		if err := workflow.ExecuteActivity(agentCtx, a.RunImplementAgent, implReq).Get(agentCtx, &implResult); err != nil {
 			return ReviewOutcome{}, err
 		}
@@ -946,7 +970,8 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome,
 
 	// Review the current branch. This blocks until the review completes.
 	var reviewResult AgentResult
-	if err := workflow.ExecuteActivity(agentCtx, a.RunReviewAgent, ReviewInput{WorkDir: in.WorkDir}).Get(agentCtx, &reviewResult); err != nil {
+	reviewReq := ReviewInput{WorkDir: in.WorkDir, Instructions: in.Instructions}
+	if err := workflow.ExecuteActivity(agentCtx, a.RunReviewAgent, reviewReq).Get(agentCtx, &reviewResult); err != nil {
 		return ReviewOutcome{}, err
 	}
 	// The review agent has run: a Pi session now exists for this run that a later
@@ -981,6 +1006,11 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome,
 		}
 		return ReviewOutcome{Summary: summary, Converged: false}, nil
 	}
-	return ReviewOutcome{}, workflow.NewContinueAsNewError(ctx, ReviewWorkflow,
-		ReviewInput{WorkDir: in.WorkDir, Payload: reviewOutput, Pass: nextPass, TokensSoFar: total, Summary: in.Summary})
+	// The next pass inherits everything this one carried, including the instructions
+	// the loop resolved at its start.
+	next := in
+	next.Payload = reviewOutput
+	next.Pass = nextPass
+	next.TokensSoFar = total
+	return ReviewOutcome{}, workflow.NewContinueAsNewError(ctx, ReviewWorkflow, next)
 }

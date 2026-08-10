@@ -11,6 +11,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 
 	"temporal-agents/internal/execstore"
+	"temporal-agents/internal/instruction"
 )
 
 // errNoAdvance is the error type returned (non-retryable) when the agent
@@ -183,6 +184,9 @@ type RunImplementRequest struct {
 	// Payload is the previous pass's raw review output whose changes are
 	// implemented.
 	Payload string
+	// Instructions are what the loop resolved at its start, so every pass renders
+	// the instruction the loop began under rather than whatever is stored now.
+	Instructions instruction.Resolution
 }
 
 // SummarizeRequest is the input to SummarizeLastRun.
@@ -643,11 +647,15 @@ func (a *Activities) MarkHeadAndStash(ctx context.Context, in PilotInput) (Check
 	return cp, nil
 }
 
-// RunAgent is the only activity that drives the Pi agent. It builds the prompt
-// from the (default/append/replace) instruction plus the unresolved comments
+// RunAgent is the only activity that drives the Pi agent on the pilot's behalf. It
+// renders the instruction the pass resolved (or the caller's own text, in
+// append/replace mode) together with the unresolved comments the system appends,
 // and hands it to the agent, which is expected to commit its work.
 func (a *Activities) RunAgent(ctx context.Context, req RunAgentRequest) (AgentResult, error) {
-	prompt := BuildPrompt(req.Input.PromptMode, req.Input.PromptText, req.PR.Body, req.Threads)
+	prompt, err := BuildPilotPrompt(req.Input.Instructions, req.Input.PromptMode, req.Input.PromptText, req.PR.Body, req.Threads)
+	if err != nil {
+		return AgentResult{}, err
+	}
 	out, tokens, err := a.Agent.Run(ctx, prompt, req.Input.WorkDir)
 	if err != nil {
 		return AgentResult{}, err
@@ -714,7 +722,11 @@ func (a *Activities) RequestCopilotReview(ctx context.Context, pr PullRequest) e
 // its final message. Unlike the Copilot flow, the review runs on the host and
 // blocks until it completes, so no waiting/polling is needed afterwards.
 func (a *Activities) RunReviewAgent(ctx context.Context, in ReviewInput) (AgentResult, error) {
-	out, tokens, err := a.Agent.Run(ctx, ReviewPrompt, in.WorkDir)
+	prompt, err := instruction.Render(in.Instructions, instruction.KeyReviewPerform, nil)
+	if err != nil {
+		return AgentResult{}, err
+	}
+	out, tokens, err := a.Agent.Run(ctx, prompt, in.WorkDir)
 	if err != nil {
 		return AgentResult{}, err
 	}
@@ -726,7 +738,11 @@ func (a *Activities) RunReviewAgent(ctx context.Context, in ReviewInput) (AgentR
 // HEAD-advanced check can confirm the change landed (or detect that there was
 // nothing to change).
 func (a *Activities) RunImplementAgent(ctx context.Context, req RunImplementRequest) (AgentResult, error) {
-	prompt := BuildImplementPrompt(req.Payload)
+	prompt, err := instruction.Render(req.Instructions, instruction.KeyReviewImplement,
+		instruction.Data{"Review": req.Payload})
+	if err != nil {
+		return AgentResult{}, err
+	}
 	out, tokens, err := a.Agent.Run(ctx, prompt, req.WorkDir)
 	if err != nil {
 		return AgentResult{}, err

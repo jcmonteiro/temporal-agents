@@ -8,6 +8,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"temporal-agents/internal/execstore"
+	"temporal-agents/internal/instruction"
 	"temporal-agents/internal/place"
 	"temporal-agents/internal/wfplace"
 	"temporal-agents/internal/wfrecord"
@@ -89,7 +90,11 @@ type ReviewState struct {
 	Converged *bool
 	// Place is where the review pass runs.
 	Place place.Facts
-	Error string
+	// Instructions is which stored instruction version each of the loop's keys
+	// resolved to, so the row explains what the agent was told without holding a
+	// copy of the text.
+	Instructions instruction.Resolution
+	Error        string
 }
 
 // PilotState is the typed input to PersistPilotWorkflowState. A chained pilot
@@ -114,7 +119,10 @@ type PilotState struct {
 	Addressed *bool
 	// Place is where the pilot pass runs.
 	Place place.Facts
-	Error string
+	// Instructions is which stored instruction version the pass addressed comments
+	// under.
+	Instructions instruction.Resolution
+	Error        string
 }
 
 // PersistDevelopWorkflowState records a DevelopWorkflow execution's state. It is
@@ -156,6 +164,7 @@ func (a *Activities) PersistReviewWorkflowState(ctx context.Context, in ReviewSt
 	detail := execstore.Detail{
 		Pass: in.Pass, Converged: in.Converged, Error: in.Error,
 		Directory: in.Place.Directory, Repository: in.Place.Repository,
+		Instructions: instructionUses(in.Instructions),
 	}
 	return a.Store.SaveExecution(ctx, execstore.Execution{
 		WorkflowID:       in.WorkflowID,
@@ -178,6 +187,7 @@ func (a *Activities) PersistPilotWorkflowState(ctx context.Context, in PilotStat
 	detail := execstore.Detail{
 		PRURL: in.PRURL, Addressed: in.Addressed, Error: in.Error,
 		Directory: in.Place.Directory, Repository: in.Place.Repository,
+		Instructions: instructionUses(in.Instructions),
 	}
 	return a.Store.SaveExecution(ctx, execstore.Execution{
 		WorkflowID:       in.WorkflowID,
@@ -283,6 +293,7 @@ func startReviewState(ctx workflow.Context, in ReviewInput) (ReviewState, error)
 		StartedAt:        workflow.Now(ctx),
 		Status:           execstore.StatusRunning,
 		Place:            wfplace.Probe(ctx, in.WorkDir),
+		Instructions:     in.Instructions,
 	}
 	opts := wfrecord.WithOptions(ctx)
 	var a *Activities
@@ -311,9 +322,9 @@ func finishReviewState(ctx workflow.Context, st ReviewState, err error) error {
 }
 
 // startPilotState builds and writes the "started" record for the running
-// PilotWorkflow pass. workDir is the repository the pass operates in, so the pass
-// reports its place from its first write.
-func startPilotState(ctx workflow.Context, workDir string) (PilotState, error) {
+// PilotWorkflow pass. The pass reports its place from its first write, and — from
+// its second pass on — the instructions the loop resolved when it began.
+func startPilotState(ctx workflow.Context, in PilotInput) (PilotState, error) {
 	// An execution whose history predates durable recording must not have a record
 	// write inserted into its replay (see wfrecord.Enabled); it simply goes
 	// unrecorded.
@@ -327,7 +338,8 @@ func startPilotState(ctx workflow.Context, workDir string) (PilotState, error) {
 		ParentWorkflowID: id.ParentWorkflowID,
 		StartedAt:        workflow.Now(ctx),
 		Status:           execstore.StatusRunning,
-		Place:            wfplace.Probe(ctx, workDir),
+		Place:            wfplace.Probe(ctx, in.WorkDir),
+		Instructions:     in.Instructions,
 	}
 	opts := wfrecord.WithOptions(ctx)
 	var a *Activities
@@ -358,3 +370,24 @@ func finishPilotState(ctx workflow.Context, st PilotState, err error) error {
 // boolPtr returns a pointer to a copy of b, for the record fields that must tell
 // "false" apart from "not decided yet".
 func boolPtr(b bool) *bool { return &b }
+
+// instructionUses renders a resolution as the provenance the durable record keeps:
+// which key resolved to which version, from which scope, and the hash of the text it
+// was. The text itself is deliberately not copied — it stays recoverable from the
+// version record, which is what keeps a row small and keeps one instruction's text
+// stored once however many runs used it.
+func instructionUses(resolved instruction.Resolution) []execstore.InstructionUse {
+	if len(resolved) == 0 {
+		return nil
+	}
+	uses := make([]execstore.InstructionUse, 0, len(resolved))
+	for _, value := range resolved {
+		uses = append(uses, execstore.InstructionUse{
+			Key:     string(value.Key),
+			Scope:   string(value.Scope),
+			Version: value.Version,
+			Hash:    value.Hash,
+		})
+	}
+	return uses
+}
