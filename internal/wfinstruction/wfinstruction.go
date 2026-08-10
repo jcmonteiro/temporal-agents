@@ -82,7 +82,7 @@ func Ensure(ctx workflow.Context, resolved instruction.Resolution, where place.F
 	request := instruction.Request{Keys: keys, Scopes: instruction.Chain(where.Directory, where.Repository)}
 	var a *instruction.Activity
 	var resolution instruction.Resolution
-	if err := workflow.ExecuteActivity(opts, a.Resolve, request).Get(opts, &resolution); err != nil {
+	if err := workflow.ExecuteActivity(opts, a.ResolveInstructions, request).Get(opts, &resolution); err != nil {
 		return nil, fmt.Errorf("resolve the instructions this work runs under: %w", err)
 	}
 	return resolution, nil

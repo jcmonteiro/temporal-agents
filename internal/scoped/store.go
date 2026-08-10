@@ -63,9 +63,23 @@ type Publisher interface {
 	PublishFactory(ctx context.Context, key Key, text string) (Record, error)
 }
 
-// Store is both halves, for the composition root that owns one adapter.
+// Writer is the driven port an override is saved through. Saving is append-only by
+// contract: the adapter adds a version and moves the scope's pointer to it, so
+// nothing a finished run referenced is ever rewritten.
+//
+// What may be saved is the catalogue's business, not the store's: an instruction is
+// validated as a template, a setting as the type its key means. An adapter stores
+// text.
+type Writer interface {
+	// Set appends a version of key at scope and points that scope at it, returning
+	// the stored record.
+	Set(ctx context.Context, key Key, scope Scope, text string) (Record, error)
+}
+
+// Store is every half, for the composition root that owns one adapter.
 type Store interface {
 	Reader
+	Writer
 	Publisher
 }
 

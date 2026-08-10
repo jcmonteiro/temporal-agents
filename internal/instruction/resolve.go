@@ -142,8 +142,10 @@ type Activity struct {
 	Store Reader
 }
 
-// Resolve answers which instruction each requested key resolves to.
-func (a *Activity) Resolve(ctx context.Context, req Request) (Resolution, error) {
+// ResolveInstructions answers which instruction each requested key resolves to. It
+// carries a name of its own because a worker registers one activity per method name,
+// and resolving an instruction is not resolving a setting.
+func (a *Activity) ResolveInstructions(ctx context.Context, req Request) (Resolution, error) {
 	if a.Store == nil {
 		return nil, ErrNotConfigured
 	}

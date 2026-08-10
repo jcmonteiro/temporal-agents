@@ -90,15 +90,15 @@ func TestAValueResolvesThroughThePlaceItRunsInBeforeAnythingBroader(t *testing.T
 			for scope, text := range tc.stored {
 				if text == "" {
 					// A scope that has versions but no pointer: reset to what it inherits.
-					store.Set(instruction.KeyReviewPerform, scope, "an experiment that was reset")
+					store.Store(instruction.KeyReviewPerform, scope, "an experiment that was reset")
 					store.Clear(instruction.KeyReviewPerform, scope)
 					continue
 				}
-				store.Set(instruction.KeyReviewPerform, scope, text)
+				store.Store(instruction.KeyReviewPerform, scope, text)
 			}
 			activity := &instruction.Activity{Store: store}
 
-			resolution, err := activity.Resolve(context.Background(), instruction.Request{
+			resolution, err := activity.ResolveInstructions(context.Background(), instruction.Request{
 				Keys:   []instruction.Key{instruction.KeyReviewPerform},
 				Scopes: instruction.Chain(worktree, repository),
 			})
@@ -127,12 +127,12 @@ func TestAValueResolvesThroughThePlaceItRunsInBeforeAnythingBroader(t *testing.T
 func TestOverridingOneInstructionLeavesTheOthersInherited(t *testing.T) {
 	const worktree = "/src/agents"
 	store := scopedtest.New()
-	store.Set(instruction.KeyReviewPerform, instruction.GlobalScope, "review everywhere")
-	store.Set(instruction.KeyReviewPerform, instruction.DirectoryScope(worktree), "review here")
-	store.Set(instruction.KeyReviewImplement, instruction.GlobalScope, "implement {{.Review}} everywhere")
+	store.Store(instruction.KeyReviewPerform, instruction.GlobalScope, "review everywhere")
+	store.Store(instruction.KeyReviewPerform, instruction.DirectoryScope(worktree), "review here")
+	store.Store(instruction.KeyReviewImplement, instruction.GlobalScope, "implement {{.Review}} everywhere")
 	activity := &instruction.Activity{Store: store}
 
-	resolution, err := activity.Resolve(context.Background(), instruction.Request{
+	resolution, err := activity.ResolveInstructions(context.Background(), instruction.Request{
 		Keys:   []instruction.Key{instruction.KeyReviewPerform, instruction.KeyReviewImplement},
 		Scopes: instruction.Chain(worktree, ""),
 	})
@@ -158,7 +158,7 @@ func TestResolutionFailsRatherThanSubstitutingADefault(t *testing.T) {
 	store := scopedtest.New()
 	store.Err = outage
 
-	_, err := (&instruction.Activity{Store: store}).Resolve(context.Background(), instruction.Request{
+	_, err := (&instruction.Activity{Store: store}).ResolveInstructions(context.Background(), instruction.Request{
 		Keys: []instruction.Key{instruction.KeyReviewPerform},
 	})
 
@@ -170,7 +170,7 @@ func TestResolutionFailsRatherThanSubstitutingADefault(t *testing.T) {
 // A worker wired without a store is a misconfiguration, and it has to look like one
 // at the first resolution rather than like agent behaviour nobody can explain.
 func TestAWorkerWithoutAStoreCannotResolveAnything(t *testing.T) {
-	_, err := (&instruction.Activity{}).Resolve(context.Background(), instruction.Request{
+	_, err := (&instruction.Activity{}).ResolveInstructions(context.Background(), instruction.Request{
 		Keys: []instruction.Key{instruction.KeyReviewPerform},
 	})
 
@@ -182,7 +182,7 @@ func TestAWorkerWithoutAStoreCannotResolveAnything(t *testing.T) {
 // A key this build does not govern cannot be answered with anything: a stale stored
 // row or a caller's typo must not resolve to some other key's text.
 func TestAKeyThisBuildDoesNotGovernIsRefused(t *testing.T) {
-	_, err := (&instruction.Activity{Store: scopedtest.New()}).Resolve(context.Background(),
+	_, err := (&instruction.Activity{Store: scopedtest.New()}).ResolveInstructions(context.Background(),
 		instruction.Request{Keys: []instruction.Key{"review.invented"}})
 
 	if !errors.Is(err, instruction.ErrUnknownKey) {
@@ -232,7 +232,7 @@ func TestAChangedShippedDefaultIsPublishedAsANewVersion(t *testing.T) {
 	if versions[0].Text != "the previous release's wording" {
 		t.Fatalf("the version a finished run referenced was rewritten: %q", versions[0].Text)
 	}
-	resolution, err := (&instruction.Activity{Store: store}).Resolve(ctx, instruction.Request{
+	resolution, err := (&instruction.Activity{Store: store}).ResolveInstructions(ctx, instruction.Request{
 		Keys: []instruction.Key{instruction.KeyReviewPerform},
 	})
 	if err != nil {

@@ -167,6 +167,50 @@ INSERT INTO scoped_pointers (key, scope, version)
 VALUES ($1, $2, $3)
 ON CONFLICT (key, scope) DO UPDATE SET version = EXCLUDED.version, updated_at = now()`
 
+// Set implements scoped.Writer.
+//
+// It appends a version and moves the scope's pointer in one transaction, under the
+// same per-key lock publication takes, so two writers cannot compute the same next
+// version number and so a pointer is never left naming a version that was rolled
+// back.
+func (s *Store) Set(ctx context.Context, key scoped.Key, scope scoped.Scope, text string) (scoped.Record, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return scoped.Record{}, fmt.Errorf("save the value for %s: %w", key, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, publishLockClass, lockKey(key)); err != nil {
+		return scoped.Record{}, fmt.Errorf("take the write lock for %s: %w", key, err)
+	}
+	saved, err := appendAndPoint(ctx, tx, key, scope, text)
+	if err != nil {
+		return scoped.Record{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return scoped.Record{}, fmt.Errorf("save the value for %s: %w", key, err)
+	}
+	return saved, nil
+}
+
+// appendAndPoint is the one write path: a new version, and the pointer moved to it.
+// Both publication and an operator's save go through it, so an override and a
+// shipped default are stored exactly alike.
+func appendAndPoint(ctx context.Context, tx pgx.Tx, key scoped.Key, scope scoped.Scope, text string) (scoped.Record, error) {
+	rows, err := tx.Query(ctx, appendVersionSQL, string(key), string(scope), text, scoped.Hash(text))
+	if err != nil {
+		return scoped.Record{}, fmt.Errorf("append the value for %s: %w", key, err)
+	}
+	appended, err := pgx.CollectExactlyOneRow(rows, scanRecord)
+	if err != nil {
+		return scoped.Record{}, fmt.Errorf("append the value for %s: %w", key, err)
+	}
+	if _, err := tx.Exec(ctx, pointSQL, string(key), string(scope), appended.Version); err != nil {
+		return scoped.Record{}, fmt.Errorf("point %s at the value just stored: %w", key, err)
+	}
+	return appended, nil
+}
+
 // PublishFactory implements scoped.Publisher.
 //
 // It appends a version only when the shipped text differs from the one the factory
@@ -195,16 +239,9 @@ func (s *Store) PublishFactory(ctx context.Context, key scoped.Key, text string)
 		return current, nil
 	}
 
-	rows, err := tx.Query(ctx, appendVersionSQL, string(key), string(scoped.FactoryScope), text, scoped.Hash(text))
+	appended, err := appendAndPoint(ctx, tx, key, scoped.FactoryScope, text)
 	if err != nil {
-		return scoped.Record{}, fmt.Errorf("append the shipped value for %s: %w", key, err)
-	}
-	appended, err := pgx.CollectExactlyOneRow(rows, scanRecord)
-	if err != nil {
-		return scoped.Record{}, fmt.Errorf("append the shipped value for %s: %w", key, err)
-	}
-	if _, err := tx.Exec(ctx, pointSQL, string(key), string(scoped.FactoryScope), appended.Version); err != nil {
-		return scoped.Record{}, fmt.Errorf("point %s at its shipped value: %w", key, err)
+		return scoped.Record{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return scoped.Record{}, fmt.Errorf("publish the shipped value for %s: %w", key, err)

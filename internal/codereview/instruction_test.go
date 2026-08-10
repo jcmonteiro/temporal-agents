@@ -45,7 +45,7 @@ func newLoopEnv(t *testing.T, instructions *scopedtest.Store, records *execstore
 // lets it keep using it after a later edit.
 func TestAReviewPassRunsUnderTheInstructionStoredForWhereItRuns(t *testing.T) {
 	instructions := scopedtest.New()
-	instructions.Set(instruction.KeyReviewPerform, instruction.GlobalScope, "Review only the public API")
+	instructions.Store(instruction.KeyReviewPerform, instruction.GlobalScope, "Review only the public API")
 	env := newLoopEnv(t, instructions, execstoretest.New())
 	var told ReviewInput
 	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).
@@ -64,7 +64,7 @@ func TestAReviewPassRunsUnderTheInstructionStoredForWhereItRuns(t *testing.T) {
 // recorded name the version the loop began under.
 func TestALaterPassUsesWhatTheLoopResolvedRatherThanWhatIsStoredNow(t *testing.T) {
 	instructions := scopedtest.New()
-	instructions.Set(instruction.KeyReviewImplement, instruction.GlobalScope, "the edit made mid-loop {{.Review}}")
+	instructions.Store(instruction.KeyReviewImplement, instruction.GlobalScope, "the edit made mid-loop {{.Review}}")
 	env := newLoopEnv(t, instructions, execstoretest.New())
 	carried := instruction.Resolution{{
 		Key:     instruction.KeyReviewImplement,
@@ -112,7 +112,7 @@ func TestAPassWhoseInstructionsCannotBeResolvedFailsBeforeTheAgentRuns(t *testin
 // three fields name.
 func TestASettledReviewPassRecordsWhichInstructionVersionItUsed(t *testing.T) {
 	instructions := scopedtest.New()
-	stored := instructions.Set(instruction.KeyReviewPerform, instruction.GlobalScope, "Review only the public API")
+	stored := instructions.Store(instruction.KeyReviewPerform, instruction.GlobalScope, "Review only the public API")
 	records := execstoretest.New()
 	env := newLoopEnv(t, instructions, records)
 	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "feedback"}, nil)
@@ -136,7 +136,7 @@ func TestASettledReviewPassRecordsWhichInstructionVersionItUsed(t *testing.T) {
 // The pilot loop is governed the same way, and its record answers the same question.
 func TestASettledPilotPassRecordsWhichInstructionVersionItUsed(t *testing.T) {
 	instructions := scopedtest.New()
-	stored := instructions.Set(instruction.KeyPilotAddress, instruction.GlobalScope, "Address the test comments first")
+	stored := instructions.Store(instruction.KeyPilotAddress, instruction.GlobalScope, "Address the test comments first")
 	records := execstoretest.New()
 	env := newLoopEnv(t, instructions, records)
 	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).

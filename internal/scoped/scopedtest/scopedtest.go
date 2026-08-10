@@ -42,9 +42,20 @@ func New() *Store {
 	}
 }
 
-// Set appends a version of key at scope and points that scope at it, which is what
-// saving an override does. It returns the stored record.
-func (s *Store) Set(key scoped.Key, scope scoped.Scope, text string) scoped.Record {
+// Set implements scoped.Writer: it appends a version of key at scope and points that
+// scope at it, which is what saving an override does.
+func (s *Store) Set(_ context.Context, key scoped.Key, scope scoped.Scope, text string) (scoped.Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Err != nil {
+		return scoped.Record{}, s.Err
+	}
+	return s.appendVersion(key, scope, text), nil
+}
+
+// Store records a value the way a test states its setup: the same append-and-point
+// write as Set, without a context or an error the test would only have to check.
+func (s *Store) Store(key scoped.Key, scope scoped.Scope, text string) scoped.Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.appendVersion(key, scope, text)
