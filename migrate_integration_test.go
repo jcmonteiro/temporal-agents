@@ -34,13 +34,6 @@ import (
 
 func TestMain(m *testing.M) { os.Exit(pgtest.Run(m)) }
 
-// newTestDatabase gives the calling test an empty database of its own. An empty
-// database is a genuinely stale one: it is at no version at all.
-func newTestDatabase(t *testing.T) string {
-	t.Helper()
-	return pgtest.NewDatabase(t)
-}
-
 // startupLog is the logger a starting process reports its schema check through,
 // together with what it wrote: the development mode's warning is a log record, not a
 // line on stdout, so that is what a test reads.
@@ -51,8 +44,7 @@ func startupLog() (*slog.Logger, *bytes.Buffer) {
 
 // discardLog is the logger for the checks whose output is not what is under test.
 func discardLog() *slog.Logger {
-	logger, _ := startupLog()
-	return logger
+	return slog.New(slog.DiscardHandler)
 }
 
 // schemaStateOf reads one context's state through its own adapter, which is the same
@@ -104,7 +96,7 @@ func forgetMigration(t *testing.T, dsn, name string) {
 }
 
 func TestMigrateBringsAFreshDatabaseUpAndReportsEveryContextsVersion(t *testing.T) {
-	dsn := newTestDatabase(t)
+	dsn := pgtest.NewDatabase(t)
 
 	var out bytes.Buffer
 	require.NoError(t, migrateSchemas(context.Background(), dsn, allSchemaContexts(), &out))
@@ -116,7 +108,7 @@ func TestMigrateBringsAFreshDatabaseUpAndReportsEveryContextsVersion(t *testing.
 		require.Contains(t, report, target.name, "the report names every context")
 		require.Contains(t, report, state.Version(), "the report names %s's resulting version", target.name)
 	}
-	require.Contains(t, report, "up to date", "the report says what the run did")
+	require.Contains(t, report, "brought", "a fresh database was reported as needing nothing")
 
 	// Each context's migrations stay its own: they are recorded under its own
 	// namespace, so no context can be confused with, or blocked by, another's.
@@ -126,7 +118,7 @@ func TestMigrateBringsAFreshDatabaseUpAndReportsEveryContextsVersion(t *testing.
 }
 
 func TestBothProcessesRefuseADatabaseWithNoSchemaAtAll(t *testing.T) {
-	dsn := newTestDatabase(t)
+	dsn := pgtest.NewDatabase(t)
 	t.Setenv(databaseURLEnv, dsn)
 
 	for name, contexts := range map[string][]schemaContext{
@@ -144,7 +136,7 @@ func TestBothProcessesRefuseADatabaseWithNoSchemaAtAll(t *testing.T) {
 }
 
 func TestBothProcessesRefuseADatabaseMissingThisBuildsNewestMigration(t *testing.T) {
-	dsn := newTestDatabase(t)
+	dsn := pgtest.NewDatabase(t)
 	t.Setenv(databaseURLEnv, dsn)
 	require.NoError(t, migrateSchemas(context.Background(), dsn, allSchemaContexts(), &bytes.Buffer{}))
 
@@ -165,7 +157,7 @@ func TestBothProcessesRefuseADatabaseMissingThisBuildsNewestMigration(t *testing
 }
 
 func TestAContextAProcessDoesNotUseIsNotThatProcessesDependency(t *testing.T) {
-	dsn := newTestDatabase(t)
+	dsn := pgtest.NewDatabase(t)
 	t.Setenv(databaseURLEnv, dsn)
 	require.NoError(t, migrateSchemas(context.Background(), dsn, allSchemaContexts(), &bytes.Buffer{}))
 
@@ -180,7 +172,7 @@ func TestAContextAProcessDoesNotUseIsNotThatProcessesDependency(t *testing.T) {
 }
 
 func TestMigratingAnUpToDateDatabaseChangesNothing(t *testing.T) {
-	dsn := newTestDatabase(t)
+	dsn := pgtest.NewDatabase(t)
 	require.NoError(t, migrateSchemas(context.Background(), dsn, allSchemaContexts(), &bytes.Buffer{}))
 	first := recordedMigrations(t, dsn)
 
@@ -195,7 +187,7 @@ func TestMigratingAnUpToDateDatabaseChangesNothing(t *testing.T) {
 }
 
 func TestTwoConcurrentMigrateInvocationsBothSucceedAndApplyEachMigrationOnce(t *testing.T) {
-	dsn := newTestDatabase(t)
+	dsn := pgtest.NewDatabase(t)
 
 	// Two operators (or a deployment's two replicas) running the step at the same
 	// moment must serialize on the database, not corrupt each other.
@@ -233,7 +225,7 @@ func TestTwoConcurrentMigrateInvocationsBothSucceedAndApplyEachMigrationOnce(t *
 }
 
 func TestTheDevelopmentModeIsTheOnlyWayAStartingProcessAppliesDDL(t *testing.T) {
-	dsn := newTestDatabase(t)
+	dsn := pgtest.NewDatabase(t)
 	t.Setenv(databaseURLEnv, dsn)
 	t.Setenv(devAutoMigrateEnv, "1")
 

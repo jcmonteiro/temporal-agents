@@ -95,6 +95,13 @@ execution-store  brought 4 migration(s) up to date  schema 0004_execution_first_
 agent-hub        brought 1 migration(s) up to date  schema 0001_dismissals.sql
 ```
 
+**Upgrading a running installation to this workflow:** a build from before the
+split applied its own migrations while starting; this one refuses to start until
+the schema is current. Run `temporal-agents migrate` once against the deployment's
+database before rolling the new build out, or the first `worker` and `serve` of
+the rollout stop with a stale-schema failure. Migrating an already up-to-date
+database applies nothing, so the step is safe to run ahead of time.
+
 Workflow submission and `watch` connect to `localhost:17233` by default. Override
 that address with `TEMPORAL_ADDRESS`. The `list` command reads
 `http://127.0.0.1:8973/api/v1` instead. Override its versioned endpoint with

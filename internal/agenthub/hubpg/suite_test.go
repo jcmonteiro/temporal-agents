@@ -28,7 +28,7 @@ func TestMain(m *testing.M) { os.Exit(pgtest.Run(m)) }
 // with the schema applied, and closes it afterwards.
 func newTestStore(t *testing.T) *Dismissals {
 	t.Helper()
-	store := openTestStore(t, newTestDatabase(t))
+	store := openTestStore(t, pgtest.NewDatabase(t))
 	require.NoError(t, store.Migrate(context.Background()))
 	return store
 }
@@ -41,10 +41,4 @@ func openTestStore(t *testing.T, dsn string) *Dismissals {
 	require.NoError(t, err)
 	t.Cleanup(store.Close)
 	return store
-}
-
-// newTestDatabase gives the calling test an empty database of its own.
-func newTestDatabase(t *testing.T) string {
-	t.Helper()
-	return pgtest.NewDatabase(t)
 }

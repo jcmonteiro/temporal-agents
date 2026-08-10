@@ -167,9 +167,9 @@ func migrateSchemas(ctx context.Context, dsn string, contexts []schemaContext, o
 
 // migrateOne applies one context's schema and renders what it did.
 func migrateOne(ctx context.Context, dsn string, target schemaContext) (string, error) {
-	adapter, err := target.open(ctx, dsn)
+	adapter, err := openSchema(ctx, dsn, target)
 	if err != nil {
-		return "", fmt.Errorf("could not reach the %s schema: %w", target.name, err)
+		return "", err
 	}
 	defer adapter.Close()
 
@@ -195,6 +195,22 @@ func migrateOne(ctx context.Context, dsn string, target schemaContext) (string, 
 		applied = fmt.Sprintf("brought %d migration(s) up to date", count)
 	}
 	return fmt.Sprintf("%s\t%s\tschema %s", target.name, applied, after.Version()), nil
+}
+
+// openSchema connects to one context's schema under a bound. Opening pings, so an
+// unbounded connect against a database that drops packets rather than refusing them
+// hangs `migrate`, `worker` and `serve` before any of them logs a line — which is
+// precisely the failure this whole step exists to turn into an immediate, readable
+// one. The deadline covers reaching the database, not the pool's later life (see
+// openStore).
+func openSchema(ctx context.Context, dsn string, target schemaContext) (contextSchema, error) {
+	connectCtx, cancel := context.WithTimeout(ctx, storeConnectTimeout)
+	defer cancel()
+	adapter, err := target.open(connectCtx, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("could not reach the %s schema: %w", target.name, err)
+	}
+	return adapter, nil
 }
 
 // readSchemaState reads one context's state under the same bound as connecting to it:
@@ -226,9 +242,9 @@ func verifySchemas(ctx context.Context, dsn string, contexts []schemaContext) er
 
 // verifyOne verifies one context's schema.
 func verifyOne(ctx context.Context, dsn string, target schemaContext) error {
-	adapter, err := target.open(ctx, dsn)
+	adapter, err := openSchema(ctx, dsn, target)
 	if err != nil {
-		return fmt.Errorf("could not reach the %s schema: %w", target.name, err)
+		return err
 	}
 	defer adapter.Close()
 
@@ -286,11 +302,17 @@ type schemaReportLog struct {
 }
 
 // Write logs each non-empty line of the report. The tabwriter writes the whole report
-// in one call, so the lines are split here rather than assumed.
+// in one call, so the lines are split here rather than assumed, and the column padding
+// is collapsed: alignment is for a terminal, and a record whose value carries runs of
+// spaces reads badly in everything that indexes it.
+//
+// The message says what the development mode did, not what a line says: a line can
+// read "already up to date", so a record claiming a schema was applied would tell the
+// operator reading it something that did not happen.
 func (l schemaReportLog) Write(report []byte) (int, error) {
 	for _, line := range strings.Split(string(report), "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			l.logger.Info("applied a schema at startup", "report", trimmed)
+		if trimmed := strings.Join(strings.Fields(line), " "); trimmed != "" {
+			l.logger.Info("the development mode ran the migrate step at startup", "report", trimmed)
 		}
 	}
 	return len(report), nil

@@ -202,6 +202,64 @@ func TestAPlaceReferencedWithAndWithoutItsAncestryIsPublishedTheSameWayEitherOrd
 		"the better-known ancestry was dropped, orphaning the repository")
 }
 
+func TestAPlacePublishedDeeperThanTheCopyInsideItsChildStillPrecedesThatChild(t *testing.T) {
+	// Publication order is a property of the graph that is published, not of the values
+	// that were handed in. One recorder knows the worktree's repository; another knows
+	// that repository sits inside a group. The published repository is then a level
+	// deeper than the copy embedded in the worktree, and an order taken from the
+	// embedded copy would compare parent and child as equals and let the id tie-break
+	// publish the child first, breaking the single pass a client builds its tree in.
+	repository, err := agenthub.NewDirectoryLocation("/srv/repos/pricing", nil)
+	require.NoError(t, err)
+	worktree, err := agenthub.NewDirectoryLocation("/srv/work/pricing", &repository)
+	require.NoError(t, err)
+	group, err := agenthub.NewDirectoryLocation("/srv/repos", nil)
+	require.NoError(t, err)
+	repositoryUnderGroup, err := agenthub.NewDirectoryLocation("/srv/repos/pricing", &group)
+	require.NoError(t, err)
+
+	forwards := agenthub.NewLocationRegistry(worktree, repositoryUnderGroup)
+	backwards := agenthub.NewLocationRegistry(repositoryUnderGroup, worktree)
+
+	require.Equal(t, registryIDs(forwards), registryIDs(backwards), "the order depends on the caller's order")
+	requireParentsFirst(t, forwards)
+	ids := registryIDs(forwards)
+	require.Less(t, indexOf(ids, group.ID()), indexOf(ids, repository.ID()))
+	require.Less(t, indexOf(ids, repository.ID()), indexOf(ids, worktree.ID()))
+}
+
+func TestConflictingAncestriesCannotPublishACycle(t *testing.T) {
+	// A place's identity excludes its parent, so two recorders can each place the
+	// other's place inside their own. Choosing the better-known value per id is a local
+	// decision that cannot see the loop two such decisions close, so the loop is opened
+	// after the choosing: a client that follows parentId in one pass must always finish.
+	firstAlone, err := agenthub.NewDirectoryLocation("/srv/a", nil)
+	require.NoError(t, err)
+	secondAlone, err := agenthub.NewDirectoryLocation("/srv/b", nil)
+	require.NoError(t, err)
+	firstUnderSecond, err := agenthub.NewDirectoryLocation("/srv/a", &secondAlone)
+	require.NoError(t, err)
+	secondUnderFirst, err := agenthub.NewDirectoryLocation("/srv/b", &firstAlone)
+	require.NoError(t, err)
+
+	registry := agenthub.NewLocationRegistry(firstUnderSecond, secondUnderFirst)
+	reversed := agenthub.NewLocationRegistry(secondUnderFirst, firstUnderSecond)
+
+	requireParentsFirst(t, registry)
+	require.Equal(t, registryIDs(registry), registryIDs(reversed), "the break depends on the caller's order")
+	require.Equal(t, registryParents(registry), registryParents(reversed),
+		"the same conflicting facts publish two different trees")
+	// Only what closes the loop is dropped: the member with the smallest id is
+	// republished as a root, and the other keeps the ancestry it was recorded with.
+	parents := registryParents(registry)
+	rooted, kept := firstAlone.ID(), secondAlone.ID()
+	if kept < rooted {
+		rooted, kept = kept, rooted
+	}
+	require.Equal(t, "", parents[rooted], "the loop was not opened at the smallest id: %v", parents)
+	require.Equal(t, rooted, parents[kept], "more ancestry was dropped than the loop needed: %v", parents)
+}
+
 func TestARegistryOfTheSamePlacesIsAlwaysTheSameSequence(t *testing.T) {
 	// The API computes entity tags over response bytes, so the order must come from
 	// the set alone and never from map iteration.
@@ -230,6 +288,24 @@ func TestARegistryCannotBeReorderedThroughWhatItReturns(t *testing.T) {
 
 	require.Equal(t, before, registryIDs(registry))
 	require.True(t, registry.Contains(directory.ID()))
+}
+
+// requireParentsFirst asserts the guarantee the flat shape exists for: every
+// published parent reference resolves inside the registry and appears before the
+// entry that names it, so following parentId terminates.
+func requireParentsFirst(t *testing.T, registry agenthub.LocationRegistry) {
+	t.Helper()
+	ids := registryIDs(registry)
+	for _, location := range registry.Locations() {
+		parent, ok := location.Parent()
+		if !ok {
+			continue
+		}
+		require.True(t, registry.Contains(parent.ID()),
+			"%q hangs under %q, which the registry does not publish", location.ID(), parent.ID())
+		require.Less(t, indexOf(ids, parent.ID()), indexOf(ids, location.ID()),
+			"%q is published before its parent %q", location.ID(), parent.ID())
+	}
 }
 
 // registryIDs renders a registry as the ids it publishes, in publication order.

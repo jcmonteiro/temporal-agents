@@ -206,13 +206,6 @@ func (s *Server) schemaDocument(model string) (map[string]any, bool) {
 func rewriteRefs(value any) any {
 	switch typed := value.(type) {
 	case map[string]any:
-		// A discriminator is only a discriminator inside a union. A schema with a
-		// *property* called "discriminator" is an ordinary schema, and rewriting it as a
-		// mapping would corrupt it.
-		_, isUnion := typed["oneOf"]
-		if _, isAnyOf := typed["anyOf"]; isAnyOf {
-			isUnion = true
-		}
 		out := make(map[string]any, len(typed))
 		for key, nested := range typed {
 			switch {
@@ -222,7 +215,7 @@ func rewriteRefs(value any) any {
 					continue
 				}
 				out[key] = rewriteRefs(nested)
-			case key == "discriminator" && isUnion:
+			case key == "discriminator" && isDiscriminator(nested):
 				out[key] = rewriteDiscriminator(nested)
 			default:
 				out[key] = rewriteRefs(nested)
@@ -238,6 +231,24 @@ func rewriteRefs(value any) any {
 	default:
 		return value
 	}
+}
+
+// isDiscriminator reports whether a value under the key "discriminator" is one.
+//
+// A schema with a *property* called "discriminator" is an ordinary schema, and
+// rewriting its properties as a mapping would corrupt it. The question is answered
+// from the value itself, by the member OpenAPI requires a discriminator object to
+// carry, rather than from the schema around it: a discriminator is legal on a base
+// schema whose variants are composed with allOf, where there is no oneOf or anyOf
+// anywhere near it, and such a mapping would then keep pointing at #/components in a
+// document that has none.
+func isDiscriminator(value any) bool {
+	discriminator, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	propertyName, named := discriminator["propertyName"].(string)
+	return named && propertyName != ""
 }
 
 // rewriteDiscriminator rewrites the reference strings in a discriminator's mapping.

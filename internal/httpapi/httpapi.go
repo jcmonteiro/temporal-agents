@@ -373,7 +373,9 @@ func (s *Server) handleFleets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items := make([]fleetResource, 0, len(fleets))
-	var locations []agenthub.Location
+	// Each fleet refers to its own place and to its up-next nodes' places, so the
+	// registry's input is at least one entry per fleet.
+	locations := make([]agenthub.Location, 0, len(fleets))
 	for _, fleet := range fleets {
 		resource, referred := fleetFrom(fleet, false)
 		items = append(items, resource)

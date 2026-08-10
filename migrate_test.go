@@ -2,9 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"temporal-agents/internal/schema"
 )
 
 // These pin the command's contract without a database. What migrating actually does
@@ -54,5 +58,57 @@ func TestEveryContextAProcessUsesIsListedForIt(t *testing.T) {
 		for _, target := range contexts {
 			require.True(t, all[target.name], "%s is verified but never migrated", target.name)
 		}
+	}
+}
+
+// deadlineRecorder is a schema context that records the deadline it is opened and
+// read under, which is the only thing an adapter can act on when a database accepts
+// packets and never answers.
+type deadlineRecorder struct {
+	openDeadline time.Time
+	readDeadline time.Time
+	hadOpen      bool
+	hadRead      bool
+}
+
+func (r *deadlineRecorder) context() schemaContext {
+	return schemaContext{name: "recorder", open: func(ctx context.Context, _ string) (contextSchema, error) {
+		r.openDeadline, r.hadOpen = ctx.Deadline()
+		return r, nil
+	}}
+}
+
+func (r *deadlineRecorder) Migrate(context.Context) error { return nil }
+
+func (r *deadlineRecorder) SchemaState(ctx context.Context) (schema.State, error) {
+	r.readDeadline, r.hadRead = ctx.Deadline()
+	return schema.State{}, nil
+}
+
+func (r *deadlineRecorder) Close() {}
+
+func TestReachingADatabaseIsBoundedOnEveryPathThatReachesOne(t *testing.T) {
+	// A database that drops packets instead of refusing them makes connecting hang, and
+	// connecting is the first thing every one of these paths does. Unbounded, `migrate`,
+	// `worker` and `serve` would all wait forever before saying anything at all — the
+	// opposite of the fail-fast startup this step exists to give.
+	for name, run := range map[string]func(*deadlineRecorder) error{
+		"migrate": func(r *deadlineRecorder) error {
+			return migrateSchemas(context.Background(), "dsn", []schemaContext{r.context()}, &bytes.Buffer{})
+		},
+		"verify": func(r *deadlineRecorder) error {
+			return verifySchemas(context.Background(), "dsn", []schemaContext{r.context()})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := &deadlineRecorder{}
+
+			// verify reports a stale schema here; the bound is what is under test.
+			_ = run(recorder)
+
+			require.True(t, recorder.hadOpen, "connecting to the database is unbounded")
+			require.True(t, recorder.hadRead, "reading the schema version is unbounded")
+			require.WithinDuration(t, time.Now().Add(storeConnectTimeout), recorder.openDeadline, time.Minute)
+		})
 	}
 }

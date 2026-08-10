@@ -176,7 +176,8 @@ the places it refers to:
 - Each fleet, run, schedule, and fleet node carries `locationId`, an **opaque**
   server-issued reference. Never parse it: the natural key (the directory, or the
   ref) is published as a field of its own.
-- Each collection carries a `locations` array; the single-item resources
+- Each work collection carries a `locations` array (the dismissal collection does
+  not: a dismissal is view state and runs nowhere); the single-item resources
   (`/fleets/{id}`, `/runs/{id}`) carry the same array themselves, because they have
   no envelope to hold it.
 - A location is a **tagged union** discriminated by `kind`:
@@ -190,10 +191,11 @@ the places it refers to:
   name from a path.
 - The registry is **flat**, **closed under ancestry** (every referenced place plus
   all of its ancestors), holds each place exactly once, and is ordered
-  **parents-first** with a deterministic order. The set and its order come from the
-  places alone, never from the order the server happened to collect them in, so a
-  client builds the tree in one pass and the response's entity tag stays stable for
-  an unchanged read.
+  **parents-first** with a deterministic order: a published `parentId` always names
+  a place published earlier in the same array, so following it terminates. The set
+  and its order come from the places alone, never from the order the server happened
+  to collect them in, so a client builds the tree in one pass and the response's
+  entity tag stays stable for an unchanged read.
 - The fleet, run, and schedule collections always carry `locations`, even when
   `items` is empty: the unknown place is always in the registry.
 - On the paged active-work model the reference and the registry are **optional**

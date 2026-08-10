@@ -38,7 +38,7 @@ func newTestStore(t *testing.T) *Postgres {
 // as one).
 func newUnmigratedTestStore(t *testing.T) *Postgres {
 	t.Helper()
-	return openTestStore(t, newTestDatabase(t))
+	return openTestStore(t, pgtest.NewDatabase(t))
 }
 
 // openTestStore connects another store to an existing test database, which is how
@@ -51,15 +51,9 @@ func openTestStore(t *testing.T, dsn string) *Postgres {
 	return store
 }
 
-// newTestDatabase gives the calling test an empty database of its own.
-func newTestDatabase(t *testing.T) string {
-	t.Helper()
-	return pgtest.NewDatabase(t)
-}
-
 // withDSNParam returns dsn with one pool setting added. It parses instead of
-// concatenating ("dsn + &key=value"), which would depend on newTestDatabase always
-// returning a DSN that already carries a query string.
+// concatenating ("dsn + &key=value"), which would depend on the test database's DSN
+// always carrying a query string already.
 func withDSNParam(t *testing.T, dsn, key, value string) string {
 	t.Helper()
 	u, err := url.Parse(dsn)

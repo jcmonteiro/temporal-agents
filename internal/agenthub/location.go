@@ -5,8 +5,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -251,8 +252,10 @@ func (l Location) Label() string {
 	}
 }
 
-// depth is how many ancestors this place has. It is what orders a registry
-// parents-first: a parent's depth is always strictly smaller than its child's.
+// depth is how many ancestors the value carries. It says how much is known about
+// where this place sits, which is what settles two values of the same place against
+// each other; how deep a place is *published* is a property of the whole registry and
+// is derived there.
 func (l Location) depth() int {
 	depth := 0
 	for current, ok := l.Parent(); ok; current, ok = current.Parent() {
@@ -279,8 +282,11 @@ func (l Location) ancestry() string {
 // precedes its children.
 //
 // It travels flat rather than nested because a client then builds the tree in one
-// pass, a cycle cannot be expressed, and the same place cannot appear twice in one
-// payload with two different sets of facts.
+// pass, and the same place cannot appear twice in one payload with two different sets
+// of facts. Both properties are of the *published* graph, so both are derived from
+// the entries this registry chose to publish (see NewLocationRegistry): the order
+// from those entries' parent links, and the absence of a cycle from breaking any loop
+// those links close.
 type LocationRegistry struct {
 	// locations is the closure, already ordered. The field is unexported so a
 	// registry cannot be assembled by a struct literal that skips the closure or the
@@ -291,23 +297,26 @@ type LocationRegistry struct {
 	index map[string]int
 }
 
-// placed is one candidate entry with everything the registry decides on precomputed.
-// The id is a digest and the depth is an ancestry walk, so computing them once per
-// place instead of twice per comparison keeps a sort of n places to n digests.
+// placed is one candidate entry with everything deduplication decides on precomputed:
+// comparing two candidates then costs no digest and no ancestry walk.
 type placed struct {
 	location Location
 	id       string
-	depth    int
-	ancestry string
+	// knownDepth is how many ancestors the value that was handed in carries. It settles
+	// which of two values of the same place is the better known one, and nothing else:
+	// the depth an entry is *published* at is a property of the chosen set, derived in
+	// publicationOrder.
+	knownDepth int
+	ancestry   string
 }
 
-// place decorates a location with what ordering and deduplication need.
+// place decorates a location with what deduplication needs.
 func place(location Location) placed {
 	return placed{
-		location: location,
-		id:       location.ID(),
-		depth:    location.depth(),
-		ancestry: location.ancestry(),
+		location:   location,
+		id:         location.ID(),
+		knownDepth: location.depth(),
+		ancestry:   location.ancestry(),
 	}
 }
 
@@ -316,8 +325,8 @@ func place(location Location) placed {
 // the ancestries themselves, so the winner is a function of the two values and of
 // nothing else.
 func (p placed) betterKnownThan(other placed) bool {
-	if p.depth != other.depth {
-		return p.depth > other.depth
+	if p.knownDepth != other.knownDepth {
+		return p.knownDepth > other.knownDepth
 	}
 	return p.ancestry < other.ancestry
 }
@@ -338,28 +347,24 @@ func (p placed) betterKnownThan(other placed) bool {
 //
 // The unknown place is always present: every item whose place was never recorded
 // refers to it, and it is a real place an operator sees rather than an absence.
+//
+// Choosing the winners comes first and shaping the graph second, in that order,
+// because both published properties are properties of the winners: which value of a
+// place is published decides what that place hangs under, and only then is it known
+// what the tree a client draws looks like.
 func NewLocationRegistry(referenced ...Location) LocationRegistry {
-	byID := map[string]placed{unknownLocationID: place(UnknownLocation())}
+	chosen := map[string]placed{unknownLocationID: place(UnknownLocation())}
 	for _, location := range referenced {
 		for current, ok := location, true; ok; current, ok = current.Parent() {
 			candidate := place(current)
-			if existing, seen := byID[candidate.id]; seen && !candidate.betterKnownThan(existing) {
+			if existing, seen := chosen[candidate.id]; seen && !candidate.betterKnownThan(existing) {
 				continue
 			}
-			byID[candidate.id] = candidate
+			chosen[candidate.id] = candidate
 		}
 	}
-	entries := make([]placed, 0, len(byID))
-	for _, entry := range byID {
-		entries = append(entries, entry)
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		left, right := entries[i], entries[j]
-		if left.depth != right.depth {
-			return left.depth < right.depth
-		}
-		return left.id < right.id
-	})
+	breakCycles(chosen)
+	entries := publicationOrder(chosen)
 	locations := make([]Location, 0, len(entries))
 	index := make(map[string]int, len(entries))
 	for position, entry := range entries {
@@ -369,14 +374,136 @@ func NewLocationRegistry(referenced ...Location) LocationRegistry {
 	return LocationRegistry{locations: locations, index: index}
 }
 
+// publicationOrder puts the chosen entries in publication order: shallowest first,
+// ties settled by id so the sequence is a function of the set alone.
+//
+// The depth it sorts on is walked through the chosen entries, never taken from the
+// value that was handed in. A place can be published with a deeper ancestry than the
+// copy embedded inside one of its children (one recorder knew the repository, another
+// did not), and sorting on the embedded copy's depth would then compare a parent and
+// its child as equals and let the id tie-break publish the child first — breaking the
+// one guarantee that lets a client build the tree in a single pass.
+func publicationOrder(chosen map[string]placed) []placed {
+	depths := make(map[string]int, len(chosen))
+	entries := make([]placed, 0, len(chosen))
+	for _, id := range slices.Sorted(maps.Keys(chosen)) {
+		publishedDepth(chosen, id, depths)
+		entries = append(entries, chosen[id])
+	}
+	slices.SortFunc(entries, func(left, right placed) int {
+		if depths[left.id] != depths[right.id] {
+			return depths[left.id] - depths[right.id]
+		}
+		return strings.Compare(left.id, right.id)
+	})
+	return entries
+}
+
+// publishedDepth is how many chosen ancestors an entry has, memoised so a chain costs
+// one walk rather than one per member. It terminates because breakCycles has already
+// made the chosen entries a forest.
+func publishedDepth(chosen map[string]placed, id string, depths map[string]int) int {
+	if depth, memoised := depths[id]; memoised {
+		return depth
+	}
+	parent, hasParent := chosenParent(chosen, id)
+	if !hasParent {
+		depths[id] = 0
+		return 0
+	}
+	depth := publishedDepth(chosen, parent, depths) + 1
+	depths[id] = depth
+	return depth
+}
+
+// chosenParent reports which published entry an entry hangs under. A parent that is
+// not published is no parent here: the closure puts every ancestor in, so that only
+// happens for a root, and a reference the registry does not contain must never decide
+// the order of one it does.
+func chosenParent(chosen map[string]placed, id string) (string, bool) {
+	entry, published := chosen[id]
+	if !published {
+		return "", false
+	}
+	parent, hasParent := entry.location.Parent()
+	if !hasParent {
+		return "", false
+	}
+	parentID := parent.ID()
+	if _, publishedParent := chosen[parentID]; !publishedParent {
+		return "", false
+	}
+	return parentID, true
+}
+
+// breakCycles republishes one member of every cycle the chosen entries form as a
+// root, so the published graph is always a forest.
+//
+// No single location value can hold a cycle — a parent is always an already-validated
+// value built before its child. The chosen *set* can: identity deliberately excludes
+// the parent, so /a can be recorded under /b while /b is recorded under /a, and
+// picking the better-known value per id is a local decision that cannot see the loop
+// two such decisions close. A client that follows parentId in one pass would then
+// never finish, which is exactly what the flat shape exists to prevent.
+//
+// The member with the smallest id loses its parent, so the break is a function of the
+// set and not of iteration order, and it is the least that opens the loop: every
+// other member keeps the ancestry it was recorded with.
+func breakCycles(chosen map[string]placed) {
+	for {
+		cycle := findCycle(chosen)
+		if len(cycle) == 0 {
+			return
+		}
+		rooted := chosen[slices.Min(cycle)].location
+		rooted.parent = nil
+		chosen[rooted.ID()] = place(rooted)
+	}
+}
+
+// findCycle reports the ids of one cycle among the chosen entries, or nothing when
+// they already form a forest. Chains are walked from the ids in sorted order, so the
+// same set always yields the same cycle and therefore the same break.
+func findCycle(chosen map[string]placed) []string {
+	const (
+		unvisited = iota
+		onPath
+		settled
+	)
+	state := make(map[string]int, len(chosen))
+	for _, start := range slices.Sorted(maps.Keys(chosen)) {
+		var walked []string
+		for current := start; ; {
+			if state[current] == onPath {
+				// Only this walk marks entries onPath, so meeting one closes a loop.
+				return walked[slices.Index(walked, current):]
+			}
+			if state[current] == settled {
+				break
+			}
+			state[current] = onPath
+			walked = append(walked, current)
+			parent, hasParent := chosenParent(chosen, current)
+			if !hasParent {
+				break
+			}
+			current = parent
+		}
+		for _, entry := range walked {
+			state[entry] = settled
+		}
+	}
+	return nil
+}
+
 // Locations returns the closure in publication order. The slice is a copy, so a
 // consumer of the core cannot reorder a registry another consumer is reading.
 func (r LocationRegistry) Locations() []Location {
 	return append([]Location(nil), r.locations...)
 }
 
-// Len is how many places the registry holds. It is never zero: the unknown place is
-// always in it.
+// Len is how many places the registry holds. It is never zero for a registry the
+// constructor built: the unknown place is always in it.
 func (r LocationRegistry) Len() int { return len(r.locations) }
 
 // Contains reports whether an id is in the registry, which is what makes "every

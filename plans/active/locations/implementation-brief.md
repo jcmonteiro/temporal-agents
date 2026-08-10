@@ -15,9 +15,16 @@ honor, and the seams it touches. Where a concrete choice is mandated it is marke
 - **Locations travel in a flat registry per response**, and items reference a
   location by a **server-issued id**. The registry is **closed under ancestry**
   (every referenced location plus all of its ancestors) and ordered
-  **parents-first**. *Reason:* a client builds the tree in one pass, a cycle
-  cannot be expressed, and the same location cannot appear in two conflicting
-  copies inside one payload.
+  **parents-first**, and a published `parentId` always names an entry published
+  earlier. *Reason:* a client builds the tree in one pass, following a parent
+  reference always terminates, and the same location cannot appear in two
+  conflicting copies inside one payload.
+- **Both properties are computed from the registry's own entries**, never from the
+  values handed in. Identity excludes the parent, so the same place can be recorded
+  with two different ancestries: the better-known one is published, and only then
+  are the order and the shape of the graph derived from what was published (any
+  loop two such choices close is opened at the smallest id). *Reason:* an invariant
+  stated one level below where it must hold is an invariant that does not hold.
 - **Identity is never derived by a client.** The id is opaque; the natural key
   (the path, or the ref) stays a field.
 - **Every location carries a server-computed label.** *Reason:* a consumer that

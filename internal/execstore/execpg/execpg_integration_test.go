@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"temporal-agents/internal/execstore"
+	"temporal-agents/internal/pgtest"
 )
 
 // The behaviour of the adapter against a real Postgres. The container and the
@@ -34,7 +35,7 @@ func TestPostgres_MigrateNeedsOnlyOneConnection(t *testing.T) {
 	// Migrating pins one connection for the advisory lock and runs every migration on
 	// that same connection. Taking a second one from the pool would deadlock a worker
 	// whose DSN caps the pool at one — silently, at startup, with no message.
-	dsn := withDSNParam(t, newTestDatabase(t), "pool_max_conns", "1")
+	dsn := withDSNParam(t, pgtest.NewDatabase(t), "pool_max_conns", "1")
 	store := openTestStore(t, dsn)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -48,7 +49,7 @@ func TestPostgres_ConcurrentMigrateSucceedsForEveryWorker(t *testing.T) {
 	// starting together must both succeed. Without the advisory lock in Migrate the
 	// unguarded CREATE TABLE IF NOT EXISTS lets one of them lose on a catalog
 	// duplicate-key error and refuse to start.
-	dsn := newTestDatabase(t)
+	dsn := pgtest.NewDatabase(t)
 	const workers = 4
 	stores := make([]*Postgres, 0, workers)
 	for range workers {

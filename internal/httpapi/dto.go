@@ -77,11 +77,15 @@ func newLocatedCollection[T any](items []T, limit int, registry agenthub.Locatio
 // activeWorkCollection is the additive paged contract used by the CLI. It is a
 // separate model so existing v1 collection models do not gain required fields.
 type activeWorkCollection struct {
-	Items     []activeWorkResource `json:"items"`
-	Count     int                  `json:"count"`
-	Limit     int                  `json:"limit"`
-	Next      *string              `json:"next"`
-	Locations []locationResource   `json:"locations,omitempty"`
+	Items []activeWorkResource `json:"items"`
+	Count int                  `json:"count"`
+	Limit int                  `json:"limit"`
+	Next  *string              `json:"next"`
+	// Locations is optional in the schema, because this model must stay decodable by a
+	// consumer written before it existed. The server nevertheless always sends it: the
+	// registry holds at least the unknown place, so the omitempty never fires and a
+	// reader here should not conclude the field is sometimes absent.
+	Locations []locationResource `json:"locations,omitempty"`
 }
 
 // activeWorkResource is one top-level unsettled execution or configured schedule.
