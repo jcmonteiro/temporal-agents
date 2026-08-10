@@ -55,8 +55,7 @@ it("opens the place a deep link names", async () => {
 it("opens the run a deep link names", async () => {
   await openAt("#/runs/run-1");
 
-  expect(screen.getByRole("heading", { name: "Run" })).toBeTruthy();
-  expect(screen.getByText("run-1")).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "Fix the flaky test" })).toBeTruthy();
 });
 
 it("opens the fleet a deep link names", async () => {
@@ -122,7 +121,7 @@ it("leads from a piece of work to its own page", async () => {
 
   await follow(details);
 
-  expect(await screen.findByRole("heading", { name: "Run" })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "Fix the flaky test" })).toBeTruthy();
 });
 
 /**

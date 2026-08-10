@@ -72,6 +72,18 @@ export function navigationKeyOf(route: Route): string | null {
   }
 }
 
+/**
+ * Goes to a route.
+ *
+ * Assigning the address is what a link does, so the browser records the step and
+ * the operator can go back — which matters most exactly where this is used: an
+ * operator who has just started work and wants to return to where they started
+ * it from.
+ */
+export function goTo(route: Route): void {
+  window.location.hash = addressOf(route);
+}
+
 /** The current route, kept current as the operator navigates. */
 export function useRoute(): Route {
   const [route, setRoute] = useState<Route>(() => routeOf(window.location.hash));

@@ -14,6 +14,7 @@ import { StatusDot } from "../../components/StatusDot";
 import { Icon } from "../../components/Icon";
 import { WorkItemDetail } from "../../components/WorkItemDetail";
 import { addressOf, OVERVIEW } from "../../platform/route";
+import { Launcher } from "./Launcher";
 
 // The page shows live work, so it polls on the same cadence as the overview.
 const REFRESH_INTERVAL_MS = 5_000;
@@ -262,9 +263,10 @@ function PlaceReport({
         )}
       </section>
 
-      {/* Later features hang off this place: the launcher that starts work here
-          and the settings that are scoped to it. Neither exists yet, so nothing
-          is drawn for them. */}
+      <Launcher place={place} />
+
+      {/* The settings scoped to this place hang off it too, and are a feature of
+          their own. Nothing is drawn for them yet. */}
     </>
   );
 }

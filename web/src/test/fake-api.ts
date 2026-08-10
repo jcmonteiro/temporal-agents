@@ -1,5 +1,6 @@
 import type {
   FleetDTO,
+  StartedWorkDTO,
   FleetNode,
   LocatedCollection,
   LocationResource,
@@ -53,6 +54,17 @@ export class FakeApi {
    * no repository holds it. This is how a test drives the two refusals.
    */
   directories: Record<string, LocationResource | null> = {};
+  /**
+   * What was started here, by request identity. It stands in for the hub's own
+   * memory of what it started, which is what makes a repeated request one run.
+   */
+  launches: Record<string, StartedWorkDTO> = {};
+  /**
+   * The place work is already running in, if any. A start there is refused, as
+   * the server refuses one: two loops in one working tree commit over each
+   * other.
+   */
+  busy: { locationId: string; runId: string } | null = null;
 
   private original: typeof globalThis.fetch | undefined;
 
@@ -71,6 +83,12 @@ export class FakeApi {
       }
       if (this.signInConfigured && this.principal === null) {
         return Promise.resolve(this.unauthenticated());
+      }
+      if (path.startsWith("/api/v1/runs/")) {
+        return Promise.resolve(this.run(decodeURIComponent(path.slice("/api/v1/runs/".length))));
+      }
+      if (path === "/api/v1/runs" && method === "POST") {
+        return Promise.resolve(this.start(init?.body));
       }
       if (path === "/api/v1/places") {
         return Promise.resolve(this.places(method, init?.body));
@@ -103,6 +121,63 @@ export class FakeApi {
       status: 200,
       headers: { "content-type": "application/json" },
     });
+  }
+
+  /**
+   * One run, with the registry its place resolves against. A run the hub has not
+   * got is a 404, which is also what a run that has only just been started reads
+   * as until the orchestrator reports it.
+   */
+  private run(id: string): Response {
+    const run = this.runs.find((candidate) => candidate.id === id);
+    if (!run) return this.problem(404, "not-found", "no such resource");
+    const place = this.locations.find((location) => location.id === run.locationId);
+    return this.json({
+      ...run,
+      locations: place ? [theUnknownPlace(), place] : [theUnknownPlace()],
+    });
+  }
+
+  /**
+   * Starts work: the rules the server applies, in the order it applies them.
+   * The request names a place, one request identity is one run, and a place
+   * something is already running in is refused by name.
+   */
+  private start(body: BodyInit | null | undefined): Response {
+    const asked = JSON.parse(String(body ?? "{}")) as {
+      requestId?: string;
+      kind?: string;
+      placeId?: string;
+      prompt?: string;
+    };
+    const requestId = String(asked.requestId ?? "");
+    const existing = this.launches[requestId];
+    if (existing) return this.json(existing, 201);
+    if (asked.kind === "develop" && !asked.prompt) {
+      return this.problem(400, "invalid-request",
+        "a develop pass needs a prompt saying what to do");
+    }
+    const place = this.locations.find((location) => location.id === asked.placeId);
+    if (!place) {
+      return this.problem(400, "invalid-request",
+        `this hub knows no place "${asked.placeId}" to work in`);
+    }
+    if (this.busy?.locationId === place.id) {
+      return this.problem(409, "place-is-busy",
+        `${this.busy.runId} is already running in ${place.label}`, this.busy.runId);
+    }
+    const started: StartedWorkDTO = {
+      id: `${asked.kind}-${Object.keys(this.launches).length + 1}`,
+      kind: "run",
+      type: String(asked.kind),
+      label: String(asked.prompt ?? ""),
+      locationId: place.id,
+      startedAt: "2026-08-06T12:00:00Z",
+      startedBy: this.principal?.id,
+      locations: [theUnknownPlace(), place],
+    };
+    this.launches[requestId] = started;
+    return this.json(started, 201);
   }
 
   /**
@@ -167,13 +242,14 @@ export class FakeApi {
   }
 
   /** A problem document, as the API refuses with one. */
-  private problem(status: number, code: string, detail: string): Response {
+  private problem(status: number, code: string, detail: string, conflictingRunId?: string): Response {
     return new Response(
       JSON.stringify({
         type: `/api/v1/problems/${code}`,
         title: code,
         status,
         detail,
+        conflictingRunId,
       }),
       { status, headers: { "content-type": "application/problem+json" } },
     );

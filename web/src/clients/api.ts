@@ -111,3 +111,17 @@ export interface PlaceDTO {
   // envelope to carry the registry.
   locations?: LocationResource[];
 }
+
+// Work that has just been started. It is not a run: a start returns as soon as
+// the orchestrator accepts the submission, so there is no status, no iteration
+// count and no token usage yet, and the API publishes none.
+export interface StartedWorkDTO {
+  id: string;
+  kind: "run";
+  type: string;
+  label: string;
+  locationId: string;
+  startedAt: string | null;
+  startedBy?: string;
+  locations?: LocationResource[];
+}

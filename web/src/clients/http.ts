@@ -38,6 +38,12 @@ export class ApiError extends Error {
      * not.
      */
     readonly detail = "",
+    /**
+     * The work a refusal collided with, where it collided with something. The
+     * server names it as an identity of its own, so a surface can lead the
+     * operator to it instead of reading it out of the sentence.
+     */
+    readonly conflictingRunId = "",
   ) {
     super(message);
     this.name = "ApiError";
@@ -144,11 +150,13 @@ async function request(
       return err(new UnauthenticatedError(`${init.method} ${path}`));
     }
     if (!res.ok) {
+      const problem = await problemOf(res);
       return err(
         new ApiError(
           res.status,
           `${init.method} ${path} → ${res.status}`,
-          await problemDetail(res),
+          problem.detail,
+          problem.conflictingRunId,
         ),
       );
     }
@@ -161,19 +169,29 @@ async function request(
 }
 
 /**
- * The explanation a refusal carries, or nothing.
+ * What a refusal carries, or nothing.
  *
- * Every failure this API reports is a problem document (RFC 9457), and its
- * `detail` is the sentence written for the operator. A body that is not one, or
- * that cannot be read at all, yields nothing rather than a fragment of markup on
- * screen.
+ * Every failure this API reports is a problem document (RFC 9457): `detail` is
+ * the sentence written for the operator, and `conflictingRunId` names what a
+ * refusal collided with. A body that is not one, or that cannot be read at all,
+ * yields nothing rather than a fragment of markup on screen.
  */
-async function problemDetail(response: Response): Promise<string> {
-  if (!(response.headers.get("content-type") ?? "").includes("json")) return "";
+async function problemOf(
+  response: Response,
+): Promise<{ detail: string; conflictingRunId: string }> {
+  const nothing = { detail: "", conflictingRunId: "" };
+  if (!(response.headers.get("content-type") ?? "").includes("json")) return nothing;
   try {
-    const document = (await response.json()) as { detail?: unknown };
-    return typeof document.detail === "string" ? document.detail : "";
+    const document = (await response.json()) as {
+      detail?: unknown;
+      conflictingRunId?: unknown;
+    };
+    return {
+      detail: typeof document.detail === "string" ? document.detail : "",
+      conflictingRunId:
+        typeof document.conflictingRunId === "string" ? document.conflictingRunId : "",
+    };
   } catch {
-    return "";
+    return nothing;
   }
 }
