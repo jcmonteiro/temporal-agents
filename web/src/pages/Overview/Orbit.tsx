@@ -37,10 +37,6 @@ const ZOOM_STEP = 1.2; // per button press
 // Wheel zoom sensitivity: multiplier per unit of wheel delta. Small = gentle.
 const WHEEL_ZOOM_SENSITIVITY = 0.0015;
 
-// Shared angular velocity for every satellite: one gentle revolution roughly
-// every ~4 minutes. All rings turn at the same rate, so the constellation
-// holds its shape while it drifts.
-const ANGULAR_VELOCITY = (2 * Math.PI) / 240_000; // radians per millisecond
 
 interface View {
   // Screen offset of the content origin, and the scale factor.
@@ -66,8 +62,6 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
   const hostRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 900, h: 640 });
   const [view, setView] = useState<View>(IDENTITY);
-  // Shared rotation offset (radians) added to every satellite's base angle.
-  const [rotation, setRotation] = useState(0);
   // Whether the orbital animation is running. Starts paused when the user
   // prefers reduced motion; otherwise plays.
   const prefersReducedMotion =
@@ -94,26 +88,6 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
     setSize({ w: el.clientWidth, h: el.clientHeight });
     return () => observer.disconnect();
   }, []);
-
-  // Gentle shared orbital motion, driven by a single rAF loop off the real
-  // clock (so it stays correct regardless of frame rate). Rotation accumulates,
-  // so pausing holds the current position and resuming continues from it.
-  useEffect(() => {
-    if (!playing) return;
-
-    let raf = 0;
-    let last: number | null = null;
-    const tick = (now: number) => {
-      if (last !== null) {
-        const delta = (now - last) * ANGULAR_VELOCITY;
-        setRotation((r) => (r + delta) % (2 * Math.PI));
-      }
-      last = now;
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [playing]);
 
   // Clearing selection must also drop DOM focus from the satellite, otherwise
   // its keyboard focus ring lingers after there is nothing selected.
@@ -310,88 +284,99 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
             </defs>
           </g>
 
-          {/* Satellites */}
-          {layout.slots.map(({ item, angle, radius }) => {
-            const isSelected = sameItem(item, selected);
-            // Same shared rotation for every satellite, so the whole
-            // constellation turns as one rigid body.
-            const a = angle + rotation;
-            const x = layout.center.x + Math.cos(a) * radius;
-            const y = layout.center.y + Math.sin(a) * radius;
-            return (
-              <g
-                key={itemKey(item)}
-                className="satellite"
-                data-selected={isSelected || undefined}
-                transform={`translate(${x}, ${y})`}
-                style={{ cursor: "pointer" }}
-                onClick={() => {
-                  // Suppress the click that ends a pan gesture.
-                  if (suppressClick.current) {
-                    suppressClick.current = false;
-                    return;
-                  }
-                  onSelect(item);
-                }}
-                tabIndex={0}
-                role="button"
-                aria-label={`${item.label}, ${STATUS_LABEL[item.status]}`}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onSelect(item);
-                  }
-                }}
-              >
-                {/* Circular focus ring, shown only for keyboard focus. */}
-                <circle
-                  className="satellite-focus"
-                  r={35}
-                  fill="none"
-                  stroke="var(--color-accent)"
-                  strokeWidth={2}
-                />
-                <circle
-                  r={30}
-                  fill="var(--color-surface)"
-                  stroke={
-                    isSelected
-                      ? "var(--color-accent)"
-                      : "var(--color-border-strong)"
-                  }
-                  strokeWidth={isSelected ? 2 : 1.25}
-                />
+          {/* Satellites, carried by a rotor group that provides the shared
+              orbital motion: the whole constellation turns as one rigid body,
+              and each satellite counter-rotates so its icon and label stay
+              upright. Pausing holds the current position. */}
+          <g
+            className="orbit-rotor"
+            style={{
+              transformOrigin: `${layout.center.x}px ${layout.center.y}px`,
+              animationPlayState: playing ? "running" : "paused",
+            }}
+          >
+            {layout.slots.map(({ item, x, y }) => {
+              const isSelected = sameItem(item, selected);
+              return (
                 <g
-                  transform="translate(-12, -12)"
-                  color="var(--color-text)"
-                  style={{ pointerEvents: "none" }}
+                  key={itemKey(item)}
+                  className="satellite"
+                  data-selected={isSelected || undefined}
+                  transform={`translate(${x}, ${y})`}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => {
+                    // Suppress the click that ends a pan gesture.
+                    if (suppressClick.current) {
+                      suppressClick.current = false;
+                      return;
+                    }
+                    onSelect(item);
+                  }}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`${item.label}, ${STATUS_LABEL[item.status]}`}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelect(item);
+                    }
+                  }}
                 >
-                  <Icon name={item.icon} size={24} />
-                </g>
-                <g transform="translate(0, 52)" style={{ pointerEvents: "none" }}>
-                  <circle
-                    cx={-6}
-                    cy={-4}
-                    r={4}
-                    fill="none"
-                    stroke={STATUS_VAR[item.status]}
-                    strokeWidth={1.5}
-                  />
-                  <text
-                    x={2}
-                    y={0}
-                    fill="var(--color-text-muted)"
-                    style={{
-                      fontFamily: "var(--font-sans)",
-                      fontSize: 11,
-                    }}
+                  <g
+                    className="satellite-upright"
+                    style={{ animationPlayState: playing ? "running" : "paused" }}
                   >
-                    {STATUS_LABEL[item.status]}
-                  </text>
+                    {/* Circular focus ring, shown only for keyboard focus. */}
+                    <circle
+                      className="satellite-focus"
+                      r={35}
+                      fill="none"
+                      stroke="var(--color-accent)"
+                      strokeWidth={2}
+                    />
+                    <circle
+                      r={30}
+                      fill="var(--color-surface)"
+                      stroke={
+                        isSelected
+                          ? "var(--color-accent)"
+                          : "var(--color-border-strong)"
+                      }
+                      strokeWidth={isSelected ? 2 : 1.25}
+                    />
+                    <g
+                      transform="translate(-12, -12)"
+                      color="var(--color-text)"
+                      style={{ pointerEvents: "none" }}
+                    >
+                      <Icon name={item.icon} size={24} />
+                    </g>
+                    <g transform="translate(0, 52)" style={{ pointerEvents: "none" }}>
+                      <circle
+                        cx={-6}
+                        cy={-4}
+                        r={4}
+                        fill="none"
+                        stroke={STATUS_VAR[item.status]}
+                        strokeWidth={1.5}
+                      />
+                      <text
+                        x={2}
+                        y={0}
+                        fill="var(--color-text-muted)"
+                        style={{
+                          fontFamily: "var(--font-sans)",
+                          fontSize: 11,
+                        }}
+                      >
+                        {STATUS_LABEL[item.status]}
+                      </text>
+                    </g>
+                  </g>
                 </g>
-              </g>
-            );
-          })}
+              );
+            })}
+          </g>
         </g>
       </svg>
 
