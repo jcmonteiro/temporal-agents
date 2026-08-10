@@ -3,6 +3,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { fireEvent } from "@testing-library/dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkItem } from "../../domain/work-item";
+import { registryOf, type Place } from "../../domain/place";
 import { Orbit } from "./Orbit";
 import { ORBIT_PERIOD_MS } from "./orbit-motion";
 
@@ -14,6 +15,17 @@ const FLEET: WorkItem = {
   icon: "rocket",
   placeId: "unknown",
 };
+
+const UNKNOWN_PLACE: Place = {
+  id: "unknown",
+  kind: "unknown",
+  label: "Unknown",
+  parentId: null,
+};
+
+function aDirectory(id: string, parentId: string | null = null): Place {
+  return { id, kind: "directory", label: id, parentId, directory: `/srv/${id}` };
+}
 
 /** Answers the reduced-motion query with the given preference. */
 function preferReducedMotion(reduce: boolean): void {
@@ -30,19 +42,27 @@ function preferReducedMotion(reduce: boolean): void {
 
 function showOrbit(
   overrides: Partial<Parameters<typeof Orbit>[0]> = {},
-): { onSelect: ReturnType<typeof vi.fn>; onClear: ReturnType<typeof vi.fn> } {
+): {
+  onSelect: ReturnType<typeof vi.fn>;
+  onSelectPlace: ReturnType<typeof vi.fn>;
+  onClear: ReturnType<typeof vi.fn>;
+} {
   const onSelect = vi.fn();
+  const onSelectPlace = vi.fn();
   const onClear = vi.fn();
   render(
     <Orbit
       items={[FLEET]}
+      places={registryOf([UNKNOWN_PLACE])}
       selected={null}
+      selectedPlaceId={null}
       onSelect={onSelect}
+      onSelectPlace={onSelectPlace}
       onClear={onClear}
       {...overrides}
     />,
   );
-  return { onSelect, onClear };
+  return { onSelect, onSelectPlace, onClear };
 }
 
 /** The satellite of the given work item, as the operator picks it out. */
@@ -192,5 +212,146 @@ describe("clearing the selection", () => {
     fireEvent.keyDown(window, { key: "Escape" });
 
     expect(onClear).not.toHaveBeenCalled();
+  });
+});
+
+// A repository with two worktrees, and work in each of them.
+const REPOSITORY_WITH_WORKTREES = registryOf([
+  UNKNOWN_PLACE,
+  aDirectory("repo"),
+  aDirectory("tree-a", "repo"),
+  aDirectory("tree-b", "repo"),
+]);
+
+function runIn(placeId: string, id: string): WorkItem {
+  return {
+    id,
+    kind: "run",
+    label: id,
+    status: "in-progress",
+    icon: "document",
+    placeId,
+  };
+}
+
+/** The places the canvas draws, as the operator hears them named. */
+function placeNames(): string[] {
+  return Array.from(document.querySelectorAll(".place")).map(
+    (place) => place.getAttribute("aria-label") ?? "",
+  );
+}
+
+describe("the places on the canvas", () => {
+  it("draws one body per place, named and focusable", () => {
+    showOrbit({
+      items: [runIn("tree-a", "run-1")],
+      places: REPOSITORY_WITH_WORKTREES,
+    });
+
+    expect(placeNames()).toEqual([
+      "Unknown, place, 0 items",
+      "repo, place, 0 items",
+      "tree-a, place, 1 item",
+      "tree-b, place, 0 items",
+    ]);
+    document.querySelectorAll(".place").forEach((place) => {
+      expect(place.getAttribute("tabindex")).toBe("0");
+    });
+  });
+
+  it("reports the place the operator picks", () => {
+    const { onSelectPlace } = showOrbit({
+      items: [runIn("tree-a", "run-1")],
+      places: REPOSITORY_WITH_WORKTREES,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "tree-a, place, 1 item" }));
+
+    expect(onSelectPlace).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "tree-a" }),
+    );
+  });
+
+  it("reports the place the operator confirms with the keyboard", () => {
+    const { onSelectPlace } = showOrbit({
+      items: [runIn("tree-a", "run-1")],
+      places: REPOSITORY_WITH_WORKTREES,
+    });
+
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: "tree-a, place, 1 item" }),
+      { key: "Enter" },
+    );
+
+    expect(onSelectPlace).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "tree-a" }),
+    );
+  });
+
+  it("folds every place into the place that holds it on request", () => {
+    showOrbit({
+      items: [runIn("tree-a", "run-1"), runIn("tree-b", "run-2")],
+      places: REPOSITORY_WITH_WORKTREES,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse every place" }));
+
+    // One body per repository, and the fold announces how many places it took.
+    expect(placeNames()).toEqual([
+      "Unknown, place, 0 items",
+      "repo, place, 2 items, 2 places folded in",
+    ]);
+    expect(
+      screen.getByRole("button", { name: "Show the places again" }).getAttribute(
+        "aria-pressed",
+      ),
+    ).toBe("true");
+  });
+
+  it("shows the places again once the operator unfolds them", () => {
+    showOrbit({
+      items: [runIn("tree-a", "run-1")],
+      places: REPOSITORY_WITH_WORKTREES,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Collapse every place" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Show the places again" }));
+
+    expect(placeNames()).toContain("tree-a, place, 1 item");
+  });
+
+  it("keeps the work of a folded place on the canvas", () => {
+    showOrbit({
+      items: [runIn("tree-a", "run-1")],
+      places: REPOSITORY_WITH_WORKTREES,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse every place" }));
+
+    expect(screen.getByRole("button", { name: "run-1, In Progress" })).toBeTruthy();
+  });
+
+  it("turns the satellites of a place about that place", () => {
+    vi.useFakeTimers();
+    showOrbit({
+      items: [runIn("tree-a", "run-1")],
+      places: REPOSITORY_WITH_WORKTREES,
+    });
+    const target = satellite("run-1, In Progress");
+    const place = screen.getByRole("button", { name: "tree-a, place, 1 item" });
+    const home = placeOf(place as unknown as SVGGElement);
+    const start = placeOf(target);
+
+    letItTurn(ORBIT_PERIOD_MS / 2);
+
+    const halfway = placeOf(target);
+    // The satellite travelled, its place did not, and the satellite stayed the
+    // same distance from it: it turns about its own place, not about the canvas.
+    expect(placeOf(place as unknown as SVGGElement)).toEqual(home);
+    expect(Math.hypot(halfway.x - start.x, halfway.y - start.y)).toBeGreaterThan(100);
+    expect(Math.hypot(halfway.x - home.x, halfway.y - home.y)).toBeCloseTo(
+      Math.hypot(start.x - home.x, start.y - home.y),
+      6,
+    );
   });
 });

@@ -7,7 +7,8 @@ import {
   type WorkItemId,
   type WorkItemStatus,
 } from "../../domain/work-item";
-import { RightRail } from "../../components/RightRail";
+import { registryOf, workIn, type PlaceRegistry } from "../../domain/place";
+import { RightRail, type Selected } from "../../components/RightRail";
 import { Orbit } from "./Orbit";
 
 type StatusCounts = Record<WorkItemStatus, number>;
@@ -19,6 +20,9 @@ function countByStatus(items: WorkItem[]): StatusCounts {
   for (const item of items) counts[item.status] += 1;
   return counts;
 }
+
+// The places of the first render, before any response arrived.
+const NO_PLACES: PlaceRegistry = registryOf([]);
 
 // The overview is live data: poll the API on this cadence so running work and
 // schedules stay current without a page reload.
@@ -36,6 +40,9 @@ export function OverviewPage(): ReactNode {
   const [state, setState] = useState<State>({ data: null, error: null });
   // Identity, not a bare id: a fleet and a run may share an id.
   const [selectedId, setSelectedId] = useState<WorkItemId | null>(null);
+  // The place the operator picked, by its server-issued id. An item and a place
+  // are never selected at once: picking one drops the other.
+  const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
   // Statuses currently shown. Empty set means "show all" — the natural
   // starting point, and what clearing the filter returns to.
   const [visibleStatuses, setVisibleStatuses] = useState<Set<WorkItemStatus>>(
@@ -64,6 +71,7 @@ export function OverviewPage(): ReactNode {
 
   const items = state.data?.items ?? [];
   const upNext = state.data?.upNext ?? [];
+  const places = state.data?.places ?? NO_PLACES;
 
   const counts = useMemo(() => countByStatus(items), [items]);
   const filtered = useMemo(
@@ -75,7 +83,37 @@ export function OverviewPage(): ReactNode {
   );
 
   // A selected item that is filtered out is no longer selectable.
-  const selected = filtered.find((i) => sameItem(i, selectedId)) ?? null;
+  const selectedItem = filtered.find((i) => sameItem(i, selectedId)) ?? null;
+  const selectedPlace =
+    selectedPlaceId === null ? undefined : places.byId(selectedPlaceId);
+
+  // The rail details whichever of the two the operator picked last. A place
+  // reports the work of every place under it, so a repository answers for its
+  // worktrees too.
+  let selected: Selected | null = null;
+  if (selectedPlace) {
+    selected = {
+      type: "place",
+      place: selectedPlace,
+      counts: countByStatus(workIn(filtered, places, selectedPlace.id)),
+      children: places.childrenOf(selectedPlace.id),
+    };
+  } else if (selectedItem) {
+    selected = { type: "item", item: selectedItem };
+  }
+
+  const selectItem = (item: WorkItem): void => {
+    setSelectedPlaceId(null);
+    setSelectedId({ kind: item.kind, id: item.id });
+  };
+  const selectPlace = (placeId: string): void => {
+    setSelectedId(null);
+    setSelectedPlaceId(placeId);
+  };
+  const clearSelection = (): void => {
+    setSelectedId(null);
+    setSelectedPlaceId(null);
+  };
 
   const toggleStatus = (status: WorkItemStatus): void => {
     setVisibleStatuses((prev) => {
@@ -121,9 +159,12 @@ export function OverviewPage(): ReactNode {
         <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
           <Orbit
             items={filtered}
+            places={places}
             selected={selectedId}
-            onSelect={(it) => setSelectedId({ kind: it.kind, id: it.id })}
-            onClear={() => setSelectedId(null)}
+            selectedPlaceId={selectedPlaceId}
+            onSelect={selectItem}
+            onSelectPlace={(place) => selectPlace(place.id)}
+            onClear={clearSelection}
           />
           <StatusOverlay state={state} />
         </div>

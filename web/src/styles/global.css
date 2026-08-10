@@ -40,3 +40,20 @@ button {
 .satellite[data-selected] .satellite-focus {
   opacity: 0;
 }
+
+/* A place is focusable in the same way as a satellite. */
+.place {
+  outline: none;
+}
+
+.place-focus {
+  opacity: 0;
+}
+
+.place:focus-visible .place-focus {
+  opacity: 1;
+}
+
+.place[data-selected] .place-focus {
+  opacity: 0;
+}

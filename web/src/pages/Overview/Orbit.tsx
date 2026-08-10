@@ -18,13 +18,15 @@ import {
   type WorkItemId,
   type WorkItemStatus,
 } from "../../domain/work-item";
+import type { Place, PlaceRegistry } from "../../domain/place";
 import { Icon } from "../../components/Icon";
 import { onEachFrame, prefersReducedMotion } from "../../platform/motion";
-import { layoutOrbit } from "./layout";
 import { advanced, positionAt } from "./orbit-motion";
+import { CENTRE_RADIUS, layoutScene, type PlaceBody } from "./scene";
 import {
   IDENTITY,
   panned,
+  visibleDepthFor,
   wheelZoomFactor,
   zoomedAround,
   ZOOM_STEP,
@@ -42,17 +44,45 @@ const STATUS_VAR: Record<WorkItemStatus, string> = {
   failed: "var(--status-failed)",
 };
 
+/**
+ * How a place announces itself: what it is called, how much work it holds, and
+ * how many places it absorbed. A fold is never silent.
+ */
+function placeName(body: PlaceBody): string {
+  const work = `${body.slots.length} ${body.slots.length === 1 ? "item" : "items"}`;
+  if (body.foldedCount === 0) return `${body.place.label}, place, ${work}`;
+  const folded = `${body.foldedCount} ${
+    body.foldedCount === 1 ? "place" : "places"
+  } folded in`;
+  const why = body.crowded ? " to stay legible" : "";
+  return `${body.place.label}, place, ${work}, ${folded}${why}`;
+}
+
 interface Props {
   items: WorkItem[];
+  places: PlaceRegistry;
   selected: WorkItemId | null;
+  selectedPlaceId: string | null;
   onSelect: (item: WorkItem) => void;
+  onSelectPlace: (place: Place) => void;
   onClear: () => void;
 }
 
-export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode {
+export function Orbit({
+  items,
+  places,
+  selected,
+  selectedPlaceId,
+  onSelect,
+  onSelectPlace,
+  onClear,
+}: Props): ReactNode {
   const hostRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 900, h: 640 });
   const [view, setView] = useState<View>(IDENTITY);
+  // Whether every place is folded into its base ancestor. It is view state, not
+  // data: the scene derives the folding from it.
+  const [collapseAll, setCollapseAll] = useState(false);
   // Whether the orbital animation is running. Starts paused when the operator
   // prefers reduced motion; otherwise plays.
   const [playing, setPlaying] = useState(() => !prefersReducedMotion());
@@ -82,12 +112,12 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
     return () => observer.disconnect();
   }, []);
 
-  // Clearing selection must also drop DOM focus from the satellite, otherwise
-  // its keyboard focus ring lingers after there is nothing selected.
+  // Clearing selection must also drop DOM focus from the body it was on,
+  // otherwise its keyboard focus ring lingers after there is nothing selected.
   const clearSelection = useCallback(() => {
     const active = document.activeElement;
     if (active instanceof HTMLElement || active instanceof SVGElement) {
-      if (active.closest?.(".satellite")) active.blur();
+      if (active.closest?.(".satellite, .place")) active.blur();
     }
     onClear();
   }, [onClear]);
@@ -101,9 +131,18 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
     return () => window.removeEventListener("keydown", onKey);
   }, [clearSelection]);
 
-  const layout = useMemo(
-    () => layoutOrbit(items, { width: size.w, height: size.h }),
-    [items, size.w, size.h],
+  // How deep the places are drawn follows from the view: zooming out folds the
+  // deeper ones into their parents, and collapse-all forces the base ancestor.
+  const visibleDepth = visibleDepthFor(view, collapseAll);
+
+  const scene = useMemo(
+    () =>
+      layoutScene(items, places, {
+        width: size.w,
+        height: size.h,
+        visibleDepth,
+      }),
+    [items, places, size.w, size.h, visibleDepth],
   );
 
   // How far the constellation has turned, in radians. One angle drives every
@@ -116,13 +155,16 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
   const satellites = useRef(new Map<string, SVGGElement>());
 
   const placeSatellites = useCallback(() => {
-    for (const slot of layout.slots) {
-      const el = satellites.current.get(itemKey(slot.item));
-      if (!el) continue;
-      const at = positionAt(slot, layout.center, rotation.current);
-      el.setAttribute("transform", `translate(${at.x}, ${at.y})`);
+    for (const body of scene.bodies) {
+      for (const slot of body.slots) {
+        const el = satellites.current.get(itemKey(slot.item));
+        if (!el) continue;
+        // A satellite turns about the body it belongs to, not about the canvas.
+        const at = positionAt(slot, body.centre, rotation.current);
+        el.setAttribute("transform", `translate(${at.x}, ${at.y})`);
+      }
     }
-  }, [layout]);
+  }, [scene]);
 
   // The orbital motion. Stopping simply drops the frame loop, which holds the
   // constellation at its current angle.
@@ -219,7 +261,8 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
         return;
       }
       const target = e.target as Element;
-      if (target.closest(".satellite") || target.closest("button")) return;
+      if (target.closest(".satellite") || target.closest(".place")) return;
+      if (target.closest("button")) return;
       clearSelection();
     },
     [clearSelection],
@@ -260,132 +303,213 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
 
         {/* Everything else lives under the view transform. */}
         <g transform={`translate(${view.x}, ${view.y}) scale(${view.k})`}>
-          {/* Orbit rings */}
-          {layout.orbits.map((r, i) => (
-            <circle
-              key={i}
-              cx={layout.center.x}
-              cy={layout.center.y}
-              r={r}
-              fill="none"
-              stroke="var(--orbit-ring)"
-              strokeDasharray="4 7"
-              strokeWidth={1.5}
-              opacity={0.9}
-            />
-          ))}
+          <defs>
+            <radialGradient id="planet-swirl" cx="35%" cy="30%" r="80%">
+              <stop offset="0%" stopColor="var(--planet-glow)" stopOpacity="0.9" />
+              <stop offset="100%" stopColor="var(--color-bg)" stopOpacity="0" />
+            </radialGradient>
+          </defs>
 
-          {/* Central body (the "planet") */}
-          <g>
-            <circle
-              cx={layout.center.x}
-              cy={layout.center.y}
-              r={80}
-              fill="var(--color-surface-2)"
-              stroke="var(--color-border-strong)"
-              strokeWidth={1.5}
-            />
-            <circle
-              cx={layout.center.x}
-              cy={layout.center.y}
-              r={80}
-              fill="url(#planet-swirl)"
-              opacity={0.35}
-            />
-            <defs>
-              <radialGradient id="planet-swirl" cx="35%" cy="30%" r="80%">
-                <stop offset="0%" stopColor="var(--planet-glow)" stopOpacity="0.9" />
-                <stop offset="100%" stopColor="var(--color-bg)" stopOpacity="0" />
-              </radialGradient>
-            </defs>
-          </g>
+          {/* The centre is a neutral mark: no work ever sits on it. */}
+          <circle
+            cx={scene.centre.x}
+            cy={scene.centre.y}
+            r={CENTRE_RADIUS}
+            fill="none"
+            stroke="var(--color-border)"
+            strokeDasharray="2 8"
+            strokeWidth={1.5}
+            aria-hidden="true"
+          />
 
-          {/* Satellites. The whole constellation turns as one rigid body, but
-              each satellite is only carried along its ring: no satellite ever
-              turns about its own centre, so icons and labels stay upright. */}
-          <g>
-            {layout.slots.map((slot) => {
-              const { item } = slot;
-              const isSelected = sameItem(item, selected);
-              const at = positionAt(slot, layout.center, rotation.current);
-              return (
+          {/* One body per place, with that place's work around it. Each body
+              turns its own satellites: a satellite is only carried along its
+              ring, so icons and labels stay upright. */}
+          {scene.bodies.map((body) => {
+            const isSelectedPlace = body.place.id === selectedPlaceId;
+            return (
+              <g key={body.place.id}>
+                {body.orbits.map((r, i) => (
+                  <circle
+                    key={i}
+                    cx={body.centre.x}
+                    cy={body.centre.y}
+                    r={r}
+                    fill="none"
+                    stroke="var(--orbit-ring)"
+                    strokeDasharray="4 7"
+                    strokeWidth={1.5}
+                    opacity={0.9}
+                  />
+                ))}
+
                 <g
-                  key={itemKey(item)}
-                  ref={(el) => {
-                    const key = itemKey(item);
-                    if (el) satellites.current.set(key, el);
-                    else satellites.current.delete(key);
-                  }}
-                  className="satellite"
-                  data-selected={isSelected || undefined}
-                  transform={`translate(${at.x}, ${at.y})`}
+                  className="place"
+                  data-selected={isSelectedPlace || undefined}
+                  transform={`translate(${body.centre.x}, ${body.centre.y})`}
                   style={{ cursor: "pointer" }}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={placeName(body)}
                   onClick={() => {
-                    // Suppress the click that ends a pan gesture.
                     if (suppressClick.current) {
                       suppressClick.current = false;
                       return;
                     }
-                    onSelect(item);
+                    onSelectPlace(body.place);
                   }}
-                  tabIndex={0}
-                  role="button"
-                  aria-label={`${item.label}, ${STATUS_LABEL[item.status]}`}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      onSelect(item);
+                      onSelectPlace(body.place);
                     }
                   }}
                 >
-                  {/* Circular focus ring, shown only for keyboard focus. */}
                   <circle
-                    className="satellite-focus"
-                    r={35}
+                    className="place-focus"
+                    r={body.radius + 8}
                     fill="none"
                     stroke="var(--color-accent)"
                     strokeWidth={2}
                   />
                   <circle
-                    r={30}
-                    fill="var(--color-surface)"
+                    r={body.radius}
+                    fill="var(--color-surface-2)"
                     stroke={
-                      isSelected ? "var(--color-accent)" : "var(--color-border-strong)"
+                      isSelectedPlace
+                        ? "var(--color-accent)"
+                        : "var(--color-border-strong)"
                     }
-                    strokeWidth={isSelected ? 2 : 1.25}
+                    strokeWidth={isSelectedPlace ? 2.5 : 1.5}
                   />
-                  <g
-                    transform="translate(-12, -12)"
-                    color="var(--color-text)"
+                  <circle
+                    r={body.radius}
+                    fill="url(#planet-swirl)"
+                    opacity={0.35}
                     style={{ pointerEvents: "none" }}
+                  />
+                  {body.foldedCount > 0 && (
+                    <g
+                      transform={`translate(${body.radius * 0.75}, ${-body.radius * 0.75})`}
+                      style={{ pointerEvents: "none" }}
+                      aria-hidden="true"
+                    >
+                      <circle
+                        r={14}
+                        fill="var(--color-surface)"
+                        stroke="var(--color-border-strong)"
+                        strokeWidth={1.25}
+                      />
+                      <text
+                        y={4}
+                        textAnchor="middle"
+                        fill="var(--color-text-muted)"
+                        style={{ fontFamily: "var(--font-sans)", fontSize: 11 }}
+                      >
+                        {`+${body.foldedCount}`}
+                      </text>
+                    </g>
+                  )}
+                  <text
+                    y={body.radius + 20}
+                    textAnchor="middle"
+                    fill="var(--color-text)"
+                    style={{
+                      fontFamily: "var(--font-sans)",
+                      fontSize: 13,
+                      pointerEvents: "none",
+                    }}
                   >
-                    <Icon name={item.icon} size={24} />
-                  </g>
-                  <g transform="translate(0, 52)" style={{ pointerEvents: "none" }}>
-                    <circle
-                      cx={-6}
-                      cy={-4}
-                      r={4}
-                      fill="none"
-                      stroke={STATUS_VAR[item.status]}
-                      strokeWidth={1.5}
-                    />
-                    <text
-                      x={2}
-                      y={0}
-                      fill="var(--color-text-muted)"
-                      style={{
-                        fontFamily: "var(--font-sans)",
-                        fontSize: 11,
+                    {body.place.label}
+                  </text>
+                </g>
+
+                {body.slots.map((slot) => {
+                  const { item } = slot;
+                  const isSelected = sameItem(item, selected);
+                  const at = positionAt(slot, body.centre, rotation.current);
+                  return (
+                    <g
+                      key={itemKey(item)}
+                      ref={(el) => {
+                        const key = itemKey(item);
+                        if (el) satellites.current.set(key, el);
+                        else satellites.current.delete(key);
+                      }}
+                      className="satellite"
+                      data-selected={isSelected || undefined}
+                      transform={`translate(${at.x}, ${at.y})`}
+                      style={{ cursor: "pointer" }}
+                      onClick={() => {
+                        // Suppress the click that ends a pan gesture.
+                        if (suppressClick.current) {
+                          suppressClick.current = false;
+                          return;
+                        }
+                        onSelect(item);
+                      }}
+                      tabIndex={0}
+                      role="button"
+                      aria-label={`${item.label}, ${STATUS_LABEL[item.status]}`}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onSelect(item);
+                        }
                       }}
                     >
-                      {STATUS_LABEL[item.status]}
-                    </text>
-                  </g>
-                </g>
-              );
-            })}
-          </g>
+                      {/* Circular focus ring, shown only for keyboard focus. */}
+                      <circle
+                        className="satellite-focus"
+                        r={35}
+                        fill="none"
+                        stroke="var(--color-accent)"
+                        strokeWidth={2}
+                      />
+                      <circle
+                        r={30}
+                        fill="var(--color-surface)"
+                        stroke={
+                          isSelected
+                            ? "var(--color-accent)"
+                            : "var(--color-border-strong)"
+                        }
+                        strokeWidth={isSelected ? 2 : 1.25}
+                      />
+                      <g
+                        transform="translate(-12, -12)"
+                        color="var(--color-text)"
+                        style={{ pointerEvents: "none" }}
+                      >
+                        <Icon name={item.icon} size={24} />
+                      </g>
+                      <g transform="translate(0, 52)" style={{ pointerEvents: "none" }}>
+                        <circle
+                          cx={-6}
+                          cy={-4}
+                          r={4}
+                          fill="none"
+                          stroke={STATUS_VAR[item.status]}
+                          strokeWidth={1.5}
+                        />
+                        <text
+                          x={2}
+                          y={0}
+                          fill="var(--color-text-muted)"
+                          style={{
+                            fontFamily: "var(--font-sans)",
+                            fontSize: 11,
+                          }}
+                        >
+                          {STATUS_LABEL[item.status]}
+                        </text>
+                      </g>
+                    </g>
+                  );
+                })}
+              </g>
+            );
+          })}
         </g>
       </svg>
 
@@ -429,6 +553,31 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
             +
           </button>
         </div>
+        <button
+          aria-label={
+            collapseAll ? "Show the places again" : "Collapse every place"
+          }
+          aria-pressed={collapseAll}
+          title={
+            collapseAll
+              ? "Show the places again"
+              : "Fold every place into the place that holds it"
+          }
+          onClick={() => setCollapseAll((on) => !on)}
+          style={{
+            height: 32,
+            padding: "0 12px",
+            borderRadius: 999,
+            border: "1px solid var(--color-border)",
+            background: collapseAll
+              ? "var(--color-surface-2)"
+              : "var(--color-surface)",
+            color: "var(--color-text-muted)",
+            fontSize: "var(--font-size-sm)",
+          }}
+        >
+          {collapseAll ? "Places folded" : "Collapse all"}
+        </button>
         <button
           aria-label="Recenter"
           onClick={() => setView(IDENTITY)}

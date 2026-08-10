@@ -106,3 +106,18 @@ export function registryOf(published: Place[]): PlaceRegistry {
     ancestryOf: (id) => ancestries.get(id) ?? [],
   };
 }
+
+/**
+ * The work of a place: what runs there and what runs in every place under it.
+ * A worktree's work is the repository's work too, which is what makes "how much
+ * is running in repository X" answerable.
+ */
+export function workIn<T extends { placeId: string }>(
+  work: T[],
+  registry: PlaceRegistry,
+  placeId: string,
+): T[] {
+  return work.filter((item) =>
+    registry.ancestryOf(item.placeId).some((place) => place.id === placeId),
+  );
+}

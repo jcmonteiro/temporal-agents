@@ -5,13 +5,28 @@ import {
   type WorkItem,
   type WorkItemStatus,
 } from "../domain/work-item";
+import type { Place } from "../domain/place";
 import { upNextKey, type UpNextEntry } from "../domain/up-next";
 import { temporalUrlFor } from "../config/temporal";
 import { Icon } from "./Icon";
 import { StatusDot } from "./StatusDot";
 
+/**
+ * What the rail details: one work item, or one place with the work it holds.
+ * A place counts the work of every place under it, so a repository answers
+ * "how much is running here" for its worktrees too.
+ */
+export type Selected =
+  | { type: "item"; item: WorkItem }
+  | {
+      type: "place";
+      place: Place;
+      counts: Record<WorkItemStatus, number>;
+      children: Place[];
+    };
+
 interface Props {
-  selected: WorkItem | null;
+  selected: Selected | null;
   upNext: UpNextEntry[];
   counts: Record<WorkItemStatus, number>;
   // The statuses currently shown. Empty means "show all".
@@ -255,8 +270,89 @@ function SelectedItem({ item }: { item: WorkItem }): ReactNode {
 function SelectedEmpty(): ReactNode {
   return (
     <div style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-subtle)" }}>
-      Select a satellite to see its details.
+      Select a satellite or a place to see its details.
     </div>
+  );
+}
+
+/** What is known about a place: what it is, what runs there, and what is under it. */
+function SelectedPlace({
+  place,
+  counts,
+  placesHere,
+}: {
+  place: Place;
+  counts: Record<WorkItemStatus, number>;
+  placesHere: Place[];
+}): ReactNode {
+  const total = STATUS_ORDER.reduce((sum, status) => sum + counts[status], 0);
+  const held = STATUS_ORDER.filter((status) => counts[status] > 0);
+  return (
+    <>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ fontSize: "var(--font-size-md)", fontWeight: 600 }}>
+          {place.label}
+        </div>
+        <div
+          style={{
+            fontSize: "var(--font-size-sm)",
+            color: "var(--color-text-muted)",
+          }}
+        >
+          {place.directory ?? place.ref ?? "Where this work ran was not recorded"}
+        </div>
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "auto 1fr",
+          columnGap: 12,
+          rowGap: 6,
+          fontSize: "var(--font-size-sm)",
+          color: "var(--color-text-muted)",
+        }}
+      >
+        <span>Work:</span>
+        <span style={{ color: "var(--color-text)" }}>{total}</span>
+        {held.map((status) => (
+          <span key={status} style={{ display: "contents" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <StatusDot status={status} size={8} />
+              {STATUS_LABEL[status]}:
+            </span>
+            <span style={{ color: "var(--color-text)" }}>{counts[status]}</span>
+          </span>
+        ))}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <div
+          style={{
+            fontSize: "var(--font-size-xs)",
+            letterSpacing: "0.08em",
+            color: "var(--color-text-subtle)",
+            textTransform: "uppercase",
+          }}
+        >
+          Places here
+        </div>
+        {placesHere.length === 0 ? (
+          <span
+            style={{
+              fontSize: "var(--font-size-sm)",
+              color: "var(--color-text-subtle)",
+            }}
+          >
+            None
+          </span>
+        ) : (
+          placesHere.map((child) => (
+            <span key={child.id} style={{ fontSize: "var(--font-size-sm)" }}>
+              {child.label}
+            </span>
+          ))
+        )}
+      </div>
+    </>
   );
 }
 
@@ -344,7 +440,15 @@ export function RightRail({
         />
       </Section>
       <Section title="Selected">
-        {selected ? <SelectedItem item={selected} /> : <SelectedEmpty />}
+        {selected === null && <SelectedEmpty />}
+        {selected?.type === "item" && <SelectedItem item={selected.item} />}
+        {selected?.type === "place" && (
+          <SelectedPlace
+            place={selected.place}
+            counts={selected.counts}
+            placesHere={selected.children}
+          />
+        )}
       </Section>
       <Section title="Up Next">
         <UpNext items={upNext} />

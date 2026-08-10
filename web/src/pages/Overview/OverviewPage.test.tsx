@@ -2,7 +2,15 @@
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { fireEvent } from "@testing-library/dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { aFleet, aNode, aRun, aSchedule, FakeApi } from "../../test/fake-api";
+import {
+  aDirectoryPlace,
+  aFleet,
+  aNode,
+  aRun,
+  aSchedule,
+  FakeApi,
+  theUnknownPlace,
+} from "../../test/fake-api";
 import { OverviewPage } from "./OverviewPage";
 
 const REFRESH_INTERVAL_MS = 5_000;
@@ -48,10 +56,16 @@ async function tick(ms = 0): Promise<void> {
 
 /** The orbit exposes each satellite as a button named "<label>, <status>". */
 function satelliteNames(): string[] {
-  return screen
-    .getAllByRole("button")
-    .map((b) => b.getAttribute("aria-label"))
-    .filter((name): name is string => name !== null && name.includes(","));
+  return Array.from(document.querySelectorAll(".satellite")).map(
+    (satellite) => satellite.getAttribute("aria-label") ?? "",
+  );
+}
+
+/** The places the canvas draws, as the operator hears them named. */
+function placeNames(): string[] {
+  return Array.from(document.querySelectorAll(".place")).map(
+    (place) => place.getAttribute("aria-label") ?? "",
+  );
 }
 
 function railSection(title: string): HTMLElement {
@@ -169,7 +183,7 @@ describe("the Overview", () => {
 
     expect(
       within(railSection("Selected")).getByText(
-        "Select a satellite to see its details.",
+        "Select a satellite or a place to see its details.",
       ),
     ).toBeTruthy();
   });
@@ -182,5 +196,95 @@ describe("the Overview", () => {
     fireEvent.click(screen.getByTitle("Filter by Done"));
 
     expect(satelliteNames()).toEqual(["Fix the flaky test, Done"]);
+  });
+});
+
+describe("the places on the Overview", () => {
+  // A repository with one worktree, and the place nothing is known about.
+  beforeEach(() => {
+    api.locations = [
+      theUnknownPlace(),
+      aDirectoryPlace({ id: "repo", label: "checkout", directory: "/srv/checkout" }),
+      aDirectoryPlace({
+        id: "tree",
+        label: "feature",
+        parentId: "repo",
+        directory: "/srv/feature",
+      }),
+    ];
+  });
+
+  it("groups the work into the places the API published", async () => {
+    api.runs = [
+      aRun({ id: "run-1", label: "In the checkout", locationId: "repo" }),
+      aRun({ id: "run-2", label: "In the worktree", locationId: "tree" }),
+    ];
+
+    await showOverview();
+
+    expect(placeNames()).toEqual([
+      "Unknown, place, 0 items",
+      "checkout, place, 1 item",
+      "feature, place, 1 item",
+    ]);
+  });
+
+  it("folds the worktrees into their repository on request", async () => {
+    api.runs = [
+      aRun({ id: "run-1", locationId: "repo" }),
+      aRun({ id: "run-2", locationId: "tree" }),
+    ];
+    await showOverview();
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse every place" }));
+
+    expect(placeNames()).toEqual([
+      "Unknown, place, 0 items",
+      "checkout, place, 2 items, 1 place folded in",
+    ]);
+  });
+
+  it("details the place the operator picks, with its work and what is under it", async () => {
+    api.runs = [
+      aRun({ id: "run-1", status: "done", locationId: "repo" }),
+      aRun({ id: "run-2", status: "in-progress", locationId: "tree" }),
+    ];
+    await showOverview();
+
+    fireEvent.click(screen.getByRole("button", { name: "checkout, place, 1 item" }));
+
+    const selected = railSection("Selected");
+    expect(within(selected).getByText("checkout")).toBeTruthy();
+    expect(within(selected).getByText("/srv/checkout")).toBeTruthy();
+    // The place answers for the work under it too: one done here, one running
+    // in its worktree.
+    expect(within(selected).getByText("Done:")).toBeTruthy();
+    expect(within(selected).getByText("In Progress:")).toBeTruthy();
+    expect(within(selected).getByText("feature")).toBeTruthy();
+  });
+
+  it("drops the place when the operator picks a satellite", async () => {
+    api.runs = [aRun({ id: "run-1", label: "Fix the flaky test", locationId: "repo" })];
+    await showOverview();
+    fireEvent.click(screen.getByRole("button", { name: "checkout, place, 1 item" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Fix the flaky test, Done" }));
+
+    const selected = railSection("Selected");
+    expect(within(selected).getByText("Fix the flaky test")).toBeTruthy();
+    expect(within(selected).queryByText("/srv/checkout")).toBeNull();
+  });
+
+  it("keeps the places it draws across a refresh", async () => {
+    api.runs = [aRun({ id: "run-1", locationId: "tree" })];
+    await showOverviewOnAFakeClock();
+    const before = placeNames();
+
+    api.runs = [...api.runs, aRun({ id: "run-2", locationId: "tree" })];
+    await tick(REFRESH_INTERVAL_MS);
+
+    expect(placeNames().map((name) => name.split(",")[0])).toEqual(
+      before.map((name) => name.split(",")[0]),
+    );
   });
 });

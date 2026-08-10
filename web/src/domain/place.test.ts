@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { registryOf, type Place } from "./place";
+import { registryOf, workIn, type Place } from "./place";
 
 function aPlace(overrides: Partial<Place> = {}): Place {
   return {
@@ -96,5 +96,30 @@ describe("the place registry", () => {
     ]);
 
     expect(registry.ancestryOf("a").map((p) => p.id)).toEqual(["b", "a"]);
+  });
+});
+
+describe("the work of a place", () => {
+  const registry = registryOf([
+    aPlace({ id: "unknown", kind: "unknown", label: "Unknown" }),
+    aPlace({ id: "repo" }),
+    aPlace({ id: "tree", parentId: "repo" }),
+  ]);
+  const work = [
+    { id: "a", placeId: "repo" },
+    { id: "b", placeId: "tree" },
+    { id: "c", placeId: "unknown" },
+  ];
+
+  it("counts what runs in the place itself and in every place under it", () => {
+    expect(workIn(work, registry, "repo").map((w) => w.id)).toEqual(["a", "b"]);
+  });
+
+  it("holds no work of a place beside it", () => {
+    expect(workIn(work, registry, "tree").map((w) => w.id)).toEqual(["b"]);
+  });
+
+  it("is empty for a place nothing runs in", () => {
+    expect(workIn(work, registry, "gone")).toEqual([]);
   });
 });
