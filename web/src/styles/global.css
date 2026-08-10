@@ -1,0 +1,67 @@
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-md);
+  color: var(--color-text);
+  background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+/* Satellites are focusable <g> elements. Suppress the browser's default
+   rectangular focus box and show a circular ring only for keyboard focus. */
+.satellite {
+  outline: none;
+}
+
+.satellite-focus {
+  opacity: 0;
+}
+
+.satellite:focus-visible .satellite-focus {
+  opacity: 1;
+}
+
+/* The selected satellite already shows its accent selection ring, so the
+   keyboard focus ring would only double it up. Suppress it while selected. */
+.satellite[data-selected] .satellite-focus {
+  opacity: 0;
+}
+
+/* Shared orbital motion. The whole constellation turns as one rigid body: the
+   rotor spins around the orbit centre, and each satellite's content spins back
+   at the same rate so icons and labels stay upright. Both run as CSS
+   animations, so no React render happens per frame; pausing is a matter of
+   animation-play-state and holds the current position. */
+@keyframes orbit-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes orbit-spin-back {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(-360deg); }
+}
+
+.orbit-rotor {
+  animation: orbit-spin var(--orbit-period) linear infinite;
+}
+
+.satellite-upright {
+  /* Rotate about the satellite's own origin, not the SVG view box centre. */
+  transform-origin: 0px 0px;
+  animation: orbit-spin-back var(--orbit-period) linear infinite;
+}

@@ -1,0 +1,56 @@
+# Type-check and build the frontend so TypeScript/Vite failures cannot merge.
+# See: web/package.json ("build" runs `tsc --build && vite build`).
+
+name: Web
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+# Cancel superseded runs on the same ref (e.g. new pushes to a PR).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: web
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Single source of truth for the pnpm version: package.json's
+      # "packageManager" field. The path is explicit because
+      # defaults.run.working-directory applies to run steps only, not to
+      # actions, and the repository root holds no package.json.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      # --frozen-lockfile fails when pnpm-lock.yaml and package.json disagree,
+      # so CI always builds the locked dependency set.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build

@@ -945,3 +945,101 @@ func sortedKeys(document map[string]any) []string {
 	sort.Strings(keys)
 	return keys
 }
+
+// TestOverviewResourcesKeepTheFieldNamesTheWebClientReads pins the wire names the
+// frontend depends on. web/src/clients/api.ts is a hand-written copy of these
+// resources, so a rename here silently empties the Overview: the frontend's own
+// tests use fixtures written from the same assumption and cannot see the drift.
+// The lists below are exactly what web/src/clients/mapping.ts reads.
+func TestOverviewResourcesKeepTheFieldNamesTheWebClientReads(t *testing.T) {
+	view := &viewStub{
+		fleets: []agenthub.Fleet{{
+			ID: "fleet-1", Goal: "Expose pricing", Status: agenthub.StatusInProgress,
+			Progress: agenthub.Progress{Done: 1, Total: 3}, StartedAt: fixedNow,
+			Nodes: []agenthub.FleetNode{{ID: "api", Status: agenthub.StatusTodo}},
+		}},
+		runs: []agenthub.Run{{
+			ID: "run-1", Type: agenthub.RunTypePrompt, Label: "Daily digest",
+			Status: agenthub.StatusDone, StartedAt: fixedNow, EndedAt: fixedNow, Iterations: 3,
+		}},
+		schedules: []agenthub.Schedule{{
+			ID: "schedule-1", Label: "Post digest", Spec: "0 9 * * *",
+			Status: agenthub.StatusPaused, Paused: true,
+		}},
+	}
+	server := newTestServer(t, view)
+
+	for _, resource := range []struct {
+		path      string
+		itemKeys  []string
+		nestedKey string
+		nested    []string
+	}{
+		{
+			path:      "/fleets",
+			itemKeys:  []string{"id", "kind", "label", "status", "progress", "dismissible", "upNext"},
+			nestedKey: "progress",
+			nested:    []string{"done", "total", "fraction"},
+		},
+		{
+			path:     "/runs",
+			itemKeys: []string{"id", "kind", "type", "label", "status", "iterations", "dismissible"},
+		},
+		{
+			path:     "/schedules",
+			itemKeys: []string{"id", "kind", "label", "spec", "status", "paused", "dismissible"},
+		},
+	} {
+		response := request(t, server, http.MethodGet, BasePath+resource.path, nil)
+		var document map[string]any
+		decodeResponse(t, response, &document)
+
+		for _, key := range []string{"items", "count", "limit"} {
+			if _, ok := document[key]; !ok {
+				t.Errorf("%s: collection has no %q", resource.path, key)
+			}
+		}
+		items, ok := document["items"].([]any)
+		if !ok || len(items) != 1 {
+			t.Fatalf("%s: items = %v, want one item", resource.path, document["items"])
+		}
+		item, ok := items[0].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: item is not an object: %v", resource.path, items[0])
+		}
+		for _, key := range resource.itemKeys {
+			if _, ok := item[key]; !ok {
+				t.Errorf("%s: item has no %q, which the web client reads", resource.path, key)
+			}
+		}
+		if resource.nestedKey == "" {
+			continue
+		}
+		nested, ok := item[resource.nestedKey].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: %q is not an object", resource.path, resource.nestedKey)
+		}
+		for _, key := range resource.nested {
+			if _, ok := nested[key]; !ok {
+				t.Errorf("%s: %s has no %q", resource.path, resource.nestedKey, key)
+			}
+		}
+	}
+
+	// The up-next entries the rail lists carry their own identity and status.
+	response := request(t, server, http.MethodGet, BasePath+"/fleets", nil)
+	var document struct {
+		Items []struct {
+			UpNext []map[string]any `json:"upNext"`
+		} `json:"items"`
+	}
+	decodeResponse(t, response, &document)
+	if len(document.Items) != 1 || len(document.Items[0].UpNext) == 0 {
+		t.Fatalf("upNext = %v, want the nodes that have not started", document.Items)
+	}
+	for _, key := range []string{"id", "label", "status"} {
+		if _, ok := document.Items[0].UpNext[0][key]; !ok {
+			t.Errorf("up-next node has no %q, which the web client reads", key)
+		}
+	}
+}
