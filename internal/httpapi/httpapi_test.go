@@ -751,8 +751,12 @@ func TestTheSpecificationAndSchemasAreDiscoverable(t *testing.T) {
 
 // TestEveryServedRouteIsSpecified pins that implementation and contract move as one:
 // no resource can be added to either side without adding it to the other.
+//
+// The server is wired with a sign-in service, because the specification describes
+// the whole contract: a deployment that configures no identity provider serves fewer
+// routes than it documents, which is a deployment decision and not a drift.
 func TestEveryServedRouteIsSpecified(t *testing.T) {
-	server := newTestServer(t, &viewStub{})
+	server, _ := newAuthenticatedServer(t, &stubProvider{principal: theOperator})
 	paths, ok := server.spec.document["paths"].(map[string]any)
 	if !ok {
 		t.Fatal("specification paths are missing")
@@ -789,9 +793,10 @@ func TestEveryServedRouteIsSpecified(t *testing.T) {
 	}
 }
 
-// TestTheSpecificationModelsDeploymentDependentBearerAuthentication pins that
-// generated clients know how to authenticate when the same API is remotely exposed.
-func TestTheSpecificationModelsDeploymentDependentBearerAuthentication(t *testing.T) {
+// TestTheSpecificationModelsBothCredentialKinds pins that a generated client knows
+// how to authenticate whichever it is: a script with the configured token, a browser
+// with the session it receives after signing in.
+func TestTheSpecificationModelsBothCredentialKinds(t *testing.T) {
 	server := newTestServer(t, &viewStub{})
 	components := server.spec.document["components"].(map[string]any)
 	securitySchemes := components["securitySchemes"].(map[string]any)
@@ -799,12 +804,21 @@ func TestTheSpecificationModelsDeploymentDependentBearerAuthentication(t *testin
 	if bearer["type"] != "http" || bearer["scheme"] != "bearer" {
 		t.Fatalf("bearerAuth = %+v, want an HTTP bearer scheme", bearer)
 	}
+	session := securitySchemes["sessionCookie"].(map[string]any)
+	if session["type"] != "apiKey" || session["in"] != "cookie" || session["name"] != sessionCookieName {
+		t.Fatalf("sessionCookie = %+v, want the session cookie this API sets", session)
+	}
 	security := server.spec.document["security"].([]any)
-	if len(security) != 2 {
-		t.Fatalf("security = %+v, want anonymous loopback or bearer authentication", security)
+	if len(security) != 3 {
+		t.Fatalf("security = %+v, want anonymous loopback, the bearer token, or a session", security)
 	}
 	paths := server.spec.document["paths"].(map[string]any)
 	for path, rawPath := range paths {
+		if handsOutACredential(path) {
+			// A route whose purpose is to hand out a credential cannot answer 401: being
+			// unauthenticated is the normal way to arrive at it.
+			continue
+		}
 		for method, rawOperation := range rawPath.(map[string]any) {
 			if method == "parameters" {
 				continue
@@ -815,6 +829,11 @@ func TestTheSpecificationModelsDeploymentDependentBearerAuthentication(t *testin
 			}
 		}
 	}
+}
+
+// handsOutACredential reports the two routes a browser reaches before it has one.
+func handsOutACredential(path string) bool {
+	return path == BasePath+"/auth/sign-in" || path == BasePath+"/auth/callback"
 }
 
 // TestTheSpecificationUsesTheCoreVocabularies pins the data model to the contract:

@@ -32,6 +32,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"temporal-agents/internal/agenthub"
+	"temporal-agents/internal/identity"
 )
 
 // BasePath is where the API lives. The major version is in the path on purpose: a
@@ -119,8 +120,21 @@ type Options struct {
 	// is rejected.
 	AllowedOrigins []string
 	// AuthToken, when set, requires an Authorization: Bearer header with this value.
-	// The composition root requires it whenever the listener is not loopback.
+	// The composition root requires it whenever the listener is not loopback. It is a
+	// convenience for the one credential that needs no ports: the server turns it into
+	// the static-token authenticator and puts it behind the same seam as a session.
 	AuthToken string
+	// Authenticator resolves a request's credential to a principal. The composition
+	// root supplies it when the deployment can sign a browser in; it is chained with
+	// the static token above, so the transport asks one port whatever is configured.
+	Authenticator identity.Authenticator
+	// SignIn is the browser's side of authentication. It is nil for a deployment with
+	// no identity provider, which then publishes no sign-in routes.
+	SignIn SignIn
+	// SecureCookies marks the cookies this API sets as Secure, so a credential issued
+	// over TLS never travels in the clear. The composition root sets it when the
+	// listener serves TLS.
+	SecureCookies bool
 	// WebDir, when set, is a directory of built static assets served outside the API's
 	// path, for local convenience. The API itself never depends on it: the same bundle
 	// can be served by anything else without the API changing.
@@ -145,9 +159,12 @@ type Server struct {
 	timeout         time.Duration
 	maxBodyBytes    int64
 	limiter         *rate.Limiter
+	signInLimiter   *rate.Limiter
 	allowedHosts    map[string]struct{}
 	allowedOrigins  map[string]bool
-	authToken       string
+	authenticator   identity.Authenticator
+	signIn          SignIn
+	secureCookies   bool
 	webDir          string
 	healthChecks    []HealthCheck
 	deprecatedSince time.Time
@@ -181,7 +198,8 @@ func New(view WorkView, options Options) (*Server, error) {
 			"::1":       {},
 		},
 		allowedOrigins:  map[string]bool{},
-		authToken:       options.AuthToken,
+		signIn:          options.SignIn,
+		secureCookies:   options.SecureCookies,
 		webDir:          options.WebDir,
 		healthChecks:    options.HealthChecks,
 		deprecatedSince: options.DeprecatedSince,
@@ -207,6 +225,12 @@ func New(view WorkView, options Options) (*Server, error) {
 		perSecond, burst = DefaultRequestsPerSecond, DefaultBurst
 	}
 	s.limiter = newLimiter(perSecond, burst)
+	s.signInLimiter = newSignInLimiter(s.limiter)
+	authenticator, err := newAuthenticator(options)
+	if err != nil {
+		return nil, err
+	}
+	s.authenticator = authenticator
 	for _, host := range options.AllowedHosts {
 		if canonical := canonicalHost(host); canonical != "" {
 			s.allowedHosts[canonical] = struct{}{}
@@ -269,7 +293,7 @@ func (s *Server) resources() []resource {
 			undocumented: true,
 		},
 	}
-	return list
+	return append(list, s.authRoutes()...)
 }
 
 // buildHandler wires the routing table and the middleware chain. The order is

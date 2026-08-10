@@ -20,6 +20,9 @@
     {},
     {
       "bearerAuth": []
+    },
+    {
+      "sessionCookie": []
     }
   ],
   "tags": [
@@ -46,6 +49,10 @@
     {
       "name": "Active Work",
       "description": "A bounded paged projection of unsettled top-level executions and configured schedules."
+    },
+    {
+      "name": "Authentication",
+      "description": "Signing in with the identity provider, and the session that results. Identity only: this API has no roles and no scopes."
     }
   ],
   "paths": {
@@ -785,6 +792,193 @@
           }
         }
       }
+    },
+    "/api/v1/auth/sign-in": {
+      "get": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Start a sign-in",
+        "description": "Redirects the browser to the identity provider. The values that bind the callback to this browser are minted and kept server-side; the browser receives one short-lived, script-inaccessible cookie and learns nothing else.",
+        "operationId": "startSignIn",
+        "parameters": [
+          {
+            "name": "return",
+            "in": "query",
+            "required": false,
+            "description": "Where to send the browser once it is signed in. Only a path inside this application is honoured; anything else is replaced by /.",
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "The browser is redirected to the identity provider.",
+            "headers": {
+              "Location": {
+                "description": "The provider's authorization endpoint.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/callback": {
+      "get": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Complete a sign-in",
+        "description": "Where the identity provider sends the browser back to. The code is exchanged server-side; the resulting session cookie is all the browser receives. A callback can be completed exactly once.",
+        "operationId": "completeSignIn",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "description": "The authorization code the provider issued.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "description": "The value this server handed the provider, echoed back unchanged.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "required": false,
+            "description": "What the provider reported instead of a code, when it refused.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "The browser is signed in and redirected to where it was going.",
+            "headers": {
+              "Location": {
+                "description": "A path inside this application.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Set-Cookie": {
+                "description": "The session cookie.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/SignInFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/session": {
+      "get": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Read the current identity",
+        "description": "Answers who the request was made by. It describes the principal and never the credential.",
+        "operationId": "getSession",
+        "responses": {
+          "200": {
+            "description": "The identity behind this request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Sign out",
+        "description": "Ends the session immediately and clears the cookie. It answers the same way whether or not there was a session to end. DELETE is deliberate: a non-simple method cannot be sent cross-origin without a preflight, so no other page can sign this browser out.",
+        "operationId": "signOut",
+        "responses": {
+          "204": {
+            "description": "The browser is signed out.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "The cleared session cookie.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -975,6 +1169,16 @@
             }
           }
         },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "SignInFailed": {
+        "description": "The callback does not belong to a sign-in this server started for this browser, has been used already, expired, or was refused by the provider.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -1921,6 +2125,52 @@
             "description": "Optional here, for the same reason locationId is."
           }
         }
+      },
+      "Principal": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Who a request was made by. Identity is issuer plus subject; the name and the address are display fields and must never be used as identity.",
+        "required": [
+          "id",
+          "issuer",
+          "subject",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The stable identity, issuer and subject combined, as an attributed fact records it."
+          },
+          "issuer": {
+            "type": "string",
+            "description": "Who vouches for the subject: the identity provider's issuer identifier, or urn:temporal-agents:static-token for the configured automation token."
+          },
+          "subject": {
+            "type": "string",
+            "description": "The identifier the issuer uses for this principal, stable across sign-ins."
+          },
+          "name": {
+            "type": "string",
+            "description": "The best name available to show a human. Never empty: it falls back to the address and then to the subject."
+          },
+          "email": {
+            "type": "string",
+            "description": "The address the provider disclosed, when it disclosed one."
+          }
+        }
+      },
+      "Session": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "The identity behind the current request. It describes the principal and never the credential.",
+        "required": [
+          "principal"
+        ],
+        "properties": {
+          "principal": {
+            "$ref": "#/components/schemas/Principal"
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -1929,6 +2179,12 @@
         "scheme": "bearer",
         "bearerFormat": "opaque token",
         "description": "Optional on a loopback-only deployment. Required on every request when the API is reachable from another host."
+      },
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "agent_hub_session",
+        "description": "The session a browser receives after signing in with the identity provider. It is set by the callback endpoint, is script-inaccessible, and carries no provider token: the API is the confidential client and holds those server-side."
       }
     }
   }

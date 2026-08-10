@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -143,24 +142,6 @@ func (s *Server) requireHost(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, allowed := s.allowedHosts[canonicalHost(r.Host)]; !allowed {
 			http.Error(w, "invalid host", http.StatusForbidden)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// authenticate requires the configured bearer token. Preflight requests carry no
-// credentials, so CORS handles them before this middleware reaches an API resource.
-func (s *Server) authenticate(next http.Handler) http.Handler {
-	if s.authToken == "" {
-		return next
-	}
-	want := sha256.Sum256([]byte("Bearer " + s.authToken))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got := sha256.Sum256([]byte(r.Header.Get("Authorization")))
-		if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="agent-hub"`)
-			s.writeProblem(w, r, codeAuthenticationRequired, "provide the configured bearer token")
 			return
 		}
 		next.ServeHTTP(w, r)

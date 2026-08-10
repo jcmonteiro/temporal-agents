@@ -40,8 +40,13 @@ const (
 	codeRequestTooLarge problemCode = "request-too-large"
 	// codeNotDismissible is a dismissal asked for work that has not finished.
 	codeNotDismissible problemCode = "not-dismissible"
-	// codeAuthenticationRequired is a request without the configured bearer token.
+	// codeAuthenticationRequired is a request that carries no credential this hub
+	// accepts: no session, and no configured token.
 	codeAuthenticationRequired problemCode = "authentication-required"
+	// codeSignInFailed is a callback from the identity provider that cannot be
+	// completed: it is bound to no sign-in this server started, it has been used
+	// already, it expired, or the provider refused it.
+	codeSignInFailed problemCode = "sign-in-failed"
 	// codeTooManyRequests is a caller going faster than the server accepts.
 	codeTooManyRequests problemCode = "too-many-requests"
 	// codeDependencyUnavailable is a dependency of the read path being unreachable:
@@ -114,8 +119,18 @@ var problemTypes = map[problemCode]problemType{
 	codeAuthenticationRequired: {
 		Title:  "Authentication is required",
 		Status: http.StatusUnauthorized,
-		Description: "This deployment requires an HTTP bearer token. Send the configured token " +
-			"in the Authorization header. A missing or incorrect token receives the same response.",
+		Description: "The request carries no credential this deployment accepts. A person signs " +
+			"in with the identity provider (follow the Link header with rel=\"authenticate\"); a " +
+			"script sends the configured token in the Authorization header. A missing, expired, " +
+			"ended and incorrect credential all receive this same response.",
+	},
+	codeSignInFailed: {
+		Title:  "The sign-in could not be completed",
+		Status: http.StatusBadRequest,
+		Description: "The callback from the identity provider does not belong to a sign-in this " +
+			"server started for this browser, has been used already, took too long, or was refused " +
+			"by the provider. Which of those it was is deliberately not disclosed. Start again at " +
+			"the sign-in endpoint.",
 	},
 	codeTooManyRequests: {
 		Title:  "Too many requests",

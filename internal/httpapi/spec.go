@@ -50,6 +50,7 @@ const (
 	modelDismissal            = "dismissal.v1"
 	modelDismissalCollection  = "dismissal-collection.v1"
 	modelDismissalRequest     = "dismissal-request.v1"
+	modelSession              = "session.v1"
 	modelProblem              = "problem.v1"
 	modelServiceDescription   = "service-description.v1"
 	modelHealth               = "health.v1"
@@ -69,6 +70,7 @@ var modelSchemas = map[string]string{
 	modelDismissal:            "Dismissal",
 	modelDismissalCollection:  "DismissalCollection",
 	modelDismissalRequest:     "DismissalRequest",
+	modelSession:              "Session",
 	modelProblem:              "Problem",
 	modelServiceDescription:   "ServiceDescription",
 	modelHealth:               "Health",
