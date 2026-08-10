@@ -10,6 +10,7 @@ import (
 	"temporal-agents/internal/notification"
 	"temporal-agents/internal/piagent"
 	"temporal-agents/internal/wfnotify"
+	"temporal-agents/internal/wfplace"
 	"temporal-agents/internal/wfrecord"
 )
 
@@ -53,6 +54,11 @@ func PromptWorkflow(ctx workflow.Context, req PromptRequest) (out string, err er
 	// Record the run as started before any work happens, so an execution that
 	// later fails, is cancelled, or is lost to a worker crash is still visible in
 	// the durable history.
+	//
+	// Where the run runs is established first, so the record carries it from its very
+	// first write and a running run is already in its place on the overview. The probe
+	// never fails the run: work whose place could not be established is shown as
+	// unknown (see wfplace.Probe).
 	id := wfrecord.Of(ctx)
 	rec := RunState{
 		WorkflowID:       id.WorkflowID,
@@ -63,6 +69,7 @@ func PromptWorkflow(ctx workflow.Context, req PromptRequest) (out string, err er
 		ScheduleID:       req.ScheduleID,
 		StartedAt:        workflow.Now(ctx),
 		Status:           execstore.StatusRunning,
+		Place:            wfplace.Probe(ctx, req.WorkDir),
 	}
 	if perr := persistRunState(ctx, rec); perr != nil {
 		return "", fmt.Errorf("record the run as started: %w", perr)

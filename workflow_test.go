@@ -14,6 +14,8 @@ import (
 	"temporal-agents/internal/execstore/execstoretest"
 	"temporal-agents/internal/notification"
 	"temporal-agents/internal/piagent"
+	"temporal-agents/internal/place"
+	"temporal-agents/internal/place/placetest"
 	"temporal-agents/internal/wftest"
 )
 
@@ -41,6 +43,9 @@ func newPromptEnvWithStore(t *testing.T, store *execstoretest.Store) *testsuite.
 	env.RegisterActivity(RunPiAgent)
 	env.RegisterActivity(&Activities{Store: store})
 	env.RegisterActivity(&notification.Activity{})
+	// The location probe is registered like any other driven adapter, so the tests
+	// exercise the real recording path: a run records the place its probe answered.
+	env.RegisterActivity(&place.Activity{Prober: placetest.New()})
 	return env
 }
 
@@ -104,6 +109,56 @@ func TestPromptWorkflow_Complete_RecordsStartAndTerminalState(t *testing.T) {
 	require.False(t, end.EndedAt.IsZero())
 	require.Equal(t, 12345, end.Tokens)
 	require.Empty(t, end.Detail.Error)
+}
+
+func TestPromptWorkflow_RecordsWhereTheRunRanFromTheFirstWrite(t *testing.T) {
+	// The place is established before the run is recorded as started, so a run is in
+	// its place on the overview while it is still running — not only once it settles.
+	store := execstoretest.New()
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestWorkflowEnvironment()
+	env.RegisterActivity(RunPiAgent)
+	env.RegisterActivity(&Activities{Store: store})
+	env.RegisterActivity(&notification.Activity{})
+	env.RegisterActivity(&place.Activity{
+		Prober: placetest.New().InWorktree("/srv/worktrees/fix", "/srv/repos/pricing"),
+	})
+	env.OnActivity(RunPiAgent, mock.Anything, mock.Anything).
+		Return(piagent.Result{Output: "output"}, nil)
+	var na *notification.Activity
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(PromptWorkflow,
+		PromptRequest{Prompt: "summarize", WorkDir: "/srv/worktrees/fix"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	start := store.Records()[0]
+	require.Equal(t, "/srv/worktrees/fix", start.Detail.Directory)
+	require.Equal(t, "/srv/repos/pricing", start.Detail.Repository)
+}
+
+func TestPromptWorkflow_AProbeThatCannotAnswerLeavesTheRunPlaceless(t *testing.T) {
+	// A place is bookkeeping. A run outside any repository still runs, still records
+	// itself, and is simply shown as being in the unknown place.
+	store := execstoretest.New()
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestWorkflowEnvironment()
+	env.RegisterActivity(RunPiAgent)
+	env.RegisterActivity(&Activities{Store: store})
+	env.RegisterActivity(&notification.Activity{})
+	env.RegisterActivity(&place.Activity{Prober: placetest.Failing(errors.New("git is not available"))})
+	env.OnActivity(RunPiAgent, mock.Anything, mock.Anything).
+		Return(piagent.Result{Output: "output"}, nil)
+	var na *notification.Activity
+	env.OnActivity(na.Notify, mock.Anything, mock.Anything).Return(nil)
+
+	env.ExecuteWorkflow(PromptWorkflow, PromptRequest{Prompt: "summarize", WorkDir: "/tmp/scratch"})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError(), "a failed probe must never fail the run it describes")
+	require.Len(t, store.Records(), 2)
+	require.Empty(t, store.Last(t).Detail.Directory)
 }
 
 func TestPromptWorkflow_RecordsOwnTokensNotTheChainTotal(t *testing.T) {

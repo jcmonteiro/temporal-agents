@@ -6,6 +6,7 @@ import (
 
 	"temporal-agents/internal/execstore"
 	"temporal-agents/internal/piagent"
+	"temporal-agents/internal/place"
 	"temporal-agents/internal/wfrecord"
 )
 
@@ -51,6 +52,10 @@ type RunState struct {
 	ScheduleID string
 	// StartedAt is when the workflow began, from its deterministic clock.
 	StartedAt time.Time
+	// Place is where the run runs, as the location probe established it. It is the
+	// zero value when nothing could be established, which the read path publishes as
+	// the unknown place.
+	Place place.Facts
 	// EndedAt is when it settled, or the zero time on the initial "started" write.
 	EndedAt time.Time
 	// Status is StatusRunning on the initial write and the terminal outcome after.
@@ -89,6 +94,10 @@ func (a *Activities) PersistRunWorkflowState(ctx context.Context, in RunState) e
 		Tokens:           in.Tokens,
 		ScheduleID:       in.ScheduleID,
 		ParentWorkflowID: in.ParentWorkflowID,
-		Detail:           execstore.Detail{Error: in.Error},
+		Detail: execstore.Detail{
+			Error:      in.Error,
+			Directory:  in.Place.Directory,
+			Repository: in.Place.Repository,
+		},
 	})
 }
