@@ -8,6 +8,8 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"temporal-agents/internal/execstore"
+	"temporal-agents/internal/place"
+	"temporal-agents/internal/wfplace"
 	"temporal-agents/internal/wfrecord"
 )
 
@@ -55,6 +57,10 @@ type DevelopState struct {
 	// resolution while seeding), never the inclusive total, so this row and its
 	// child review row do not double-count.
 	Tokens int
+	// Place is where the develop run runs. It is the worktree the run develops in,
+	// not the directory the run was started from, so a fleet node reports its own
+	// place rather than its fleet's.
+	Place place.Facts
 	// Error is the failure text when the workflow failed.
 	Error string
 }
@@ -81,7 +87,9 @@ type ReviewState struct {
 	// settles: an intermediate pass that continues as new has not answered the
 	// question, and recording it as "did not converge" would misreport it.
 	Converged *bool
-	Error     string
+	// Place is where the review pass runs.
+	Place place.Facts
+	Error string
 }
 
 // PilotState is the typed input to PersistPilotWorkflowState. A chained pilot
@@ -104,7 +112,9 @@ type PilotState struct {
 	// to finding none left). It is nil while the pass has not reached that
 	// decision yet.
 	Addressed *bool
-	Error     string
+	// Place is where the pilot pass runs.
+	Place place.Facts
+	Error string
 }
 
 // PersistDevelopWorkflowState records a DevelopWorkflow execution's state. It is
@@ -129,9 +139,11 @@ func (a *Activities) PersistDevelopWorkflowState(ctx context.Context, in Develop
 		Tokens:           in.Tokens,
 		ParentWorkflowID: in.ParentWorkflowID,
 		Detail: execstore.Detail{
-			Branch: in.Branch,
-			PRURL:  in.PRURL,
-			Error:  in.Error,
+			Branch:     in.Branch,
+			PRURL:      in.PRURL,
+			Error:      in.Error,
+			Directory:  in.Place.Directory,
+			Repository: in.Place.Repository,
 		},
 	})
 }
@@ -141,7 +153,10 @@ func (a *Activities) PersistReviewWorkflowState(ctx context.Context, in ReviewSt
 	if a.Store == nil {
 		return execstore.ErrNotConfigured
 	}
-	detail := execstore.Detail{Pass: in.Pass, Converged: in.Converged, Error: in.Error}
+	detail := execstore.Detail{
+		Pass: in.Pass, Converged: in.Converged, Error: in.Error,
+		Directory: in.Place.Directory, Repository: in.Place.Repository,
+	}
 	return a.Store.SaveExecution(ctx, execstore.Execution{
 		WorkflowID:       in.WorkflowID,
 		RunID:            in.RunID,
@@ -160,7 +175,10 @@ func (a *Activities) PersistPilotWorkflowState(ctx context.Context, in PilotStat
 	if a.Store == nil {
 		return execstore.ErrNotConfigured
 	}
-	detail := execstore.Detail{PRURL: in.PRURL, Addressed: in.Addressed, Error: in.Error}
+	detail := execstore.Detail{
+		PRURL: in.PRURL, Addressed: in.Addressed, Error: in.Error,
+		Directory: in.Place.Directory, Repository: in.Place.Repository,
+	}
 	return a.Store.SaveExecution(ctx, execstore.Execution{
 		WorkflowID:       in.WorkflowID,
 		RunID:            in.RunID,
@@ -176,6 +194,10 @@ func (a *Activities) PersistPilotWorkflowState(ctx context.Context, in PilotStat
 
 // startDevelopState builds and writes the "started" record for the running
 // DevelopWorkflow, returning the state the terminal write updates.
+//
+// It records no place: a develop run's place is the worktree it develops in, and
+// that worktree does not exist yet when the run must be recorded as started. The
+// place is added by recordDevelopPlace as soon as the directory is real.
 func startDevelopState(ctx workflow.Context, in DevelopInput) (DevelopState, error) {
 	// An execution whose history predates durable recording must not have a record
 	// write inserted into its replay (see wfrecord.Enabled); it simply goes
@@ -199,6 +221,28 @@ func startDevelopState(ctx workflow.Context, in DevelopInput) (DevelopState, err
 		return DevelopState{}, fmt.Errorf("record the develop run as started: %w", err)
 	}
 	return st, nil
+}
+
+// recordDevelopPlace establishes where the run develops — the worktree it created,
+// or the checkout it switched — and upserts the record so a *running* develop run is
+// already in its place on the overview, rather than only once it settles.
+//
+// Both halves are deliberately unfailing. The probe degrades to no place at all (see
+// wfplace.Probe), and the write is best-effort because the same facts travel on the
+// terminal write: losing this one costs a place until the run settles, while failing
+// the run would cost the work itself. It returns the state the caller keeps.
+func recordDevelopPlace(ctx workflow.Context, st DevelopState, workDir string) DevelopState {
+	st.Place = wfplace.Probe(ctx, workDir)
+	if !wfrecord.Enabled(ctx) || !st.Place.Established() {
+		return st
+	}
+	opts := wfrecord.WithOptions(ctx)
+	var a *Activities
+	if err := workflow.ExecuteActivity(opts, a.PersistDevelopWorkflowState, st).Get(opts, nil); err != nil {
+		workflow.GetLogger(ctx).Warn(
+			"could not record where the develop run develops; its terminal record will carry it", "error", err)
+	}
+	return st
 }
 
 // finishDevelopState records the develop run's terminal state on a disconnected
@@ -238,6 +282,7 @@ func startReviewState(ctx workflow.Context, in ReviewInput) (ReviewState, error)
 		Pass:             in.Pass,
 		StartedAt:        workflow.Now(ctx),
 		Status:           execstore.StatusRunning,
+		Place:            wfplace.Probe(ctx, in.WorkDir),
 	}
 	opts := wfrecord.WithOptions(ctx)
 	var a *Activities
@@ -266,8 +311,9 @@ func finishReviewState(ctx workflow.Context, st ReviewState, err error) error {
 }
 
 // startPilotState builds and writes the "started" record for the running
-// PilotWorkflow pass.
-func startPilotState(ctx workflow.Context) (PilotState, error) {
+// PilotWorkflow pass. workDir is the repository the pass operates in, so the pass
+// reports its place from its first write.
+func startPilotState(ctx workflow.Context, workDir string) (PilotState, error) {
 	// An execution whose history predates durable recording must not have a record
 	// write inserted into its replay (see wfrecord.Enabled); it simply goes
 	// unrecorded.
@@ -281,6 +327,7 @@ func startPilotState(ctx workflow.Context) (PilotState, error) {
 		ParentWorkflowID: id.ParentWorkflowID,
 		StartedAt:        workflow.Now(ctx),
 		Status:           execstore.StatusRunning,
+		Place:            wfplace.Probe(ctx, workDir),
 	}
 	opts := wfrecord.WithOptions(ctx)
 	var a *Activities

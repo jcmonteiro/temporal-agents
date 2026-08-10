@@ -39,7 +39,10 @@ func TestDevelopWorkflow_RecordsStartAndTerminalState(t *testing.T) {
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
 	recs := store.Records()
-	require.Len(t, recs, 2)
+	// Three writes, all upserting one row: the run records itself as started before
+	// anything happens, again once the directory it develops in is real (its place),
+	// and finally with its outcome.
+	require.Len(t, recs, 3)
 
 	start := recs[0]
 	require.Equal(t, execstore.KindDevelop, start.Kind)
@@ -48,7 +51,7 @@ func TestDevelopWorkflow_RecordsStartAndTerminalState(t *testing.T) {
 	require.False(t, start.StartedAt.IsZero())
 	require.True(t, start.EndedAt.IsZero())
 
-	end := recs[1]
+	end := recs[2]
 	require.Equal(t, start.RunID, end.RunID, "both writes key on the run ID, so the second upserts the first")
 	require.Equal(t, execstore.StatusSucceeded, end.Status)
 	require.False(t, end.EndedAt.IsZero())

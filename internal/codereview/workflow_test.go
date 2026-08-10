@@ -13,6 +13,8 @@ import (
 
 	"temporal-agents/internal/execstore/execstoretest"
 	"temporal-agents/internal/notification"
+	"temporal-agents/internal/place"
+	"temporal-agents/internal/place/placetest"
 	"temporal-agents/internal/wftest"
 )
 
@@ -38,6 +40,7 @@ func newEnvWithStore(t *testing.T, store *execstoretest.Store) *testsuite.TestWo
 	// methods are never invoked because every call is mocked below.
 	env.RegisterActivity(&Activities{Store: store})
 	env.RegisterActivity(&notification.Activity{})
+	env.RegisterActivity(&place.Activity{Prober: placetest.New()})
 	env.RegisterWorkflow(PilotWorkflow)
 	return env
 }

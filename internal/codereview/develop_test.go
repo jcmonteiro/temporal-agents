@@ -11,6 +11,8 @@ import (
 
 	"temporal-agents/internal/execstore/execstoretest"
 	"temporal-agents/internal/notification"
+	"temporal-agents/internal/place"
+	"temporal-agents/internal/place/placetest"
 )
 
 // The develop workflow tests exercise observable behavior — which activities
@@ -33,6 +35,9 @@ func newDevelopEnvWithStore(t *testing.T, store *execstoretest.Store) *testsuite
 	env := s.NewTestWorkflowEnvironment()
 	env.RegisterActivity(&Activities{Store: store})
 	env.RegisterActivity(&notification.Activity{})
+	// The location probe is a driven adapter like any other: registering the fake
+	// makes a develop run record the place its worktree is in.
+	env.RegisterActivity(&place.Activity{Prober: placetest.New()})
 	env.RegisterWorkflow(DevelopWorkflow)
 	env.RegisterWorkflow(ReviewWorkflow)
 	env.RegisterWorkflow(OpenPRWorkflow)

@@ -12,6 +12,8 @@ import (
 
 	"temporal-agents/internal/execstore/execstoretest"
 	"temporal-agents/internal/notification"
+	"temporal-agents/internal/place"
+	"temporal-agents/internal/place/placetest"
 )
 
 // The review workflow tests exercise observable behavior — which activities run
@@ -33,6 +35,7 @@ func newReviewEnvWithStore(t *testing.T, store *execstoretest.Store) *testsuite.
 	env := s.NewTestWorkflowEnvironment()
 	env.RegisterActivity(&Activities{Store: store})
 	env.RegisterActivity(&notification.Activity{})
+	env.RegisterActivity(&place.Activity{Prober: placetest.New()})
 	env.RegisterWorkflow(ReviewWorkflow)
 	return env
 }

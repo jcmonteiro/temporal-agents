@@ -164,7 +164,7 @@ func PilotWorkflow(ctx workflow.Context, in PilotInput) (summary string, err err
 
 	// Record this pass as started before any work happens. Every pass continues as
 	// new, so each is a row of its own keyed on its Temporal run ID.
-	rec, perr := startPilotState(ctx)
+	rec, perr := startPilotState(ctx, in.WorkDir)
 	if perr != nil {
 		return "", perr
 	}
@@ -503,6 +503,11 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	// The branch may be a generated alias, so the start record could not carry it;
 	// the terminal write upserts the row with the branch actually developed on.
 	rec.Branch = created.Branch
+	// The working directory is only now real — in worktree mode it was created a
+	// moment ago — so this is the first point where the run's place can be
+	// established. Recording it here is what puts a running node on its own worktree
+	// rather than on its fleet's checkout.
+	rec = recordDevelopPlace(ctx, rec, in.WorkDir)
 	base := created.BaseSHA
 
 	// Seed the fresh branch with the committed work of the branches it depends on

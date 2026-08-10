@@ -10,6 +10,8 @@ import (
 
 	"temporal-agents/internal/execstore/execstoretest"
 	"temporal-agents/internal/notification"
+	"temporal-agents/internal/place"
+	"temporal-agents/internal/place/placetest"
 )
 
 // The open-PR workflow tests exercise observable behavior — which activities
@@ -24,6 +26,7 @@ func newOpenPREnv(t *testing.T) *testsuite.TestWorkflowEnvironment {
 	env := s.NewTestWorkflowEnvironment()
 	env.RegisterActivity(&Activities{Store: execstoretest.New()})
 	env.RegisterActivity(&notification.Activity{})
+	env.RegisterActivity(&place.Activity{Prober: placetest.New()})
 	env.RegisterWorkflow(OpenPRWorkflow)
 	return env
 }
