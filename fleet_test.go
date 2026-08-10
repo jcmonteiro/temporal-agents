@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -13,6 +15,60 @@ import (
 // These tests cover the observable behavior of the fleet subcommands' flag
 // parsing and plan handling. Error paths call fatalf (os.Exit) and are
 // intentionally not exercised here.
+
+func TestValidateFleetPlan_AcceptsAValidFullyParallelPlan(t *testing.T) {
+	// A plan with no edges is valid: the validator checks the schema and graph,
+	// not whether the chosen decomposition should have introduced dependencies.
+	candidate := `{"goal":"two independent changes","nodes":[` +
+		`{"id":"docs","prompt":"update the docs","dependsOn":[]},` +
+		`{"id":"metrics","prompt":"add metrics","dependsOn":[]}]}`
+	var out bytes.Buffer
+
+	err := validateFleetPlan(strings.NewReader(candidate), &out)
+
+	require.NoError(t, err)
+	require.Equal(t, "valid fleet plan: 2 nodes, 0 dependencies\n", out.String())
+}
+
+func TestValidateFleetPlan_RejectsTheSchemaErrorFromTheFailedSession(t *testing.T) {
+	candidate := `{"goal":"g","nodes":[{"id":"a","prompt":"p","dependsOn":[]}],"dependsOnNote":null}`
+
+	err := validateFleetPlan(strings.NewReader(candidate), &bytes.Buffer{})
+
+	require.EqualError(t, err, `parse plan: parse plan JSON: json: unknown field "dependsOnNote"`)
+}
+
+func TestRunFleetPlanValidate_ReadsTheAgentsCandidateFile(t *testing.T) {
+	candidate := `{"goal":"g","nodes":[{"id":"a","prompt":"p","dependsOn":[]}]}`
+	path := t.TempDir() + "/candidate.json"
+	require.NoError(t, os.WriteFile(path, []byte(candidate), 0o600))
+	var out bytes.Buffer
+
+	err := runFleetPlanValidate([]string{path}, strings.NewReader("not used"), &out)
+
+	require.NoError(t, err)
+	require.Contains(t, out.String(), "valid fleet plan")
+}
+
+func TestRunFleetPlanValidate_ReadsStdinForDash(t *testing.T) {
+	candidate := `{"goal":"g","nodes":[{"id":"a","prompt":"p","dependsOn":[]}]}`
+	var out bytes.Buffer
+
+	err := runFleetPlanValidate([]string{"-"}, strings.NewReader(candidate), &out)
+
+	require.NoError(t, err)
+	require.Contains(t, out.String(), "valid fleet plan")
+}
+
+func TestValidateFleetPlan_RejectsAnInvalidDependencyGraph(t *testing.T) {
+	candidate := `{"goal":"g","nodes":[` +
+		`{"id":"a","prompt":"p","dependsOn":["b"]},` +
+		`{"id":"b","prompt":"q","dependsOn":["a"]}]}`
+
+	err := validateFleetPlan(strings.NewReader(candidate), &bytes.Buffer{})
+
+	require.Contains(t, err.Error(), "validate plan: plan has a dependency cycle")
+}
 
 func TestParseFleetPlanFlags_PromptAndOptionalName(t *testing.T) {
 	prompt, name := parseFleetPlanFlags([]string{"expose the core", "--name", "core"})
@@ -87,13 +143,15 @@ func TestEffectivePlanLimit_ResolvesTheStoresDefault(t *testing.T) {
 	require.Equal(t, 5, effectivePlanLimit(5))
 }
 
-func TestFleetPlanHelp_SaysWhichGoalWordsAreReserved(t *testing.T) {
-	// "list", "ls" and "show" are dispatched on the first word alone, so a goal worded
-	// as exactly one of them cannot be planned. That limit is only acceptable while the
-	// help says it out loud, so the help text is what this pins.
+func TestFleetPlanHelp_ExplainsValidationAndReservedGoalWords(t *testing.T) {
+	// These words are dispatched on the first word alone, so a goal worded as
+	// exactly one of them cannot be planned. That limit is only acceptable while
+	// the help says it out loud.
 	var b strings.Builder
 	fleetPlanHelp(&b)
 
 	help := b.String()
-	require.Contains(t, help, `"list", "ls" and "show" are read as subcommands`)
+	require.Contains(t, help, `"list", "ls", "show" and "validate" are read as subcommands`)
+	require.Contains(t, help, "temporal-agents fleet plan validate <file|->")
+	require.Contains(t, help, "does not read or write Postgres")
 }

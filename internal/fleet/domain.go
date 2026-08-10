@@ -450,6 +450,16 @@ A complete example — two slices, the second developed on top of the first, sho
 
 ` + planPromptExample + `
 
+--- Required validation step ---
+
+Before your final answer, you MUST validate your exact candidate with the installed fleet-plan validator:
+1. Use the bash tool to set candidate="$(mktemp)" and write the exact candidate JSON to "$candidate". This temporary file is outside the repository; do not create or change a repository file.
+2. Run: temporal-agents fleet plan validate "$candidate"
+3. If validation fails, correct the candidate and run the command again. Do not finish until validation exits successfully.
+4. Remove the temporary file, then output the exact JSON that passed validation — no edits after validation.
+
+Do not include the validator output or command, or any explanation, in your final answer. The final answer is only the validated JSON object.
+
 --- Goal ---
 ` + strings.TrimSpace(goal)
 }

@@ -144,6 +144,16 @@ func TestBuildPlanPrompt_DeclaresTypesEscapingAndWhereCommentaryGoes(t *testing.
 	require.Contains(t, p, "non-empty array of objects, one per slice")
 }
 
+func TestBuildPlanPrompt_RequiresTheAgentToValidateAndRepairItsExactAnswer(t *testing.T) {
+	p := BuildPlanPrompt("add multi-tenant support")
+	require.Contains(t, p, "MUST validate your exact candidate")
+	require.Contains(t, p, `temporal-agents fleet plan validate "$candidate"`)
+	require.Contains(t, p, "If validation fails, correct the candidate and run the command again")
+	require.Contains(t, p, "Do not finish until validation exits successfully")
+	require.Contains(t, p, "output the exact JSON that passed validation")
+	require.Contains(t, p, "Do not include the validator output")
+}
+
 func TestBuildPlanPrompt_ExampleIsAPlanTheParserAccepts(t *testing.T) {
 	p := BuildPlanPrompt("add multi-tenant support")
 
