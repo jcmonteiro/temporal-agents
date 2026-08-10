@@ -9,19 +9,19 @@ and a link back to the overview. A location with no work says so.
 
 ## Tasks
 
-- [ ] Add a read of one location and its work through the client boundary,
+- [x] Add a read of one location and its work through the client boundary,
       returning a failure result the page renders as an error state (not a blank
       page).
-- [ ] Add the page: the location's label and natural key, its ancestry path, its
+- [x] Add the page: the location's label and natural key, its ancestry path, its
       children, and its work grouped by state.
-- [ ] Reach the page from a planet, and reach a work item's own detail from the
+- [x] Reach the page from a planet, and reach a work item's own detail from the
       page.
-- [ ] Empty state: a registered-but-idle place reads as idle, not broken.
-- [ ] Deep-link safety: an unknown or stale location id renders a clear
+- [x] Empty state: a registered-but-idle place reads as idle, not broken.
+- [x] Deep-link safety: an unknown or stale location id renders a clear
       not-found state.
-- [ ] Leave an explicit extension point for later per-place features (launcher,
+- [x] Leave an explicit extension point for later per-place features (launcher,
       settings), without building them.
-- [ ] Component tests: work is listed under the right place, ancestry renders,
+- [x] Component tests: work is listed under the right place, ancestry renders,
       empty and not-found states render, and a failed read surfaces as an error.
 
 ## Done when

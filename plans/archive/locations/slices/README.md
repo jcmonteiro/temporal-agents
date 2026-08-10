@@ -8,7 +8,7 @@ own. References are to the implementation brief (IB §n).
 | 1 ✅ | [Location contract](./01-location-contract.md) | every API item reports a location reference and every response carries the registry — all `unknown`, published in the schema |
 | 2 ✅ | [Recorded locations](./02-recorded-locations.md) | a fresh run reports its real directory, and a worktree run reports its repository as parent |
 | 3 ✅ | [Planets per location](./03-planets-per-location.md) | the overview groups work into planets per location, folds by depth, and collapses to one planet per repository |
-| 4 | [Location page](./04-location-page.md) | opening one planet shows just that location's work |
+| 4 ✅ | [Location page](./04-location-page.md) | opening one planet shows just that location's work |
 
 ✅ = delivered.
 

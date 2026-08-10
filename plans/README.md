@@ -20,7 +20,6 @@ feature in hand adds noise, not accuracy.
 
 | Plan | Covers | Status |
 |---|---|---|
-| [`active/locations`](./active/locations/) | work reports where it runs; the overview groups it into places | planned |
 | [`active/authentication`](./active/authentication/) | sign-in through an identity provider, SSO-ready | planned |
 | [`active/prompts`](./active/prompts/) | stored, scoped, versioned agent instructions with provenance | planned |
 | [`active/launching-work`](./active/launching-work/) | start and repeat agent work from the hub | planned |

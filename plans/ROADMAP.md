@@ -10,7 +10,7 @@ that several features depend on.
 
 | # | Status | Plan | Outcome | Depends on |
 |---|--|------|---------|-----------|
-| 1 | IN-PROGRESS | [`locations`](./active/locations/) | every item reports where it runs; the overview groups work into planets per location, collapsing toward parents | — |
+| 1 | DONE | [`locations`](./archive/locations/) | every item reports where it runs; the overview groups work into planets per location, collapsing toward parents | — |
 | 2 | TODO | [`authentication`](./active/authentication/) | the hub authenticates through an OIDC provider, SSO-ready, with server-held tokens | 1 (nothing hard, ships beside it) |
 | 3 | TODO | [`prompts`](./active/prompts/) — foundation slices | prompts are stored, scoped per location, versioned, and every run records which prompt version it used | 1 |
 | 4 | TODO | [`launching-work`](./active/launching-work/) | an operator starts and re-runs agent work from a dedicated page | 1, 2 |
