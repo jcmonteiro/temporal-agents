@@ -30,6 +30,8 @@ export interface WorkItem {
   label: string;
   status: WorkItemStatus;
   icon: IconName;
+  // The place the item runs in, resolved against the response's registry.
+  placeId: string;
   // Fleet-only fields; absent for runs and schedules.
   progress?: { done: number; total: number; fraction: number };
   // Run-only.

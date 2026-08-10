@@ -13,6 +13,7 @@ function constellation(count: number): { center: { x: number; y: number }; slots
       label: `Run ${i}`,
       status: "in-progress" as const,
       icon: "document" as const,
+      placeId: "unknown",
     })),
     CANVAS,
   );

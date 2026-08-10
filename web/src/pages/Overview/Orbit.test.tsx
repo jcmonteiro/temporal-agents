@@ -12,6 +12,7 @@ const FLEET: WorkItem = {
   label: "Checkout revamp",
   status: "in-progress",
   icon: "rocket",
+  placeId: "unknown",
 };
 
 /** Answers the reduced-motion query with the given preference. */

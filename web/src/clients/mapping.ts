@@ -2,12 +2,18 @@
 // frontend's domain model. No I/O, so every rule here is unit testable.
 
 import type { UpNextEntry } from "../domain/up-next";
+import { UNKNOWN_PLACE_ID, type Place } from "../domain/place";
 import type {
   IconName,
   WorkItem,
   WorkItemKind,
 } from "../domain/work-item";
-import type { FleetDTO, RunDTO, ScheduleDTO } from "./api";
+import type {
+  FleetDTO,
+  LocationResource,
+  RunDTO,
+  ScheduleDTO,
+} from "./api";
 
 // The API returns items already in a portable, DB-agnostic shape (dto.go).
 // The frontend chooses an icon per kind/status — icons aren't part of the
@@ -26,6 +32,27 @@ export function pickIcon(kind: WorkItemKind, status: string): IconName {
   return KIND_ICON[kind];
 }
 
+/**
+ * The place an item runs in. An item that carries no reference runs in the
+ * unknown place — the API's own answer for work whose place was never recorded,
+ * never a guess made here.
+ */
+function placeOf(locationId: string | undefined): string {
+  return locationId ? locationId : UNKNOWN_PLACE_ID;
+}
+
+/** One registry entry, as the frontend reads it. */
+export function fromLocation(location: LocationResource): Place {
+  return {
+    id: location.id,
+    kind: location.kind,
+    label: location.label,
+    parentId: location.parentId ?? null,
+    directory: location.directory,
+    ref: location.ref,
+  };
+}
+
 export function fromFleet(f: FleetDTO): WorkItem {
   return {
     id: f.id,
@@ -33,6 +60,7 @@ export function fromFleet(f: FleetDTO): WorkItem {
     label: f.label || f.id,
     status: f.status,
     icon: pickIcon("fleet", f.status),
+    placeId: placeOf(f.locationId),
     progress: f.progress,
     dismissible: f.dismissible,
   };
@@ -45,6 +73,7 @@ export function fromRun(r: RunDTO): WorkItem {
     label: r.label || r.id,
     status: r.status,
     icon: pickIcon("run", r.status),
+    placeId: placeOf(r.locationId),
     runType: r.type,
     iterations: r.iterations,
     dismissible: r.dismissible,
@@ -58,6 +87,7 @@ export function fromSchedule(s: ScheduleDTO): WorkItem {
     label: s.label || s.id,
     status: s.status,
     icon: pickIcon("schedule", s.status),
+    placeId: placeOf(s.locationId),
     spec: s.spec,
     paused: s.paused,
     dismissible: s.dismissible,

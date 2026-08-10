@@ -1009,26 +1009,41 @@ func TestOverviewResourcesKeepTheFieldNamesTheWebClientReads(t *testing.T) {
 	}{
 		{
 			path:      "/fleets",
-			itemKeys:  []string{"id", "kind", "label", "status", "progress", "dismissible", "upNext"},
+			itemKeys:  []string{"id", "kind", "label", "status", "progress", "dismissible", "upNext", "locationId"},
 			nestedKey: "progress",
 			nested:    []string{"done", "total", "fraction"},
 		},
 		{
 			path:     "/runs",
-			itemKeys: []string{"id", "kind", "type", "label", "status", "iterations", "dismissible"},
+			itemKeys: []string{"id", "kind", "type", "label", "status", "iterations", "dismissible", "locationId"},
 		},
 		{
 			path:     "/schedules",
-			itemKeys: []string{"id", "kind", "label", "spec", "status", "paused", "dismissible"},
+			itemKeys: []string{"id", "kind", "label", "spec", "status", "paused", "dismissible", "locationId"},
 		},
 	} {
 		response := request(t, server, http.MethodGet, BasePath+resource.path, nil)
 		var document map[string]any
 		decodeResponse(t, response, &document)
 
-		for _, key := range []string{"items", "count", "limit"} {
+		for _, key := range []string{"items", "count", "limit", "locations"} {
 			if _, ok := document[key]; !ok {
 				t.Errorf("%s: collection has no %q", resource.path, key)
+			}
+		}
+		// The web client indexes the registry by id and follows parentId to build the
+		// tree, so those names are part of what it reads.
+		registry, ok := document["locations"].([]any)
+		if !ok || len(registry) == 0 {
+			t.Fatalf("%s: locations = %v, want the registry", resource.path, document["locations"])
+		}
+		place, ok := registry[0].(map[string]any)
+		if !ok {
+			t.Fatalf("%s: location is not an object: %v", resource.path, registry[0])
+		}
+		for _, key := range []string{"id", "kind", "label", "parentId"} {
+			if _, ok := place[key]; !ok {
+				t.Errorf("%s: location has no %q, which the web client reads", resource.path, key)
 			}
 		}
 		items, ok := document["items"].([]any)

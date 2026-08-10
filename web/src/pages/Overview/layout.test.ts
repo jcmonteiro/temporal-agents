@@ -16,6 +16,7 @@ function items(status: WorkItemStatus, count: number): WorkItem[] {
     label: `${status} ${i}`,
     status,
     icon: "document" as const,
+    placeId: "unknown",
   }));
 }
 

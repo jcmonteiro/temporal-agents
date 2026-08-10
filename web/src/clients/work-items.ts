@@ -1,13 +1,27 @@
 import type { UpNextEntry } from "../domain/up-next";
+import { registryOf, type Place, type PlaceRegistry } from "../domain/place";
 import type { WorkItem } from "../domain/work-item";
 import { err, ok, type Result } from "../utils/result";
-import type { Collection, FleetDTO, RunDTO, ScheduleDTO } from "./api";
+import type {
+  FleetDTO,
+  LocatedCollection,
+  RunDTO,
+  ScheduleDTO,
+} from "./api";
 import { fetchJSON } from "./http";
-import { fromFleet, fromRun, fromSchedule, upNextOf } from "./mapping";
+import {
+  fromFleet,
+  fromLocation,
+  fromRun,
+  fromSchedule,
+  upNextOf,
+} from "./mapping";
 
 export interface OverviewData {
   items: WorkItem[];
   upNext: UpNextEntry[];
+  /** The places the items run in, as the three responses published them. */
+  places: PlaceRegistry;
 }
 
 /**
@@ -21,9 +35,9 @@ export interface OverviewData {
  */
 export async function loadOverview(): Promise<Result<OverviewData, Error>> {
   const [fleets, runs, schedules] = await Promise.all([
-    fetchJSON<Collection<FleetDTO>>("/fleets"),
-    fetchJSON<Collection<RunDTO>>("/runs"),
-    fetchJSON<Collection<ScheduleDTO>>("/schedules"),
+    fetchJSON<LocatedCollection<FleetDTO>>("/fleets"),
+    fetchJSON<LocatedCollection<RunDTO>>("/runs"),
+    fetchJSON<LocatedCollection<ScheduleDTO>>("/schedules"),
   ]);
 
   if (!fleets.ok) return err(fleets.error);
@@ -36,5 +50,18 @@ export async function loadOverview(): Promise<Result<OverviewData, Error>> {
     ...schedules.value.items.map(fromSchedule),
   ];
 
-  return ok({ items, upNext: upNextOf(fleets.value.items) });
+  // Each response carries its own registry, closed under ancestry and ordered
+  // parents-first. Identity is the server's, so concatenating the three keeps
+  // that order and the registry collapses the copies of a shared place.
+  const published: Place[] = [
+    ...(fleets.value.locations ?? []),
+    ...(runs.value.locations ?? []),
+    ...(schedules.value.locations ?? []),
+  ].map(fromLocation);
+
+  return ok({
+    items,
+    upNext: upNextOf(fleets.value.items),
+    places: registryOf(published),
+  });
 }

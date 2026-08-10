@@ -1,7 +1,8 @@
 import type {
-  Collection,
   FleetDTO,
   FleetNode,
+  LocatedCollection,
+  LocationResource,
   RunDTO,
   ScheduleDTO,
 } from "../clients/api";
@@ -18,6 +19,11 @@ export class FakeApi {
   fleets: FleetDTO[] = [];
   runs: RunDTO[] = [];
   schedules: ScheduleDTO[] = [];
+  /**
+   * The registry every response publishes. The API always carries at least the
+   * unknown place, so the stub does too.
+   */
+  locations: LocationResource[] = [theUnknownPlace()];
   /** While true, every request answers 503. */
   down = false;
 
@@ -52,19 +58,43 @@ export class FakeApi {
   private bodyFor(path: string): unknown {
     switch (path) {
       case "/api/v1/fleets":
-        return collection(this.fleets);
+        return this.collection(this.fleets);
       case "/api/v1/runs":
-        return collection(this.runs);
+        return this.collection(this.runs);
       case "/api/v1/schedules":
-        return collection(this.schedules);
+        return this.collection(this.schedules);
       default:
         return null;
     }
   }
+
+  private collection<T>(items: T[]): LocatedCollection<T> {
+    return {
+      items,
+      count: items.length,
+      limit: 100,
+      locations: this.locations,
+    };
+  }
 }
 
-function collection<T>(items: T[]): Collection<T> {
-  return { items, count: items.length, limit: 100 };
+/** The place work runs in when nothing was recorded about where. */
+export function theUnknownPlace(): LocationResource {
+  return { id: "unknown", kind: "unknown", label: "Unknown", parentId: null };
+}
+
+/** A directory place, optionally inside another one. */
+export function aDirectoryPlace(
+  overrides: Partial<LocationResource> = {},
+): LocationResource {
+  return {
+    id: "dir-1",
+    kind: "directory",
+    label: "checkout",
+    parentId: null,
+    directory: "/srv/checkout",
+    ...overrides,
+  };
 }
 
 export function aFleet(overrides: Partial<FleetDTO> = {}): FleetDTO {
@@ -73,6 +103,7 @@ export function aFleet(overrides: Partial<FleetDTO> = {}): FleetDTO {
     kind: "fleet",
     label: "Checkout revamp",
     status: "in-progress",
+    locationId: "unknown",
     progress: { done: 1, total: 4, fraction: 0.25 },
     startedAt: null,
     endedAt: null,
@@ -88,6 +119,7 @@ export function aRun(overrides: Partial<RunDTO> = {}): RunDTO {
     type: "coder",
     label: "Fix the flaky test",
     status: "done",
+    locationId: "unknown",
     startedAt: null,
     endedAt: null,
     iterations: 3,
@@ -103,6 +135,7 @@ export function aSchedule(overrides: Partial<ScheduleDTO> = {}): ScheduleDTO {
     label: "Nightly triage",
     spec: "0 2 * * *",
     status: "waiting",
+    locationId: "unknown",
     paused: false,
     runningActions: 0,
     lastRunAt: null,

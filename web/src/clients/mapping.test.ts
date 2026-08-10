@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { upNextKey } from "../domain/up-next";
-import type { FleetDTO, RunDTO, ScheduleDTO } from "./api";
-import { fromFleet, fromRun, fromSchedule, upNextOf } from "./mapping";
+import type { FleetDTO, LocationResource, RunDTO, ScheduleDTO } from "./api";
+import {
+  fromFleet,
+  fromLocation,
+  fromRun,
+  fromSchedule,
+  upNextOf,
+} from "./mapping";
 
 function aFleet(overrides: Partial<FleetDTO> = {}): FleetDTO {
   return {
@@ -119,6 +125,47 @@ describe("the projection of a schedule", () => {
 
   it("falls back to the id when the label is empty", () => {
     expect(fromSchedule(aSchedule({ label: "" })).label).toBe("schedule-1");
+  });
+});
+
+describe("the place an item runs in", () => {
+  it("keeps the reference the API published", () => {
+    expect(fromFleet(aFleet({ locationId: "loc-a" })).placeId).toBe("loc-a");
+    expect(fromRun(aRun({ locationId: "loc-b" })).placeId).toBe("loc-b");
+    expect(fromSchedule(aSchedule({ locationId: "loc-c" })).placeId).toBe(
+      "loc-c",
+    );
+  });
+
+  it("reads an item with no reference as running in the unknown place", () => {
+    expect(fromRun(aRun({ locationId: undefined })).placeId).toBe("unknown");
+  });
+});
+
+describe("the projection of a place", () => {
+  const directory: LocationResource = {
+    id: "dir-1",
+    kind: "directory",
+    label: "checkout",
+    parentId: "repo-1",
+    directory: "/srv/checkout",
+  };
+
+  it("keeps the identity, the kind, the label and the parent", () => {
+    expect(fromLocation(directory)).toEqual({
+      id: "dir-1",
+      kind: "directory",
+      label: "checkout",
+      parentId: "repo-1",
+      directory: "/srv/checkout",
+      ref: undefined,
+    });
+  });
+
+  it("reads a place with no published parent as a root", () => {
+    const orphan = { ...directory, parentId: null };
+
+    expect(fromLocation(orphan).parentId).toBeNull();
   });
 });
 

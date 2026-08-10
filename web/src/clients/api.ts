@@ -7,12 +7,32 @@
 // internal/httpapi/httpapi_test.go; add a field to that list when the Overview
 // starts reading it.
 
+import type { PlaceKind } from "../domain/place";
 import type { WorkItemStatus } from "../domain/work-item";
 
 export interface Collection<T> {
   items: T[];
   count: number;
   limit: number;
+}
+
+// One place in a response's location registry. The union is discriminated by
+// `kind`: a directory carries a path and no ref, a remote carries a ref and no
+// path, the unknown place carries neither and no parent.
+export interface LocationResource {
+  id: string;
+  kind: PlaceKind;
+  label: string;
+  parentId: string | null;
+  directory?: string;
+  ref?: string;
+}
+
+// A collection of work: the page, plus the registry every item's `locationId`
+// resolves against. The registry is closed under ancestry and ordered
+// parents-first, so a consumer builds the tree in one pass.
+export interface LocatedCollection<T> extends Collection<T> {
+  locations?: LocationResource[];
 }
 
 export interface FleetProgress {
@@ -27,6 +47,7 @@ export interface FleetNode {
   prompt?: string;
   dependsOn?: string[];
   status: WorkItemStatus;
+  locationId?: string;
   execution: null | {
     workflowId: string;
     runId?: string;
@@ -41,6 +62,7 @@ export interface FleetDTO {
   kind: "fleet";
   label: string;
   status: WorkItemStatus;
+  locationId?: string;
   progress: FleetProgress;
   planId?: string;
   startedAt: string | null;
@@ -56,6 +78,7 @@ export interface RunDTO {
   type: string;
   label: string;
   status: WorkItemStatus;
+  locationId?: string;
   startedAt: string | null;
   endedAt: string | null;
   iterations: number;
@@ -69,6 +92,7 @@ export interface ScheduleDTO {
   label: string;
   spec?: string;
   status: WorkItemStatus;
+  locationId?: string;
   paused: boolean;
   runningActions: number;
   lastRunAt: string | null;
