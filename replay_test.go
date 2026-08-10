@@ -26,3 +26,18 @@ func TestPromptWorkflow_ReplaysAHistoryFromBeforeRecording(t *testing.T) {
 
 	require.NoError(t, err, "an execution started before recording must still replay")
 }
+
+// The location probe is gated the same way, and against a different history: an
+// execution started after recording was switched on but before the probe existed
+// has the recording marker and no probe marker. The fixture below was captured from
+// the code one commit before the probe, so a gate that scheduled a probe that
+// history lacks fails here instead of in a chained run that has been looping for
+// days.
+func TestPromptWorkflow_ReplaysAHistoryFromBeforeTheLocationProbe(t *testing.T) {
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(PromptWorkflow)
+
+	err := replayer.ReplayWorkflowHistoryFromJSONFile(nil, "testdata/prompt_workflow_before_location.json")
+
+	require.NoError(t, err, "a run started before the probe must still replay")
+}

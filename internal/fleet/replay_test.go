@@ -47,3 +47,28 @@ func TestFleetPlanWorkflow_ReplaysAHistoryFromBeforeRecording(t *testing.T) {
 
 	require.NoError(t, err, "a planning run started before recording must still replay")
 }
+
+// The location probe added a second gate on top of the recording one, and the case
+// it protects is not the one above: an execution started *after* recording was
+// switched on but before the probe existed has the recording marker in its history
+// and no probe marker. The fixtures below are exactly that — captured from the code
+// one commit before the probe — so a gate that scheduled a probe those histories
+// lack fails here rather than in a fleet run that is hours into its graph.
+
+func TestFleetWorkflow_ReplaysAHistoryFromBeforeTheLocationProbe(t *testing.T) {
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(FleetWorkflow)
+
+	err := wftest.ReplayHistoryFile(t, replayer, "testdata/fleet_workflow_before_location.json", "fleet-fixture")
+
+	require.NoError(t, err, "a fleet run started before the probe must still replay")
+}
+
+func TestFleetPlanWorkflow_ReplaysAHistoryFromBeforeTheLocationProbe(t *testing.T) {
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(FleetPlanWorkflow)
+
+	err := wftest.ReplayHistoryFile(t, replayer, "testdata/fleet_plan_workflow_before_location.json", "fleet-plan-fixture")
+
+	require.NoError(t, err, "a planning run started before the probe must still replay")
+}

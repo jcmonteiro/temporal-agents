@@ -1,10 +1,16 @@
 # Capturing a replay fixture
 
-The `testdata/*_before_recording.json` files in `internal/codereview` and
-`internal/fleet` are real Temporal histories of the workflows **as they were before
-a change**. They exist so a version gate (`wfrecord.Enabled`, and any gate added
-after it) is proved by a test instead of by an in-flight execution failing
-nondeterministically after a worker upgrade.
+The `testdata/*_before_<change>.json` files in the root package, `internal/codereview`
+and `internal/fleet` are real Temporal histories of the workflows **as they were
+before a change** (`_before_recording` for durable recording, `_before_location` for
+the location probe). They exist so a version gate (`wfrecord.Enabled`,
+`wfplace.Enabled`, and any gate added after them) is proved by a test instead of by
+an in-flight execution failing nondeterministically after a worker upgrade.
+
+One set is not enough: each gate protects the histories that exist when *it* is
+added, and a history captured before recording exercises none of the writes a later
+gate has to coexist with. So a new gate gets a fixture set of its own, captured one
+commit before it.
 
 They must be re-captured whenever a recorded workflow's command sequence changes
 shape without a version gate to protect the executions already in flight. The
@@ -24,12 +30,23 @@ throwaway — so this is the recipe.
    being captured (`internal/codereview` or `internal/fleet`), that does the
    following.
 
-   - Start a local server:
+   - Start a local server. The `_before_location` set was captured against the
+     pinned `temporalio/temporal` image through testcontainers-go, which is what the
+     rest of the suite uses and needs no download of its own:
 
      ```go
-     srv, err := testsuite.StartDevServer(ctx, testsuite.DevServerOptions{})
-     c := srv.Client()
+     ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+         ContainerRequest: testcontainers.ContainerRequest{
+             Image: "temporalio/temporal:1.7.3", User: "root",
+             Cmd:          []string{"server", "start-dev", "--ip", "0.0.0.0", "--log-level", "warn"},
+             ExposedPorts: []string{"7233/tcp"},
+             WaitingFor:   wait.ForListeningPort("7233/tcp"),
+         },
+         Started: true,
+     })
      ```
+
+     `testsuite.StartDevServer` works too, but downloads a server binary.
 
    - Start a worker on a task queue of its own, register the workflow under test,
      and register **stub activities under the real activity names**:
@@ -44,8 +61,8 @@ throwaway — so this is the recipe.
      The name is what the history records, so a stub registered under any other
      name produces a history the real activity struct cannot match. Take the names
      from the production bundle (or from `wftest.ActivityName`), never by hand.
-     No agent, no git repository and no `DATABASE_URL` are needed: the
-     pre-recording code writes no records, and every side effect is stubbed.
+     No agent, no git repository and no `DATABASE_URL` are needed: every side effect
+     is stubbed, the record writes included.
 
    - Execute the workflow with the input that produces the *shape* the fixture is
      meant to pin (a node whose child failed, a review pass that continues as new,

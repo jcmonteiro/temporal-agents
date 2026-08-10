@@ -60,3 +60,38 @@ func TestPilotWorkflow_ReplaysAHistoryFromBeforeRecording(t *testing.T) {
 
 	require.NoError(t, err, "a pilot pass started before recording must still replay")
 }
+
+// The location probe added a second gate on top of the recording one, and it
+// protects a different history: an execution started *after* recording was switched
+// on but before the probe existed carries the recording marker and no probe marker.
+// The fixtures below were captured from the code one commit before the probe, which
+// is the shape of every execution in flight across that upgrade — including the
+// develop run, where the probe is scheduled in the middle of the flow rather than
+// before it.
+
+func TestDevelopWorkflow_ReplaysAHistoryFromBeforeTheLocationProbe(t *testing.T) {
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(DevelopWorkflow)
+
+	err := wftest.ReplayHistoryFile(t, replayer, "testdata/develop_workflow_before_location.json", "develop-fixture")
+
+	require.NoError(t, err, "a develop run started before the probe must still replay")
+}
+
+func TestReviewWorkflow_ReplaysAHistoryFromBeforeTheLocationProbe(t *testing.T) {
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(ReviewWorkflow)
+
+	err := wftest.ReplayHistoryFile(t, replayer, "testdata/review_workflow_before_location.json", "review-fixture")
+
+	require.NoError(t, err, "a review pass started before the probe must still replay")
+}
+
+func TestPilotWorkflow_ReplaysAHistoryFromBeforeTheLocationProbe(t *testing.T) {
+	replayer := worker.NewWorkflowReplayer()
+	replayer.RegisterWorkflow(PilotWorkflow)
+
+	err := wftest.ReplayHistoryFile(t, replayer, "testdata/pilot_workflow_before_location.json", "pilot-fixture")
+
+	require.NoError(t, err, "a pilot pass started before the probe must still replay")
+}
