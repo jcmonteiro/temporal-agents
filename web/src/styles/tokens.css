@@ -31,6 +31,8 @@
   --color-bg: #0b0d12;
   --color-surface: #12151c;
   --color-surface-2: #171b24;
+  /* Translucent surface for overlays drawn on top of the canvas. */
+  --color-surface-overlay: rgba(11, 13, 18, 0.82);
   --color-border: #262c38;
   --color-border-strong: #364052;
 
@@ -69,6 +71,8 @@
   --color-bg: #ffffff;
   --color-surface: #ffffff;
   --color-surface-2: #f4f6fa;
+  /* Translucent surface for overlays drawn on top of the canvas. */
+  --color-surface-overlay: rgba(255, 255, 255, 0.88);
   --color-border: #e2e6ee;
   --color-border-strong: #c3cad8;
 

@@ -162,7 +162,7 @@ function StatusOverlay({ state }: { state: State }): ReactNode {
         style={{
           padding: "10px 16px",
           borderRadius: "var(--radius-md)",
-          background: "rgba(11,13,18,0.7)",
+          background: "var(--color-surface-overlay)",
           border: "1px solid var(--color-border)",
         }}
       >
