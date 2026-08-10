@@ -154,6 +154,36 @@ func TestHistoryRows_FailedPipelineStillPointsAtItsPR(t *testing.T) {
 	require.Contains(t, rows[0].Note, "https://github.com/o/r/pull/7")
 }
 
+// "Which instruction produced this?" has to be answerable from the history an
+// operator already reads, so a row that ran under stored instructions says which
+// key, from where, in which version, and enough of the hash to tell two apart.
+func TestHistoryRows_NoteSaysWhichInstructionTheExecutionRanUnder(t *testing.T) {
+	rows := historyRows([]execstore.Execution{{
+		WorkflowID: "review-1", Kind: execstore.KindReview,
+		Detail: execstore.Detail{Instructions: []execstore.InstructionUse{
+			{Key: "review.perform", Scope: "directory:/src/agents", Version: 3, Hash: "abcdef0123456789"},
+			{Key: "review.implement", Scope: "factory", Version: 1, Hash: "0123456789abcdef"},
+		}},
+	}})
+
+	require.Contains(t, rows[0].Note, "review.perform directory v3 abcdef01")
+	require.Contains(t, rows[0].Note, "review.implement factory v1 01234567")
+	// The scope carries an absolute path, which is the server's directory layout and
+	// not what the line is read for.
+	require.NotContains(t, rows[0].Note, "/src/agents")
+}
+
+// An execution that ran under no stored instruction says nothing about them: an
+// empty label in every row would be noise in the column that carries the reason a
+// row is worth reading.
+func TestHistoryRows_NoteSaysNothingAboutInstructionsWhenNoneWereUsed(t *testing.T) {
+	rows := historyRows([]execstore.Execution{{
+		WorkflowID: "run-1", Kind: execstore.KindRun, Prompt: "add a rate limiter",
+	}})
+
+	require.Equal(t, "add a rate limiter", rows[0].Note)
+}
+
 func TestFormatHistory_CountsRecordedExecutionsAndExpandedNodesApart(t *testing.T) {
 	// The table prints more lines than there are records: a skipped node has no
 	// record of its own. The summary line reports both, so it cannot contradict the

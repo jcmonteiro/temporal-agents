@@ -102,6 +102,14 @@ func TestPostgres_RoundTripsAnExecutionIncludingItsDetail(t *testing.T) {
 			PlanID:    "plan-abcd1234",
 			PlanNodes: 3,
 			Error:     "",
+			// Provenance is stored as values, so a row keeps explaining which
+			// instruction produced it without reaching into another context's tables.
+			Instructions: []execstore.InstructionUse{{
+				Key:     "review.perform",
+				Scope:   "directory:/src/agents",
+				Version: 3,
+				Hash:    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			}},
 		},
 	}
 

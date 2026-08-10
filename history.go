@@ -265,11 +265,62 @@ func executionNote(e execstore.Execution) string {
 	if e.Detail.PRURL != "" {
 		parts = append(parts, e.Detail.PRURL)
 	}
+	if used := instructionsUsed(e.Detail.Instructions); used != "" {
+		parts = append(parts, used)
+	}
 	// Nothing more specific to say: the prompt is what identifies the row.
 	if len(parts) == 0 && e.Prompt != "" {
 		parts = append(parts, truncate(firstLine(e.Prompt), noteWidth))
 	}
 	return strings.Join(parts, noteSeparator)
+}
+
+// instructionsUsed renders which instruction each governed key of an execution ran
+// under: the key, where the value came from, which version it was, and the start of
+// its content hash. It is what makes "which instruction produced this?" answerable
+// from the history an operator already reads.
+//
+// It is not shortened like the free-text notes are. Every part of it is a structured
+// value the tool produced itself, and a truncated version number or hash would name
+// nothing at all — the same reason a pull request URL is printed whole.
+//
+// The scope is printed as its kind rather than as itself: a scope carries an
+// absolute path, and this line is read for "where was this set", not for the
+// machine's directory layout. The hash is shortened to its first bytes, which is
+// enough to tell two instructions apart by eye; the whole hash stays in the record.
+func instructionsUsed(uses []execstore.InstructionUse) string {
+	if len(uses) == 0 {
+		return ""
+	}
+	rendered := make([]string, 0, len(uses))
+	for _, use := range uses {
+		rendered = append(rendered, fmt.Sprintf("%s %s v%d %s",
+			use.Key, scopeKind(use.Scope), use.Version, shortHash(use.Hash)))
+	}
+	return "instructions: " + strings.Join(rendered, ", ")
+}
+
+// scopeKind is the sort of scope a recorded value came from, read off the recorded
+// scope itself. The record keeps the whole scope so a value can be found again; only
+// what is printed is reduced.
+func scopeKind(scope string) string {
+	if kind, _, found := strings.Cut(scope, ":"); found {
+		return kind
+	}
+	return scope
+}
+
+// shortHashLength is how much of a content hash one history line carries: enough to
+// tell two instructions apart at a glance, short enough not to take the row over.
+const shortHashLength = 8
+
+// shortHash renders the start of a content hash, or nothing when there is none (an
+// execution that used what its build ships before anything was published).
+func shortHash(hash string) string {
+	if len(hash) > shortHashLength {
+		return hash[:shortHashLength]
+	}
+	return hash
 }
 
 // convergedLabel names how a review loop ended: because the agent found nothing
@@ -403,6 +454,12 @@ converged or a pilot addressed comments, the plan a fleet run came from, the
 schedule that fired it, the pull request it operated on, and why it failed. A row
 with nothing more specific to say shows its prompt, which is what tells one run
 from another.
+
+A row that ran under stored instructions also names them, as
+"<key> <scope> v<version> <hash>": which instruction, whether it came from the
+place, the installation or the shipped default, which version of it, and the start
+of its content hash. That is what makes a past result explainable — the version it
+names still reads as it did, however the instruction was edited since.
 
 USAGE
   temporal-agents history [--kind <kind>] [--limit <n>] [--workflow-id <id>]
