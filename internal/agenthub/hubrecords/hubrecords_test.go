@@ -159,7 +159,7 @@ func TestKindForEveryClass(t *testing.T) {
 	reached := map[execstore.Kind]bool{}
 	for _, class := range []wfid.Class{
 		wfid.ClassRun, wfid.ClassDevelop, wfid.ClassReview, wfid.ClassPilot,
-		wfid.ClassFleet, wfid.ClassFleetPlan,
+		wfid.ClassFleet, wfid.ClassFleetPlan, wfid.ClassSteering,
 	} {
 		reached[kindFor(class)] = true
 	}

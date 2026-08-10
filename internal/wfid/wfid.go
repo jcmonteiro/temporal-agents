@@ -46,6 +46,10 @@ const (
 	// ClassSchedule is a schedule's own ID (schedules are not workflows, but the
 	// live view lists them next to workflows).
 	ClassSchedule Class = "schedule"
+	// ClassSteering is a steering session: the durable wait a review round pauses
+	// in. It is never an item of its own — the loop it paused is the work — so it
+	// is classified only to keep it from being mistaken for a plain run.
+	ClassSteering Class = "steering"
 )
 
 // Prefixes of the ID conventions, exported so a caller can build an ID with the
@@ -58,6 +62,7 @@ const (
 	pilotPrefix     = "pilot-"
 	openPRPrefix    = "open-pr-"
 	schedulePrefix  = "schedule-"
+	steeringPrefix  = "steering-"
 )
 
 // Classify labels a workflow ID by its convention.
@@ -85,6 +90,8 @@ func Classify(id string) Class {
 		return ClassOpenPR
 	case strings.HasPrefix(id, schedulePrefix):
 		return ClassSchedule
+	case strings.HasPrefix(id, steeringPrefix):
+		return ClassSteering
 	default:
 		return ClassRun
 	}
@@ -112,6 +119,12 @@ func FleetNodeID(fleetID, workflowID string) (string, bool) {
 	}
 	return nodeID, true
 }
+
+// SteeringWorkflowID returns the workflow ID the steering session of one paused
+// run waits under. The run that pauses is what names it, so the identity is stable
+// for the session's whole life and a later pass of the same loop (a later run) is a
+// session of its own.
+func SteeringWorkflowID(loopRunID string) string { return steeringPrefix + loopRunID }
 
 // requestNamespace is the UUID namespace client request identities are hashed
 // under. It is a constant of this package because the mapping must be the same in

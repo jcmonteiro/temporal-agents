@@ -65,12 +65,17 @@ const (
 	// KindFleetPlan is a FleetPlanWorkflow execution: the `fleet plan` agent run
 	// that produces a graph, recorded separately from the run that executes it.
 	KindFleetPlan Kind = "fleet-plan"
+	// KindSteering is a steering session: the durable wait a review round pauses in
+	// while an operator decides. It is recorded so its own token cost is
+	// attributable, and it is deliberately not an item of its own anywhere an
+	// operator looks — the loop it paused is the work.
+	KindSteering Kind = "steering"
 )
 
 // Kinds lists every recorded kind, in a stable order, for CLI validation and
 // help text.
 func Kinds() []Kind {
-	return []Kind{KindRun, KindDevelop, KindReview, KindPilot, KindFleet, KindFleetPlan}
+	return []Kind{KindRun, KindDevelop, KindReview, KindPilot, KindFleet, KindFleetPlan, KindSteering}
 }
 
 // ValidKind reports whether k is a kind a workflow records under, so a mistyped
@@ -179,7 +184,30 @@ type Detail struct {
 	// Converged reports whether a review loop ended because the agent found
 	// nothing left to change (rather than hitting the pass cap). It is nil for
 	// kinds that do not review.
+	//
+	// It is kept beside Ending, which says the same thing and more: a loop can now
+	// also end because an operator stopped or accepted it, which a single flag
+	// cannot express. Rows written before Ending existed carry only this flag, so
+	// both are written and neither is derived from the other.
 	Converged *bool `json:"converged,omitempty"`
+	// Ending names why a review or pilot loop ended: it converged, an operator
+	// accepted the work, an operator stopped it, or it reached the pass cap. It is
+	// empty for a row that has not ended, and for kinds that do not loop.
+	Ending string `json:"ending,omitempty"`
+	// WaitingSince is when the execution started waiting for an operator's decision,
+	// and nil whenever it is not waiting. It is what lets a run that is technically
+	// still running report that it needs a human, and say since when. It is a
+	// pointer because a zero time is a value jsonb would keep: a row that never
+	// waited must carry no such field at all.
+	WaitingSince *time.Time `json:"waitingSince,omitempty"`
+	// Round is which pause point a steering session belongs to.
+	Round string `json:"round,omitempty"`
+	// Decision is what an operator decided in a steering session: guide, skip or
+	// stop. It is empty while the session is still waiting.
+	Decision string `json:"decision,omitempty"`
+	// Principal is who made that decision, recorded for audit. Any signed-in
+	// operator may answer, so this says who did, never who was allowed to.
+	Principal string `json:"principal,omitempty"`
 	// Addressed reports whether a pilot pass actually addressed comments. It is
 	// nil for kinds that do not pilot.
 	Addressed *bool `json:"addressed,omitempty"`

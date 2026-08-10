@@ -333,6 +333,8 @@ func kindFor(class wfid.Class) execstore.Kind {
 		return execstore.KindFleet
 	case wfid.ClassFleetPlan:
 		return execstore.KindFleetPlan
+	case wfid.ClassSteering:
+		return execstore.KindSteering
 	default:
 		return ""
 	}

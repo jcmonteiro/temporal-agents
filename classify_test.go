@@ -32,6 +32,7 @@ func TestClassifyWorkflow(t *testing.T) {
 		{"pilot", "pilot-" + id, "pilot"},
 		{"open-pr", "open-pr-" + id, "open-pr"},
 		{"schedule", "schedule-daily", "schedule"},
+		{"steering session", "steering-" + id, "steering"},
 		{"unknown", "something-else", "run"},
 	}
 	for _, tc := range cases {
@@ -56,6 +57,7 @@ func TestClassifyWorkflow_AgreesWithRecordedKinds(t *testing.T) {
 		execstore.KindPilot:     "pilot-" + id,
 		execstore.KindFleet:     "fleet-" + id,
 		execstore.KindFleetPlan: "fleet-plan-" + id,
+		execstore.KindSteering:  "steering-" + id,
 	}
 	// Every recorded kind must be covered, so a kind added later fails here until
 	// its workflow-ID prefix is classified too.
