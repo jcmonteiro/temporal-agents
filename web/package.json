@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "tsc --build && vite build",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "vitest run --sequence.shuffle",
     "test:watch": "vitest"
   },
   "dependencies": {
