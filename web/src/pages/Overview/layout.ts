@@ -20,13 +20,14 @@ interface Options {
   height: number;
   innerRadius?: number;
   ringGap?: number;
+  satelliteSpacing?: number;
 }
 
-// Each ring holds a fixed set of statuses (ring 0 = closest to center):
+// Each status group holds a fixed band of rings (band 0 = closest to center):
 //   0 (closest):  done, failed        — settled work
 //   1 (middle):   paused, waiting-input, waiting — stalled / needs attention
 //   2 (furthest): in-progress, todo   — active and upcoming work
-const RING_OF_STATUS: Record<WorkItemStatus, number> = {
+const BAND_OF_STATUS: Record<WorkItemStatus, number> = {
   done: 0,
   failed: 0,
   paused: 1,
@@ -36,47 +37,79 @@ const RING_OF_STATUS: Record<WorkItemStatus, number> = {
   todo: 2,
 };
 
-const RING_COUNT = 3;
+const BAND_COUNT = 3;
+
+// Minimum arc length between two satellite centres on the same ring. A
+// satellite is 60px across and carries a label underneath, so this leaves a
+// visible gap instead of letting neighbours touch.
+const DEFAULT_SATELLITE_SPACING = 96;
+
+// A ring never holds fewer than this, however tight it is; below three the
+// innermost ring would spawn an unreasonable number of overflow rings.
+const MIN_RING_CAPACITY = 3;
+
+/** How many satellites fit on a ring of this radius without overlapping. */
+function ringCapacity(radius: number, spacing: number): number {
+  const circumference = 2 * Math.PI * radius;
+  return Math.max(MIN_RING_CAPACITY, Math.floor(circumference / spacing));
+}
 
 /**
  * Pure, deterministic orbit layout (IB §4a). Same input → same output.
- * Items are assigned to one of three concentric rings by their status group,
- * then spread evenly around that ring.
+ *
+ * Items are grouped into three status bands, innermost band first. Every band
+ * fills as many rings as it needs: each ring takes only as many satellites as
+ * its circumference can hold, and the rest overflow onto the next ring
+ * outwards. Later bands start beyond the rings the earlier ones consumed, so
+ * a large response grows the constellation outwards instead of crowding
+ * satellites and labels on top of each other.
  */
 export function layoutOrbit(items: WorkItem[], opts: Options): OrbitLayout {
-  const { width, height, innerRadius = 180, ringGap = 120 } = opts;
+  const {
+    width,
+    height,
+    innerRadius = 180,
+    ringGap = 120,
+    satelliteSpacing = DEFAULT_SATELLITE_SPACING,
+  } = opts;
 
   const center = { x: width / 2, y: height / 2 };
 
-  const orbits: number[] = [];
-  for (let ring = 0; ring < RING_COUNT; ring += 1) {
-    orbits.push(innerRadius + ring * ringGap);
-  }
-
-  // Bucket items by their status ring.
-  const buckets: WorkItem[][] = Array.from({ length: RING_COUNT }, () => []);
+  // Bucket items by their status band.
+  const buckets: WorkItem[][] = Array.from({ length: BAND_COUNT }, () => []);
   for (const item of items) {
-    buckets[RING_OF_STATUS[item.status]].push(item);
+    buckets[BAND_OF_STATUS[item.status]].push(item);
   }
 
+  const orbits: number[] = [];
   const slots: OrbitSlot[] = [];
-  buckets.forEach((bucket, ringIdx) => {
-    const radius = orbits[ringIdx];
-    const count = bucket.length;
-    if (count === 0) return;
-    // Offset each ring so items don't line up radially between rings.
-    const offset = ringIdx * (Math.PI / 6);
-    bucket.forEach((item, i) => {
-      const angle = offset + (i / count) * Math.PI * 2 - Math.PI / 2;
-      slots.push({
-        item,
-        orbit: ringIdx,
-        angle,
-        radius,
-        x: center.x + Math.cos(angle) * radius,
-        y: center.y + Math.sin(angle) * radius,
+
+  buckets.forEach((bucket) => {
+    let remaining = bucket;
+    // Every band keeps at least one (possibly empty) ring, so the rings the
+    // operator sees do not jump inwards when a status band empties out.
+    do {
+      const ringIdx = orbits.length;
+      const radius = innerRadius + ringIdx * ringGap;
+      orbits.push(radius);
+
+      const onRing = remaining.slice(0, ringCapacity(radius, satelliteSpacing));
+      remaining = remaining.slice(onRing.length);
+
+      // Offset each ring so items don't line up radially between rings.
+      const offset = ringIdx * (Math.PI / 6);
+      onRing.forEach((item, i) => {
+        const angle = offset + (i / onRing.length) * Math.PI * 2 - Math.PI / 2;
+        slots.push({
+          item,
+          orbit: ringIdx,
+          angle,
+          radius,
+          x: center.x + Math.cos(angle) * radius,
+          y: center.y + Math.sin(angle) * radius,
+        });
       });
-    });
+    } while (remaining.length > 0);
   });
 
   return { center, orbits, slots };
