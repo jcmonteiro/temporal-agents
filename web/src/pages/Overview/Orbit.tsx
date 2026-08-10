@@ -250,10 +250,12 @@ export function Orbit({ items, selectedId, onSelect, onClear }: Props): ReactNod
           "radial-gradient(1200px 700px at 50% 50%, var(--canvas-glow) 0%, var(--color-bg) 70%)",
       }}
     >
+      {/* role="group", not "img": an image's descendants are presentational,
+          which would hide the focusable satellites from assistive technology. */}
       <svg
         width={size.w}
         height={size.h}
-        role="img"
+        role="group"
         aria-label="Orbit overview of active agent work"
       >
         {/* Starfield stays fixed to the viewport (doesn't pan/zoom). */}
