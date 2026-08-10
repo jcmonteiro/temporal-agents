@@ -33,14 +33,20 @@ make setup          # optional: enable git hooks (gofmt on commit)
    export DATABASE_URL=postgres://postgres:postgres@localhost:15432/temporal_agents?sslmode=disable
    ```
 
-3. Start the worker (executes workflows + notifications; applies the store's
-   schema migrations at startup):
+3. Apply the database schema. This is a deliberate step of its own, and it comes
+   **before** starting anything:
+
+   ```sh
+   temporal-agents migrate
+   ```
+
+4. Start the worker (executes workflows + notifications):
 
    ```sh
    temporal-agents worker
    ```
 
-4. In another terminal, submit work:
+5. In another terminal, submit work:
 
    ```sh
    temporal-agents run "summarize the README"
@@ -48,7 +54,7 @@ make setup          # optional: enable git hooks (gofmt on commit)
    temporal-agents history
    ```
 
-5. Start the Agent Hub REST API before using `list`. It also serves a built
+6. Start the Agent Hub REST API before using `list`. It also serves a built
    `web/dist` bundle when one exists:
 
    ```sh
@@ -56,6 +62,34 @@ make setup          # optional: enable git hooks (gofmt on commit)
    # API entry point: http://127.0.0.1:8973/api/v1
    # OpenAPI:        http://127.0.0.1:8973/api/v1/openapi.json
    ```
+
+### Schema migration: migrate, then start
+
+Applying the schema and starting a process are separate operations, and the order
+is fixed: **`migrate` first, then `worker` and `serve`**.
+
+- `temporal-agents migrate` applies every bounded context's own migrations and
+  prints the version each context ends at. It is idempotent, so running it against
+  an up-to-date database applies nothing, and two invocations at once serialize on
+  a database lock instead of racing.
+- `worker` and `serve` **verify** the schema at startup and apply nothing. A
+  database older than the build refuses the process immediately, naming the
+  context, the version the database is at, the version the build requires, and the
+  command that fixes it.
+- Each context owns its migrations inside its own adapter package
+  (`internal/execstore/execpg/migrations`, `internal/agenthub/hubpg/migrations`),
+  recorded under its own namespace, with no foreign keys between contexts. A
+  process is only stopped by the contexts it actually uses: a stale dismissal
+  schema stops `serve`, not `worker`.
+- For local iteration only, `TEMPORAL_AGENTS_DEV_AUTO_MIGRATE=1` lets `worker` and
+  `serve` apply migrations at startup instead of refusing. It is opt-in, prints a
+  warning on every start, and must never be set outside development.
+
+```sh
+$ temporal-agents migrate
+execution-store  applied 4 migration(s)  schema 0004_execution_first_run_id.sql
+agent-hub        applied 1 migration(s)  schema 0001_dismissals.sql
+```
 
 Workflow submission and `watch` connect to `localhost:17233` by default. Override
 that address with `TEMPORAL_ADDRESS`. The `list` command reads
@@ -94,6 +128,7 @@ record.
 
 | Command | What it does |
 |---|---|
+| `migrate` | Apply every bounded context's schema, then print the version each ends at. Run it before `worker` and `serve`. |
 | `worker [--no-desktop] [--webhook <url>]` | Start the worker. Desktop notifications on by default (macOS); `--webhook` POSTs completion JSON. |
 | `run "<prompt>" [--save <name>] [--chain]` | Start a workflow and return immediately. |
 | `schedule "<interval\|cron>" "<prompt>" [--save <name>] [--chain]` | Run a workflow on a schedule (overlaps skipped). Interval = Go duration (`1h`, `30m`); or a 5-field cron. |
@@ -185,7 +220,9 @@ make test   # every test, integration suites included
 
 The `execstore` and Agent Hub dismissal adapters are tested against a real
 Postgres, since the database and its schema are the out-of-process dependency under
-test. Those suites start throwaway Postgres instances with
+test, and the migration step itself is tested the same way (fresh database, stale
+database refused, repeated migrate, concurrent migrate). Those suites start
+throwaway Postgres instances with
 [testcontainers-go](https://golang.testcontainers.org/),
 so it needs a running Docker daemon but no setup and no environment variable — and
 it never touches the `temporal_agents` database you work in. Each test gets a fresh

@@ -29,6 +29,11 @@ type collection[T any] struct {
 	// Limit is the cap that was applied, whether the caller asked for it or it is
 	// the default.
 	Limit int `json:"limit"`
+	// Locations is the flat registry of the places the page's items refer to, closed
+	// under ancestry and ordered parents-first. It is absent from the one collection
+	// whose items are not work and therefore have no place (dismissals), which is why
+	// it is built by a constructor of its own rather than by every caller.
+	Locations []locationResource `json:"locations,omitempty"`
 }
 
 // newCollection wraps items in the envelope, normalising a nil slice to an empty
@@ -40,32 +45,99 @@ func newCollection[T any](items []T, limit int) collection[T] {
 	return collection[T]{Items: items, Count: len(items), Limit: limit}
 }
 
+// newLocatedCollection is newCollection for a collection of work: it publishes the
+// registry every item's locationId resolves against. The registry always carries at
+// least the unknown place, so the field is never dropped from a response that
+// promises it.
+func newLocatedCollection[T any](items []T, limit int, registry agenthub.LocationRegistry) collection[T] {
+	document := newCollection(items, limit)
+	document.Locations = locationsFrom(registry)
+	return document
+}
+
 // activeWorkCollection is the additive paged contract used by the CLI. It is a
 // separate model so existing v1 collection models do not gain required fields.
 type activeWorkCollection struct {
-	Items []activeWorkResource `json:"items"`
-	Count int                  `json:"count"`
-	Limit int                  `json:"limit"`
-	Next  *string              `json:"next"`
+	Items     []activeWorkResource `json:"items"`
+	Count     int                  `json:"count"`
+	Limit     int                  `json:"limit"`
+	Next      *string              `json:"next"`
+	Locations []locationResource   `json:"locations,omitempty"`
 }
 
 // activeWorkResource is one top-level unsettled execution or configured schedule.
+// LocationID is optional here, and only here: the CLI and hubclient decode this
+// model, and a required field would be a breaking change to a working consumer.
 type activeWorkResource struct {
-	ID      string                  `json:"id"`
-	Type    agenthub.ActiveWorkType `json:"type"`
-	Status  agenthub.WorkStatus     `json:"status"`
-	Running bool                    `json:"running"`
+	ID         string                  `json:"id"`
+	Type       agenthub.ActiveWorkType `json:"type"`
+	Status     agenthub.WorkStatus     `json:"status"`
+	Running    bool                    `json:"running"`
+	LocationID string                  `json:"locationId,omitempty"`
 }
 
-func newActiveWorkCollection(items []activeWorkResource, limit int, next string) activeWorkCollection {
+func newActiveWorkCollection(items []activeWorkResource, limit int, next string, registry agenthub.LocationRegistry) activeWorkCollection {
 	if items == nil {
 		items = []activeWorkResource{}
 	}
-	document := activeWorkCollection{Items: items, Count: len(items), Limit: limit}
+	document := activeWorkCollection{
+		Items: items, Count: len(items), Limit: limit, Locations: locationsFrom(registry),
+	}
 	if next != "" {
 		document.Next = &next
 	}
 	return document
+}
+
+// locationResource is one place in the registry: the published form of the core's
+// tagged union, discriminated by kind. A variant carries exactly its own natural key
+// — a directory has a path and no ref, a remote has a ref and no path, the unknown
+// place has neither and no parent — so a consumer switches on one field instead of
+// deducing meaning from which fields happen to be null.
+type locationResource struct {
+	// ID is the server-issued identity. It is opaque: a consumer references it and
+	// never takes it apart.
+	ID string `json:"id"`
+	// Kind is the union's discriminator.
+	Kind agenthub.LocationKind `json:"kind"`
+	// Label is what to call the place, computed by the server so no consumer parses a
+	// path.
+	Label string `json:"label"`
+	// ParentID references the place this one is part of, and is null for a root. The
+	// parent is always published in the same registry, before this entry.
+	ParentID *string `json:"parentId"`
+	// Directory is the absolute, cleaned path, present only on the directory variant.
+	Directory string `json:"directory,omitempty"`
+	// Ref is the bounded reference, present only on the remote variant.
+	Ref string `json:"ref,omitempty"`
+}
+
+// locationsFrom projects a registry onto its published form, preserving the core's
+// parents-first order. The order is the core's, not this layer's: an entity tag is
+// computed over these bytes, so re-sorting here would be a second source of truth for
+// something that must never move.
+func locationsFrom(registry agenthub.LocationRegistry) []locationResource {
+	locations := registry.Locations()
+	resources := make([]locationResource, 0, len(locations))
+	for _, location := range locations {
+		resource := locationResource{
+			ID:    location.ID(),
+			Kind:  location.Kind(),
+			Label: location.Label(),
+		}
+		if parent, ok := location.Parent(); ok {
+			id := parent.ID()
+			resource.ParentID = &id
+		}
+		if directory, ok := location.Directory(); ok {
+			resource.Directory = directory
+		}
+		if ref, ok := location.Ref(); ok {
+			resource.Ref = ref
+		}
+		resources = append(resources, resource)
+	}
+	return resources
 }
 
 // fleetResource is a fleet: an orchestrated plan, its aggregated status and its
@@ -95,11 +167,18 @@ type fleetResource struct {
 	EndedAt *string `json:"endedAt"`
 	// Dismissible reports whether the operator may hide it from the overview.
 	Dismissible bool `json:"dismissible"`
+	// LocationID references the place the fleet runs, resolved against the response's
+	// locations registry.
+	LocationID string `json:"locationId"`
 	// UpNext are the nodes that have not started: runnable first, then waiting.
 	UpNext []fleetNodeResource `json:"upNext,omitempty"`
 	// Nodes is the plan's graph with each node's status, present only in the
 	// single-fleet representation.
 	Nodes []fleetNodeResource `json:"nodes,omitempty"`
+	// Locations is the registry this resource's references resolve against, present
+	// only in the single-fleet representation: in a collection the envelope carries
+	// one registry for every item instead of one per item.
+	Locations []locationResource `json:"locations,omitempty"`
 }
 
 // fleetNodeResource is one plan node with what happened to it.
@@ -115,6 +194,9 @@ type fleetNodeResource struct {
 	DependsOn []string `json:"dependsOn,omitempty"`
 	// Status is the node's derived status.
 	Status agenthub.WorkStatus `json:"status"`
+	// LocationID references the place the node runs. A node can develop in a worktree
+	// of its own, so it genuinely differs from its fleet.
+	LocationID string `json:"locationId"`
 	// Execution is the child execution the node ran in, or null when it never
 	// started.
 	Execution *nodeExecutionResource `json:"execution"`
@@ -171,6 +253,11 @@ type runResource struct {
 	Tokens int `json:"tokens,omitempty"`
 	// Dismissible reports whether the operator may hide it from the overview.
 	Dismissible bool `json:"dismissible"`
+	// LocationID references the place the run runs.
+	LocationID string `json:"locationId"`
+	// Locations is the registry this resource's references resolve against, present
+	// only in the single-run representation.
+	Locations []locationResource `json:"locations,omitempty"`
 }
 
 // scheduleResource is one schedule. It carries no progress: a schedule is
@@ -199,6 +286,8 @@ type scheduleResource struct {
 	// Dismissible is always false: a schedule has no finished state, so hiding it
 	// would hide live configuration.
 	Dismissible bool `json:"dismissible"`
+	// LocationID references the place the runs it fires run.
+	LocationID string `json:"locationId"`
 }
 
 // dismissalResource is one dismissal: the operator's view state over a finished
@@ -239,12 +328,30 @@ func fleetFrom(fleet agenthub.Fleet, withNodes bool) fleetResource {
 		StartedAt:   timestamp(fleet.StartedAt),
 		EndedAt:     timestamp(fleet.EndedAt),
 		Dismissible: fleet.Dismissible(),
+		LocationID:  fleet.Location.ID(),
 		UpNext:      nodesFrom(fleet.UpNext()),
 	}
 	if withNodes {
 		resource.Nodes = nodesFrom(fleet.Nodes)
+		resource.Locations = locationsFrom(agenthub.NewLocationRegistry(fleetLocations(fleet, true)...))
 	}
 	return resource
+}
+
+// fleetLocations lists the places one fleet representation refers to, so the registry
+// published beside it is closed over exactly what it publishes. The up-next nodes are
+// part of every representation; the whole graph only of the single-fleet one.
+func fleetLocations(fleet agenthub.Fleet, withNodes bool) []agenthub.Location {
+	locations := []agenthub.Location{fleet.Location}
+	for _, node := range fleet.UpNext() {
+		locations = append(locations, node.Location)
+	}
+	if withNodes {
+		for _, node := range fleet.Nodes {
+			locations = append(locations, node.Location)
+		}
+	}
+	return locations
 }
 
 // nodesFrom projects plan nodes onto their representation, preserving order.
@@ -255,11 +362,12 @@ func nodesFrom(nodes []agenthub.FleetNode) []fleetNodeResource {
 	out := make([]fleetNodeResource, 0, len(nodes))
 	for _, node := range nodes {
 		resource := fleetNodeResource{
-			ID:        node.ID,
-			Label:     node.ID,
-			Prompt:    node.Prompt,
-			DependsOn: node.DependsOn,
-			Status:    node.Status,
+			ID:         node.ID,
+			Label:      node.ID,
+			Prompt:     node.Prompt,
+			DependsOn:  node.DependsOn,
+			Status:     node.Status,
+			LocationID: node.Location.ID(),
 		}
 		if node.Execution != nil {
 			resource.Execution = &nodeExecutionResource{
@@ -286,9 +394,10 @@ func progressFrom(progress agenthub.Progress) progressResource {
 	}
 }
 
-// runFrom projects a run onto its representation.
-func runFrom(run agenthub.Run) runResource {
-	return runResource{
+// runFrom projects a run onto its representation. withRegistry is true for the
+// single-run representation, which has no envelope to carry the registry for it.
+func runFrom(run agenthub.Run, withRegistry bool) runResource {
+	resource := runResource{
 		ID:          run.ID,
 		Kind:        agenthub.KindRun,
 		Type:        run.Type,
@@ -299,7 +408,12 @@ func runFrom(run agenthub.Run) runResource {
 		Iterations:  run.Iterations,
 		Tokens:      run.Tokens,
 		Dismissible: run.Dismissible(),
+		LocationID:  run.Location.ID(),
 	}
+	if withRegistry {
+		resource.Locations = locationsFrom(agenthub.NewLocationRegistry(run.Location))
+	}
+	return resource
 }
 
 // scheduleFrom projects a schedule onto its representation.
@@ -315,6 +429,7 @@ func scheduleFrom(schedule agenthub.Schedule) scheduleResource {
 		LastRunAt:      timestamp(schedule.LastRunAt),
 		NextRunAt:      timestamp(schedule.NextRunAt),
 		Dismissible:    schedule.Dismissible(),
+		LocationID:     schedule.Location.ID(),
 	}
 }
 

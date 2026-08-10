@@ -147,6 +147,9 @@ ENVIRONMENT
   AGENT_HUB_AUTH_TOKEN  Bearer token of at least 32 characters (required outside
                         loopback). Generate one with: openssl rand -base64 32
 
+The schema is applied by 'temporal-agents migrate'. This server verifies it at
+startup and refuses to run against a database older than the build it is.
+
 EXAMPLES
   temporal-agents serve
   temporal-agents serve --web-dir=
@@ -249,16 +252,23 @@ func runAPIServer(options serveOptions) error {
 	}
 	ctx := context.Background()
 
-	// Open the execution record as read-only. Its schema remains worker-owned: if no
-	// worker has applied it yet, health and resource reads report the dependency as
-	// unavailable rather than the API silently creating workflow-owned tables.
+	// Both schemas this process reads and writes through are verified before anything
+	// is opened for use. Neither is applied: migrating is the explicit `migrate` step,
+	// so the API server can never create a table the worker owns, and a stale database
+	// stops the server here instead of surfacing as a failed read later (see
+	// migrate.go).
+	if err := requireCurrentSchema(ctx, serveSchemaContexts(), os.Stdout); err != nil {
+		return err
+	}
+
+	// Open the execution record as read-only.
 	recordStore, err := openStore(ctx)
 	if err != nil {
 		return err
 	}
 	defer recordStore.Close()
 
-	// Dismissals are API-owned, so this process applies their schema at startup.
+	// Dismissals are the one durable write this process owns.
 	dsn, err := databaseURL()
 	if err != nil {
 		return err
@@ -268,11 +278,6 @@ func runAPIServer(options serveOptions) error {
 		return fmt.Errorf("could not reach the dismissal store: %w", err)
 	}
 	defer dismissals.Close()
-	migrateCtx, cancelMigrate := context.WithTimeout(ctx, storeMigrateTimeout)
-	defer cancelMigrate()
-	if err := dismissals.Migrate(migrateCtx); err != nil {
-		return fmt.Errorf("could not apply the dismissal store schema: %w", err)
-	}
 
 	orchestrator, err := connectTemporal()
 	if err != nil {

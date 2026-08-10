@@ -348,13 +348,17 @@ func (s *Server) handleActiveWork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items := make([]activeWorkResource, 0, len(page.Items))
+	locations := make([]agenthub.Location, 0, len(page.Items))
 	for _, item := range page.Items {
 		items = append(items, activeWorkResource{
 			ID: item.ID, Type: item.Type, Status: item.Status, Running: item.Running,
+			LocationID: item.Location.ID(),
 		})
+		locations = append(locations, item.Location)
 	}
 	s.writeJSON(w, r, http.StatusOK, modelActiveWorkCollection,
-		newActiveWorkCollection(items, query.Limit, s.nextPage(r, page.Next)))
+		newActiveWorkCollection(items, query.Limit, s.nextPage(r, page.Next),
+			agenthub.NewLocationRegistry(locations...)))
 }
 
 // handleFleets answers the fleet collection.
@@ -369,10 +373,13 @@ func (s *Server) handleFleets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items := make([]fleetResource, 0, len(fleets))
+	var locations []agenthub.Location
 	for _, fleet := range fleets {
 		items = append(items, fleetFrom(fleet, false))
+		locations = append(locations, fleetLocations(fleet, false)...)
 	}
-	s.writeJSON(w, r, http.StatusOK, modelFleetCollection, newCollection(items, limit))
+	s.writeJSON(w, r, http.StatusOK, modelFleetCollection,
+		newLocatedCollection(items, limit, agenthub.NewLocationRegistry(locations...)))
 }
 
 // handleFleet answers one fleet, with its plan's graph.
@@ -397,10 +404,13 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items := make([]runResource, 0, len(runs))
+	locations := make([]agenthub.Location, 0, len(runs))
 	for _, run := range runs {
-		items = append(items, runFrom(run))
+		items = append(items, runFrom(run, false))
+		locations = append(locations, run.Location)
 	}
-	s.writeJSON(w, r, http.StatusOK, modelRunCollection, newCollection(items, limit))
+	s.writeJSON(w, r, http.StatusOK, modelRunCollection,
+		newLocatedCollection(items, limit, agenthub.NewLocationRegistry(locations...)))
 }
 
 // handleRun answers one run chain.
@@ -410,7 +420,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		s.writeServiceProblem(w, r, err)
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, modelRun, runFrom(run))
+	s.writeJSON(w, r, http.StatusOK, modelRun, runFrom(run, true))
 }
 
 // handleSchedules answers the schedule collection.
@@ -425,10 +435,13 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	items := make([]scheduleResource, 0, len(schedules))
+	locations := make([]agenthub.Location, 0, len(schedules))
 	for _, schedule := range schedules {
 		items = append(items, scheduleFrom(schedule))
+		locations = append(locations, schedule.Location)
 	}
-	s.writeJSON(w, r, http.StatusOK, modelScheduleCollection, newCollection(items, limit))
+	s.writeJSON(w, r, http.StatusOK, modelScheduleCollection,
+		newLocatedCollection(items, limit, agenthub.NewLocationRegistry(locations...)))
 }
 
 // handleDismissals answers the dismissal collection: what the operator has hidden.

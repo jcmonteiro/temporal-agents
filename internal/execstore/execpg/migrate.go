@@ -25,8 +25,12 @@ const migrationNamespace = ""
 
 // Migrate applies every embedded migration that has not been applied yet, in
 // filename order, and records each in the schema_migrations table. It is
-// idempotent: re-running it against an up-to-date database does nothing, so the
-// worker can simply call it at startup.
+// idempotent: re-running it against an up-to-date database does nothing.
+//
+// Applying it is an explicit step (`temporal-agents migrate`), not something a
+// starting process does: two processes racing to apply DDL is a failure mode nobody
+// can debug from a log, and a schema change is an operational decision. A starting
+// process reads SchemaState instead and refuses to run against a stale database.
 //
 // The rules that make this safe under several workers starting at once — one
 // advisory lock, one connection, each migration committing together with its
@@ -35,6 +39,14 @@ const migrationNamespace = ""
 // with this one.
 func (p *Postgres) Migrate(ctx context.Context) error {
 	return pgmigrate.Apply(ctx, p.pool, migrationFS, migrationDir, migrationNamespace)
+}
+
+// SchemaState reports what this context's schema is at and what this build requires,
+// without changing anything. It is the read behind the explicit migrate step and
+// behind the startup verification a worker and the API server run: a process that
+// only verifies must not be able to apply DDL by accident.
+func (p *Postgres) SchemaState(ctx context.Context) (pgmigrate.State, error) {
+	return pgmigrate.Inspect(ctx, p.pool, migrationFS, migrationDir, migrationNamespace)
 }
 
 // migrationNames lists the embedded migration filenames in apply order.

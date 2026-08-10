@@ -1089,7 +1089,8 @@
           "id",
           "label",
           "status",
-          "execution"
+          "execution",
+          "locationId"
         ],
         "properties": {
           "id": {
@@ -1117,6 +1118,10 @@
           "status": {
             "$ref": "#/components/schemas/WorkStatus"
           },
+          "locationId": {
+            "$ref": "#/components/schemas/LocationID",
+            "description": "The place this item runs, resolved against the response's locations registry."
+          },
           "execution": {
             "oneOf": [
               {
@@ -1140,7 +1145,8 @@
           "progress",
           "startedAt",
           "endedAt",
-          "dismissible"
+          "dismissible",
+          "locationId"
         ],
         "properties": {
           "id": {
@@ -1178,6 +1184,10 @@
           "dismissible": {
             "type": "boolean"
           },
+          "locationId": {
+            "$ref": "#/components/schemas/LocationID",
+            "description": "The place this item runs, resolved against the response's locations registry."
+          },
           "upNext": {
             "type": "array",
             "items": {
@@ -1189,6 +1199,10 @@
             "items": {
               "$ref": "#/components/schemas/FleetNode"
             }
+          },
+          "locations": {
+            "$ref": "#/components/schemas/LocationRegistry",
+            "description": "Present in the single-item representation, which has no collection envelope to carry it."
           }
         }
       },
@@ -1204,7 +1218,8 @@
           "startedAt",
           "endedAt",
           "iterations",
-          "dismissible"
+          "dismissible",
+          "locationId"
         ],
         "properties": {
           "id": {
@@ -1245,6 +1260,14 @@
           },
           "dismissible": {
             "type": "boolean"
+          },
+          "locations": {
+            "$ref": "#/components/schemas/LocationRegistry",
+            "description": "Present in the single-item representation, which has no collection envelope to carry it."
+          },
+          "locationId": {
+            "$ref": "#/components/schemas/LocationID",
+            "description": "The place this item runs, resolved against the response's locations registry."
           }
         }
       },
@@ -1260,7 +1283,8 @@
           "runningActions",
           "lastRunAt",
           "nextRunAt",
-          "dismissible"
+          "dismissible",
+          "locationId"
         ],
         "properties": {
           "id": {
@@ -1300,6 +1324,10 @@
           },
           "dismissible": {
             "const": false
+          },
+          "locationId": {
+            "$ref": "#/components/schemas/LocationID",
+            "description": "The place this item runs, resolved against the response's locations registry."
           }
         }
       },
@@ -1358,7 +1386,8 @@
         "required": [
           "items",
           "count",
-          "limit"
+          "limit",
+          "locations"
         ],
         "properties": {
           "items": {
@@ -1375,6 +1404,9 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 200
+          },
+          "locations": {
+            "$ref": "#/components/schemas/LocationRegistry"
           }
         }
       },
@@ -1384,7 +1416,8 @@
         "required": [
           "items",
           "count",
-          "limit"
+          "limit",
+          "locations"
         ],
         "properties": {
           "items": {
@@ -1401,6 +1434,9 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 200
+          },
+          "locations": {
+            "$ref": "#/components/schemas/LocationRegistry"
           }
         }
       },
@@ -1410,7 +1446,8 @@
         "required": [
           "items",
           "count",
-          "limit"
+          "limit",
+          "locations"
         ],
         "properties": {
           "items": {
@@ -1427,8 +1464,190 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 200
+          },
+          "locations": {
+            "$ref": "#/components/schemas/LocationRegistry"
           }
         }
+      },
+      "LocationKind": {
+        "type": "string",
+        "enum": [
+          "unknown",
+          "directory",
+          "remote"
+        ],
+        "description": "The location union's discriminator. A variant carries exactly its own fields."
+      },
+      "LocationID": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[A-Za-z0-9_-]+$",
+        "description": "An opaque, server-issued location identity. Never parse it: the natural key (the directory, or the ref) is published as a field of its own."
+      },
+      "UnknownLocation": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "The place work runs when nothing was recorded about where. It is a real, rendered place: it carries no directory, no ref and no parent.",
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "parentId"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/LocationID"
+          },
+          "kind": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocationKind"
+              },
+              {
+                "const": "unknown"
+              }
+            ]
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The server-computed display name. No consumer derives one from a path."
+          },
+          "parentId": {
+            "const": null,
+            "description": "Always null: the unknown place is a root and has no parent."
+          }
+        }
+      },
+      "DirectoryLocation": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "A place on a machine's filesystem.",
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "parentId",
+          "directory"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/LocationID"
+          },
+          "kind": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocationKind"
+              },
+              {
+                "const": "directory"
+              }
+            ]
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The server-computed display name. No consumer derives one from a path."
+          },
+          "parentId": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LocationID"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The place this one is part of, published earlier in the same registry, or null for a root."
+          },
+          "directory": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^/",
+            "description": "An absolute, cleaned path."
+          }
+        }
+      },
+      "RemoteLocation": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "A place with no local directory, identified by a bounded reference.",
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "parentId",
+          "ref"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/LocationID"
+          },
+          "kind": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocationKind"
+              },
+              {
+                "const": "remote"
+              }
+            ]
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The server-computed display name. No consumer derives one from a path."
+          },
+          "parentId": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LocationID"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The place this one is part of, published earlier in the same registry, or null for a root."
+          },
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "description": "The reference identifying the place. It is not a revision: a git ref of a piece of work is an attribute of that work."
+          }
+        }
+      },
+      "Location": {
+        "description": "Where work runs: a closed tagged union of unknown, directory and remote, discriminated by kind.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/UnknownLocation"
+          },
+          {
+            "$ref": "#/components/schemas/DirectoryLocation"
+          },
+          {
+            "$ref": "#/components/schemas/RemoteLocation"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "unknown": "#/components/schemas/UnknownLocation",
+            "directory": "#/components/schemas/DirectoryLocation",
+            "remote": "#/components/schemas/RemoteLocation"
+          }
+        }
+      },
+      "LocationRegistry": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/Location"
+        },
+        "description": "The flat registry of every place this response refers to, plus all of their ancestors. Each place appears exactly once, a parent always precedes its children, and the order is deterministic, so a client builds the tree in one pass and an entity tag over the response stays stable. It always contains the unknown place."
       },
       "DismissalCollection": {
         "type": "object",
@@ -1625,6 +1844,10 @@
           "running": {
             "type": "boolean",
             "description": "Whether the top-level execution is unsettled. Schedule items are configuration and always use false."
+          },
+          "locationId": {
+            "$ref": "#/components/schemas/LocationID",
+            "description": "The place this item runs. Optional: this model is decoded by existing clients, so the reference is additive only."
           }
         },
         "oneOf": [
@@ -1692,6 +1915,10 @@
             ],
             "format": "uri-reference",
             "description": "URL of the next active-work page, or null on the final page."
+          },
+          "locations": {
+            "$ref": "#/components/schemas/LocationRegistry",
+            "description": "Optional here, for the same reason locationId is."
           }
         }
       }

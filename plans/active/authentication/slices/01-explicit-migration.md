@@ -9,15 +9,15 @@ with a message naming the missing version and the command to run.
 
 ## Tasks
 
-- [ ] Add a `migrate` command that applies each context's migrations and reports
+- [x] Add a `migrate` command that applies each context's migrations and reports
       the resulting version per context.
-- [ ] Add a startup **verification** step to `worker` and `serve`: required version
+- [x] Add a startup **verification** step to `worker` and `serve`: required version
       or higher, else fail fast with a remedy in the message. No DDL at startup
       outside an explicit, documented development mode.
-- [ ] Keep each context's migrations in that context's adapter package; do not
+- [x] Keep each context's migrations in that context's adapter package; do not
       merge them into one shared set.
-- [ ] Document the operational order (migrate, then start) in the README.
-- [ ] Integration tests with containers: fresh database migrates; a stale database
+- [x] Document the operational order (migrate, then start) in the README.
+- [x] Integration tests with containers: fresh database migrates; a stale database
       is refused by both processes; migrating twice is a no-op; two concurrent
       `migrate` invocations do not corrupt state.
 

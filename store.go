@@ -26,10 +26,10 @@ const databaseURLEnv = "DATABASE_URL"
 const storeConnectTimeout = 10 * time.Second
 
 // storeMigrateTimeout bounds bringing the schema up to date. It is far longer than
-// the connect budget because the advisory lock legitimately waits here: several
-// workers starting together serialize on it. It exists so a lock never held (a
-// session that died mid-migration) surfaces as a startup failure rather than a
-// worker that hangs silently.
+// the connect budget because the advisory lock legitimately waits here: two migrate
+// invocations at once serialize on it. It exists so a lock never released (a session
+// that died mid-migration) surfaces as a failure rather than a command that hangs
+// silently.
 const storeMigrateTimeout = 2 * time.Minute
 
 // databaseURL returns the configured DSN, or an error naming what to set when it
@@ -49,7 +49,7 @@ func databaseURL() (string, error) {
 
 // openStore connects the CLI to the execution store. The CLI only ever reads
 // (every write is owned by a workflow activity), so it does not apply migrations:
-// the worker does that at startup.
+// applying them is the explicit `migrate` step.
 func openStore(ctx context.Context) (*execpg.Postgres, error) {
 	dsn, err := databaseURL()
 	if err != nil {
@@ -83,21 +83,18 @@ func openExecutionReader(ctx context.Context) (execstore.ExecutionReader, func()
 	return store, store.Close, nil
 }
 
-// openMigratedStore connects the worker to the execution store and brings its
-// schema up to date. Applying the embedded migrations at startup is what makes
-// `docker compose up -d` plus a worker enough to run — no migrate binary, no psql
-// step — and it is idempotent, so restarting a worker against an up-to-date
-// database does nothing.
-func openMigratedStore(ctx context.Context) *execpg.Postgres {
+// openVerifiedStore connects the worker to the execution store and refuses to
+// continue against a schema older than this build. It applies nothing: migrating is
+// the explicit `migrate` step, so two workers starting together can never race to
+// apply DDL, and a schema change happens at a moment an operator chose (see
+// migrate.go).
+func openVerifiedStore(ctx context.Context) *execpg.Postgres {
+	if err := requireCurrentSchema(ctx, workerSchemaContexts(), os.Stdout); err != nil {
+		fatalf("%v", err)
+	}
 	store, err := openStore(ctx)
 	if err != nil {
 		fatalf("%v", err)
-	}
-	mctx, cancel := context.WithTimeout(ctx, storeMigrateTimeout)
-	defer cancel()
-	if err := store.Migrate(mctx); err != nil {
-		store.Close()
-		fatalf("Could not apply the execution store schema: %v", err)
 	}
 	return store
 }

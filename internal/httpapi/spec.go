@@ -46,6 +46,7 @@ const (
 	modelRunCollection        = "run-collection.v1"
 	modelSchedule             = "schedule.v1"
 	modelScheduleCollection   = "schedule-collection.v1"
+	modelLocation             = "location.v1"
 	modelDismissal            = "dismissal.v1"
 	modelDismissalCollection  = "dismissal-collection.v1"
 	modelDismissalRequest     = "dismissal-request.v1"
@@ -64,6 +65,7 @@ var modelSchemas = map[string]string{
 	modelRunCollection:        "RunCollection",
 	modelSchedule:             "Schedule",
 	modelScheduleCollection:   "ScheduleCollection",
+	modelLocation:             "Location",
 	modelDismissal:            "Dismissal",
 	modelDismissalCollection:  "DismissalCollection",
 	modelDismissalRequest:     "DismissalRequest",
@@ -197,18 +199,27 @@ func (s *Server) schemaDocument(model string) (map[string]any, bool) {
 // rewriteRefs deep-copies a schema, pointing every OpenAPI component reference at the
 // bundled $defs instead. It is what turns a fragment of an OpenAPI document into a
 // JSON Schema document that stands on its own.
+//
+// A discriminator's mapping is rewritten too: its values are references written as
+// plain strings, so a union whose mapping still pointed into #/components would leave
+// a generator following a URL the standalone document does not contain.
 func rewriteRefs(value any) any {
 	switch typed := value.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(typed))
 		for key, nested := range typed {
-			if key == "$ref" {
+			switch {
+			case key == "$ref":
 				if ref, ok := nested.(string); ok {
-					out[key] = strings.Replace(ref, "#/components/schemas/", "#/$defs/", 1)
+					out[key] = bundledRef(ref)
 					continue
 				}
+				out[key] = rewriteRefs(nested)
+			case key == "discriminator":
+				out[key] = rewriteDiscriminator(nested)
+			default:
+				out[key] = rewriteRefs(nested)
 			}
-			out[key] = rewriteRefs(nested)
 		}
 		return out
 	case []any:
@@ -220,6 +231,37 @@ func rewriteRefs(value any) any {
 	default:
 		return value
 	}
+}
+
+// rewriteDiscriminator rewrites the reference strings in a discriminator's mapping.
+func rewriteDiscriminator(value any) any {
+	discriminator, ok := value.(map[string]any)
+	if !ok {
+		return rewriteRefs(value)
+	}
+	out := make(map[string]any, len(discriminator))
+	for key, nested := range discriminator {
+		mapping, isMapping := nested.(map[string]any)
+		if key != "mapping" || !isMapping {
+			out[key] = rewriteRefs(nested)
+			continue
+		}
+		rewritten := make(map[string]any, len(mapping))
+		for variant, target := range mapping {
+			if ref, isRef := target.(string); isRef {
+				rewritten[variant] = bundledRef(ref)
+				continue
+			}
+			rewritten[variant] = rewriteRefs(target)
+		}
+		out[key] = rewritten
+	}
+	return out
+}
+
+// bundledRef points one component reference at the bundled $defs.
+func bundledRef(ref string) string {
+	return strings.Replace(ref, "#/components/schemas/", "#/$defs/", 1)
 }
 
 // handleProblemIndex lists every failure the API can report, so a consumer can build
@@ -294,6 +336,10 @@ func (s *Server) handleServiceDescription(w http.ResponseWriter, r *http.Request
 	for _, kind := range agenthub.ItemKinds() {
 		kinds = append(kinds, string(kind))
 	}
+	locationKinds := make([]string, 0, len(agenthub.LocationKinds()))
+	for _, kind := range agenthub.LocationKinds() {
+		locationKinds = append(locationKinds, string(kind))
+	}
 
 	s.writeJSON(w, r, http.StatusOK, modelServiceDescription, map[string]any{
 		"name":        title,
@@ -315,8 +361,9 @@ func (s *Server) handleServiceDescription(w http.ResponseWriter, r *http.Request
 			{Name: "dismissals", Href: s.basePath + "/dismissals", Methods: []string{"GET", "POST"}, Schema: s.schemaURI(modelDismissalCollection)},
 		},
 		"vocabularies": map[string]any{
-			"workStatus": statuses,
-			"itemKind":   kinds,
+			"workStatus":   statuses,
+			"itemKind":     kinds,
+			"locationKind": locationKinds,
 		},
 		"limits": map[string]any{
 			"defaultLimit":     agenthub.DefaultLimit,
