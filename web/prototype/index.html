@@ -495,11 +495,11 @@
         const anchor = Math.cos(p.angle) > 0.2 ? "start" : Math.cos(p.angle) < -0.2 ? "end" : "middle";
         const short = p.item.label.length > 22 ? p.item.label.slice(0, 21) + "…" : p.item.label;
         return `
-          <g class="satellite ${isSel ? "selected" : ""}" data-id="${p.item.id}" tabindex="0"
-             role="button" aria-label="${escapeAttr(p.item.label)} — ${p.item.status}">
+          <g class="satellite ${isSel ? "selected" : ""}" data-id="${escapeAttr(p.item.id)}" tabindex="0"
+             role="button" aria-label="${escapeAttr(p.item.label)} — ${escapeAttr(p.item.status)}">
             <circle class="dot" cx="${p.x}" cy="${p.y}" r="9" fill="${statusColor(p.item.status)}"></circle>
             <text x="${lx}" y="${ly}" text-anchor="${anchor}" dominant-baseline="middle">${escapeHtml(short)}</text>
-            <text class="kind" x="${lx}" y="${ly + 12}" text-anchor="${anchor}" dominant-baseline="middle">${p.item.kind}</text>
+            <text class="kind" x="${lx}" y="${ly + 12}" text-anchor="${anchor}" dominant-baseline="middle">${escapeHtml(p.item.kind)}</text>
           </g>
         `;
       }).join("");
@@ -530,7 +530,7 @@
         ? `
           <dt>Progress</dt>
           <dd>
-            ${item.progress.done} / ${item.progress.total}
+            ${escapeHtml(item.progress.done)} / ${escapeHtml(item.progress.total)}
             <div class="progress"><span style="width:${Math.round((item.progress.fraction ?? 0) * 100)}%"></span></div>
           </dd>`
         : "";
@@ -538,13 +538,13 @@
       const pausedHtml = item.paused !== undefined ? `<dt>Paused</dt><dd>${item.paused ? "yes" : "no"}</dd>` : "";
 
       el.innerHTML = `
-        <span class="selected-kind">${item.kind}</span>
+        <span class="selected-kind">${escapeHtml(item.kind)}</span>
         <div class="selected-label">${escapeHtml(item.label)}</div>
         <dl class="kv">
           <dt>Status</dt>
           <dd>
-            <span class="swatch status-${item.status}" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle;"></span>
-            ${statusLabel}
+            <span class="swatch status-${escapeAttr(item.status)}" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle;"></span>
+            ${escapeHtml(statusLabel)}
           </dd>
           <dt>ID</dt><dd style="font-family: var(--mono); font-size: 11px; color: var(--text-dim)">${escapeHtml(item.id)}</dd>
           ${typeHtml}
@@ -605,7 +605,7 @@
     // Tiny helpers
     // ------------------------------------------------------------------
     function escapeHtml(s) {
-      return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+      return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     }
     function escapeAttr(s) { return escapeHtml(s); }
 
