@@ -9,7 +9,14 @@ import {
   type ReactNode,
   type WheelEvent as ReactWheelEvent,
 } from "react";
-import { STATUS_LABEL, type WorkItem, type WorkItemStatus } from "../../domain/work-item";
+import {
+  itemKey,
+  sameItem,
+  STATUS_LABEL,
+  type WorkItem,
+  type WorkItemId,
+  type WorkItemStatus,
+} from "../../domain/work-item";
 import { Icon } from "../../components/Icon";
 import { layoutOrbit } from "./layout";
 import { Starfield } from "./Starfield";
@@ -50,12 +57,12 @@ function clampZoom(k: number): number {
 
 interface Props {
   items: WorkItem[];
-  selectedId: string | null;
+  selected: WorkItemId | null;
   onSelect: (item: WorkItem) => void;
   onClear: () => void;
 }
 
-export function Orbit({ items, selectedId, onSelect, onClear }: Props): ReactNode {
+export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode {
   const hostRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 900, h: 640 });
   const [view, setView] = useState<View>(IDENTITY);
@@ -305,7 +312,7 @@ export function Orbit({ items, selectedId, onSelect, onClear }: Props): ReactNod
 
           {/* Satellites */}
           {layout.slots.map(({ item, angle, radius }) => {
-            const isSelected = item.id === selectedId;
+            const isSelected = sameItem(item, selected);
             // Same shared rotation for every satellite, so the whole
             // constellation turns as one rigid body.
             const a = angle + rotation;
@@ -313,7 +320,7 @@ export function Orbit({ items, selectedId, onSelect, onClear }: Props): ReactNod
             const y = layout.center.y + Math.sin(a) * radius;
             return (
               <g
-                key={item.id}
+                key={itemKey(item)}
                 className="satellite"
                 data-selected={isSelected || undefined}
                 transform={`translate(${x}, ${y})`}

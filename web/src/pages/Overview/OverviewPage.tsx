@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { loadOverview, type OverviewData } from "../../clients/work-items";
 import {
+  sameItem,
   STATUS_ORDER,
   type WorkItem,
+  type WorkItemId,
   type WorkItemStatus,
 } from "../../domain/work-item";
 import { RightRail } from "../../components/RightRail";
@@ -32,7 +34,8 @@ interface State {
 
 export function OverviewPage(): ReactNode {
   const [state, setState] = useState<State>({ data: null, error: null });
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Identity, not a bare id: a fleet and a run may share an id.
+  const [selectedId, setSelectedId] = useState<WorkItemId | null>(null);
   // Statuses currently shown. Empty set means "show all" — the natural
   // starting point, and what clearing the filter returns to.
   const [visibleStatuses, setVisibleStatuses] = useState<Set<WorkItemStatus>>(
@@ -72,7 +75,7 @@ export function OverviewPage(): ReactNode {
   );
 
   // A selected item that is filtered out is no longer selectable.
-  const selected = filtered.find((i) => i.id === selectedId) ?? null;
+  const selected = filtered.find((i) => sameItem(i, selectedId)) ?? null;
 
   const toggleStatus = (status: WorkItemStatus): void => {
     setVisibleStatuses((prev) => {
@@ -118,8 +121,8 @@ export function OverviewPage(): ReactNode {
         <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
           <Orbit
             items={filtered}
-            selectedId={selectedId}
-            onSelect={(it) => setSelectedId(it.id)}
+            selected={selectedId}
+            onSelect={(it) => setSelectedId({ kind: it.kind, id: it.id })}
             onClear={() => setSelectedId(null)}
           />
           <StatusOverlay state={state} />

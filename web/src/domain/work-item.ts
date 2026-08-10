@@ -41,6 +41,27 @@ export interface WorkItem {
   dismissible?: boolean;
 }
 
+// Identity of a work item. The API only guarantees that an id is unique within
+// its own collection (`/fleets`, `/runs`, `/schedules`), so a fleet and a run
+// can share an id: kind is part of the identity.
+export interface WorkItemId {
+  kind: WorkItemKind;
+  id: string;
+}
+
+/** Stable, collision-free string form of an identity, for use as a React key. */
+export function itemKey(item: WorkItemId): string {
+  return `${item.kind}:${item.id}`;
+}
+
+/** True when both identities denote the same work item. */
+export function sameItem(
+  a: WorkItemId | null | undefined,
+  b: WorkItemId | null | undefined,
+): boolean {
+  return a != null && b != null && a.kind === b.kind && a.id === b.id;
+}
+
 export const STATUS_LABEL: Record<WorkItemStatus, string> = {
   todo: "Todo",
   "in-progress": "In Progress",

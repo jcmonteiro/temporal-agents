@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import {
+  itemKey,
   STATUS_LABEL,
   STATUS_ORDER,
   type WorkItem,
@@ -257,7 +258,7 @@ function UpNext({ items }: { items: WorkItem[] }): ReactNode {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
       {items.map((it) => (
-        <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div key={itemKey(it)} style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div
             style={{
               width: 30,
