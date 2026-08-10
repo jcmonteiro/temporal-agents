@@ -1,18 +1,18 @@
 import type { ReactNode } from "react";
 import {
-  itemKey,
   STATUS_LABEL,
   STATUS_ORDER,
   type WorkItem,
   type WorkItemStatus,
 } from "../domain/work-item";
+import { upNextKey, type UpNextEntry } from "../domain/up-next";
 import { temporalUrlFor } from "../config/temporal";
 import { Icon } from "./Icon";
 import { StatusDot } from "./StatusDot";
 
 interface Props {
   selected: WorkItem | null;
-  upNext: WorkItem[];
+  upNext: UpNextEntry[];
   counts: Record<WorkItemStatus, number>;
   // The statuses currently shown. Empty means "show all".
   visibleStatuses: Set<WorkItemStatus>;
@@ -260,11 +260,11 @@ function SelectedEmpty(): ReactNode {
   );
 }
 
-function UpNext({ items }: { items: WorkItem[] }): ReactNode {
+function UpNext({ items }: { items: UpNextEntry[] }): ReactNode {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
       {items.map((it) => (
-        <div key={itemKey(it)} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div key={upNextKey(it)} style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div
             style={{
               width: 30,

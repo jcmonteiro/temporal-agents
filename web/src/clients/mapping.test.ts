@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { upNextKey } from "../domain/up-next";
 import type { FleetDTO, RunDTO, ScheduleDTO } from "./api";
 import { fromFleet, fromRun, fromSchedule, upNextOf } from "./mapping";
 
@@ -155,6 +156,18 @@ describe("up next", () => {
     ]);
 
     expect(entries).toHaveLength(2);
-    expect(entries[0].id).not.toBe(entries[1].id);
+    expect(upNextKey(entries[0])).not.toBe(upNextKey(entries[1]));
+  });
+
+  it("names the fleet an entry belongs to", () => {
+    const entries = upNextOf([
+      aFleet({
+        id: "fleet-a",
+        upNext: [{ id: "node-1", label: "Write the migration", status: "todo", execution: null }],
+      }),
+    ]);
+
+    expect(entries[0].fleetId).toBe("fleet-a");
+    expect(entries[0].nodeId).toBe("node-1");
   });
 });

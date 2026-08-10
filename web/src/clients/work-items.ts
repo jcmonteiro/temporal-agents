@@ -1,3 +1,4 @@
+import type { UpNextEntry } from "../domain/up-next";
 import type { WorkItem } from "../domain/work-item";
 import { err, ok, type Result } from "../utils/result";
 import type { Collection, FleetDTO, RunDTO, ScheduleDTO } from "./api";
@@ -6,7 +7,7 @@ import { fromFleet, fromRun, fromSchedule, upNextOf } from "./mapping";
 
 export interface OverviewData {
   items: WorkItem[];
-  upNext: WorkItem[];
+  upNext: UpNextEntry[];
 }
 
 /**
