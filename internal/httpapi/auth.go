@@ -90,20 +90,21 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 
 // isPublicRoute reports the whole of what an unauthenticated request may reach.
 //
-// It is three things, and each one has to be reachable for the door to be usable at
-// all: the two routes by which a browser obtains a credential, and the health
-// resource, which a monitor probes with no credential and which discloses only
-// whether dependencies answer.
+// Inside the API it is three routes, and each one has to be reachable for the door
+// to be usable at all: the two by which a browser obtains a credential, and the
+// health resource, which a monitor probes with no credential and which discloses
+// only whether dependencies answer. Everything else under the API's path — every
+// read, the contract, the schemas, the problem catalogue, the service description —
+// is behind the door. A specification is not a secret, but one rule applied to
+// everything cannot be got wrong resource by resource.
 //
-// Everything else — every read, the contract, the schemas, the problem catalogue,
-// the service description — is behind the door. A specification is not a secret, but
-// it is also not worth a second, separate rule about who may read what: one rule,
-// applied to everything, cannot be got wrong resource by resource.
-//
-// The application bundle is not an API route and is not covered here (see
-// rootHandler): the page that offers the sign-in has to load before anybody can sign
-// in, and it carries no data of its own.
+// Outside the API's path there is no data at all: the application bundle, which has
+// to load before anybody can sign in, and the well-known catalogue, which is a
+// linkset pointing at this API and is defined by its own standard to be reachable.
 func (s *Server) isPublicRoute(path string) bool {
+	if !strings.HasPrefix(path, s.basePath) {
+		return true
+	}
 	switch path {
 	case s.basePath + "/auth/sign-in", s.basePath + "/auth/callback", s.basePath + "/health":
 		return true

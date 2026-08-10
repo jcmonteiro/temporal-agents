@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -442,8 +444,9 @@ func TestEveryRouteButTheDoorAndTheHealthProbeNeedsACredential(t *testing.T) {
 		BasePath + "/health":        true,
 	}
 	for _, res := range server.resources() {
-		if strings.Contains(res.pattern, "{") {
-			// A pattern with a wildcard is exercised through a concrete path below.
+		if strings.Contains(res.pattern, "{") || !strings.HasPrefix(res.pattern, BasePath) {
+			// A wildcard pattern is exercised through a concrete path below, and a path
+			// outside the API carries no data (see isPublicRoute).
 			continue
 		}
 		for method := range res.methods {
@@ -462,7 +465,6 @@ func TestEveryRouteButTheDoorAndTheHealthProbeNeedsACredential(t *testing.T) {
 		BasePath + "/runs/run-1",
 		BasePath + "/schemas/run.v1",
 		BasePath + "/problems/not-found",
-		"/.well-known/api-catalog",
 	} {
 		t.Run("GET "+path, func(t *testing.T) {
 			response := request(t, server, http.MethodGet, path, nil)
@@ -520,4 +522,28 @@ func TestReadingIsUnaffectedByTheCrossSiteRule(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", response.Code)
 	}
+}
+
+// TestASignedOutBrowserCanStillLoadThePageThatOffersTheSignIn pins the one thing the
+// closed door must not close: the application itself. A bundle behind the credential
+// it exists to obtain is a hub nobody can ever sign in to.
+func TestASignedOutBrowserCanStillLoadThePageThatOffersTheSignIn(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "index.html"),
+		[]byte("<!doctype html><title>Agent Hub</title>"), 0o600); err != nil {
+		t.Fatalf("write the bundle: %v", err)
+	}
+	server, _ := newAuthenticatedServer(t, &stubProvider{principal: theOperator},
+		func(options *Options) { options.WebDir = directory })
+
+	for _, path := range []string{"/", "/places/dir-1"} {
+		response := request(t, server, http.MethodGet, path, nil)
+		if response.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want the application", path, response.Code)
+		}
+	}
+
+	// The data behind it stays closed.
+	requireProblem(t, request(t, server, http.MethodGet, BasePath+"/runs", nil),
+		http.StatusUnauthorized, codeAuthenticationRequired)
 }
