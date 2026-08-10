@@ -22,7 +22,7 @@ import type { Place, PlaceRegistry } from "../../domain/place";
 import { Icon } from "../../components/Icon";
 import { onEachFrame, prefersReducedMotion } from "../../platform/motion";
 import { advanced, positionAt } from "./orbit-motion";
-import { CENTRE_RADIUS, layoutScene, type PlaceBody } from "./scene";
+import { CENTRE_RADIUS, fittedView, layoutScene, type PlaceBody } from "./scene";
 import {
   IDENTITY,
   panned,
@@ -78,7 +78,9 @@ export function Orbit({
   onClear,
 }: Props): ReactNode {
   const hostRef = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState({ w: 900, h: 640 });
+  // The canvas size, and whether it was ever measured. A canvas of no size was
+  // never laid out, and a view fitted to it would be a guess.
+  const [size, setSize] = useState({ w: 900, h: 640, measured: false });
   const [view, setView] = useState<View>(IDENTITY);
   // Whether every place is folded into its base ancestor. It is view state, not
   // data: the scene derives the folding from it.
@@ -104,11 +106,15 @@ export function Orbit({
   useLayoutEffect(() => {
     if (!hostRef.current) return;
     const el = hostRef.current;
-    const observer = new ResizeObserver(() => {
-      setSize({ w: el.clientWidth, h: el.clientHeight });
-    });
+    const measure = (): void =>
+      setSize({
+        w: el.clientWidth,
+        h: el.clientHeight,
+        measured: el.clientWidth > 0 && el.clientHeight > 0,
+      });
+    const observer = new ResizeObserver(measure);
     observer.observe(el);
-    setSize({ w: el.clientWidth, h: el.clientHeight });
+    measure();
     return () => observer.disconnect();
   }, []);
 
@@ -130,6 +136,26 @@ export function Orbit({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [clearSelection]);
+
+  // The view that shows the whole picture. It is applied when the first
+  // snapshot arrives and whenever the operator asks to recentre — never on a
+  // refresh, which would yank the canvas from under a pan.
+  const fit = useMemo(
+    () =>
+      fittedView(
+        items,
+        places,
+        { width: size.w, height: size.h },
+        collapseAll,
+      ),
+    [items, places, size.w, size.h, collapseAll],
+  );
+  const fitted = useRef(false);
+  useEffect(() => {
+    if (fitted.current || !size.measured || items.length === 0) return;
+    fitted.current = true;
+    setView(fit);
+  }, [fit, items.length, size.measured]);
 
   // How deep the places are drawn follows from the view: zooming out folds the
   // deeper ones into their parents, and collapse-all forces the base ancestor.
@@ -580,7 +606,7 @@ export function Orbit({
         </button>
         <button
           aria-label="Recenter"
-          onClick={() => setView(IDENTITY)}
+          onClick={() => setView(fit)}
           style={{
             width: 32,
             height: 32,

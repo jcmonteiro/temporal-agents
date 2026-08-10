@@ -2,6 +2,16 @@ import type { Place, PlaceRegistry } from "../../domain/place";
 import { UNKNOWN_PLACE_ID } from "../../domain/place";
 import type { WorkItem } from "../../domain/work-item";
 import { layoutOrbit, type OrbitSlot } from "./layout";
+import {
+  centredAt,
+  fittedTo,
+  IDENTITY,
+  MAX_VISIBLE_DEPTH,
+  visibleDepthFor,
+  ZOOM_HAIR,
+  zoomThatShowsDepth,
+  type View,
+} from "./view";
 
 /**
  * The overview scene: one body per place, with that place's work in orbit
@@ -31,7 +41,7 @@ const BODY_GAP = 56;
 // Orbit geometry of one place. A ring sits far enough outside the one within it
 // that two satellites on neighbouring rings stay as clear of each other as two
 // satellites on the same ring.
-const PLACE_ORBIT = { innerRadius: 110, ringGap: 100, satelliteSpacing: 96 };
+const PLACE_ORBIT = { innerRadius: 120, ringGap: 100, satelliteSpacing: 96 };
 
 const FULL_TURN = Math.PI * 2;
 
@@ -360,4 +370,54 @@ function bodiesOf(roots: Node[]): PlaceBody[] {
   };
   roots.forEach(walk);
   return bodies;
+}
+
+/** How wide the whole scene is, label room included. */
+export function extentOf(scene: Scene): number {
+  let furthest = 0;
+  for (const body of scene.bodies) {
+    const away = Math.hypot(
+      body.centre.x - scene.centre.x,
+      body.centre.y - scene.centre.y,
+    );
+    furthest = Math.max(furthest, away + body.reach);
+  }
+  return 2 * furthest;
+}
+
+/**
+ * The view that shows the whole picture: the deepest folding whose scene both
+ * fits the canvas and agrees with the zoom that fitting it needs.
+ *
+ * Folding and zoom are one decision, not two — a zoom that folds the places
+ * makes a smaller scene, which fits at a larger zoom. Trying the depths from
+ * the deepest down settles that at the first depth that agrees with itself,
+ * and depth zero always does, because nothing folds further.
+ */
+export function fittedView(
+  items: WorkItem[],
+  places: PlaceRegistry,
+  size: { width: number; height: number },
+  collapseAll: boolean,
+): View {
+  const fitAt = (visibleDepth: number): View =>
+    fittedTo(
+      extentOf(layoutScene(items, places, { ...size, visibleDepth })),
+      size.width,
+      size.height,
+    );
+  if (collapseAll) return fitAt(0);
+  for (let depth = MAX_VISIBLE_DEPTH; depth > 0; depth--) {
+    const view = fitAt(depth);
+    if (visibleDepthFor(view, false) === depth) return view;
+  }
+  const view = fitAt(0);
+  if (view === IDENTITY || visibleDepthFor(view, false) === 0) return view;
+  // The folded scene leaves room to spare, but showing it at that zoom would
+  // unfold the places again. Hold the zoom just below where they unfold.
+  return centredAt(
+    zoomThatShowsDepth(1) - ZOOM_HAIR,
+    size.width,
+    size.height,
+  );
 }

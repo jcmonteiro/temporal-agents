@@ -74,16 +74,19 @@ describe("the orbit layout", () => {
     radii.forEach((r) => expect(layout.orbits).toContain(r));
   });
 
-  it("leaves an item on its ring when another status empties", () => {
-    const withSettled = layoutOrbit(
-      [...items("done", 5), ...items("todo", 3)],
-      CANVAS,
-    );
-    const withoutSettled = layoutOrbit(items("todo", 3), CANVAS);
+  it("draws no ring for a status that holds nothing", () => {
+    const layout = layoutOrbit(items("todo", 3), CANVAS);
 
-    expect(slotOf(withoutSettled, "todo-0").radius).toBe(
-      slotOf(withSettled, "todo-0").radius,
-    );
+    // Several places share the canvas, so a place only reaches as far as its
+    // own work: an empty band costs no ring.
+    expect(layout.orbits).toHaveLength(1);
+  });
+
+  it("draws nothing at all for a place that holds no work", () => {
+    const layout = layoutOrbit([], CANVAS);
+
+    expect(layout.orbits).toEqual([]);
+    expect(layout.slots).toEqual([]);
   });
 
   it("places the same items in the same positions every time", () => {

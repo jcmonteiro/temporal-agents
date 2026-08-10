@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { registryOf, type Place, type PlaceRegistry } from "../../domain/place";
 import type { WorkItem, WorkItemStatus } from "../../domain/work-item";
-import { layoutScene, type PlaceBody, type Scene } from "./scene";
+import {
+  extentOf,
+  fittedView,
+  layoutScene,
+  type PlaceBody,
+  type Scene,
+} from "./scene";
+import { MIN_ZOOM, visibleDepthFor } from "./view";
 
 const CANVAS = { width: 1200, height: 800 };
 
@@ -275,5 +282,86 @@ describe("the stability of the picture", () => {
     const after = scene([...work("repo", 3), ...work("unknown", 4)], registry, 1);
 
     expect(itemsOf(bodyOf(after, "repo"))).toEqual(itemsOf(bodyOf(before, "repo")));
+  });
+});
+
+describe("the view that shows the whole picture", () => {
+  const size = { width: 1200, height: 800 };
+  const busy = [
+    ...work("repo", 4),
+    ...work("tree-a", 3, "done"),
+    ...work("tree-b", 5),
+  ];
+
+  /** Where a scene point lands on the canvas under a view. */
+  function onScreen(
+    view: { x: number; y: number; k: number },
+    point: { x: number; y: number },
+  ): { x: number; y: number } {
+    return { x: view.x + point.x * view.k, y: view.y + point.y * view.k };
+  }
+
+  it("brings every place inside the canvas", () => {
+    const view = fittedView(busy, REPOSITORY_WITH_WORKTREES, size, false);
+    const drawn = layoutScene(busy, REPOSITORY_WITH_WORKTREES, {
+      ...size,
+      visibleDepth: visibleDepthFor(view, false),
+    });
+
+    for (const body of drawn.bodies) {
+      const at = onScreen(view, body.centre);
+      const reach = body.reach * view.k;
+      expect(at.x - reach).toBeGreaterThanOrEqual(0);
+      expect(at.y - reach).toBeGreaterThanOrEqual(0);
+      expect(at.x + reach).toBeLessThanOrEqual(size.width);
+      expect(at.y + reach).toBeLessThanOrEqual(size.height);
+    }
+  });
+
+  it("keeps the neutral mark in the middle of the canvas", () => {
+    const view = fittedView(busy, REPOSITORY_WITH_WORKTREES, size, false);
+
+    expect(onScreen(view, { x: 600, y: 400 })).toEqual({ x: 600, y: 400 });
+  });
+
+  it("shows the folding the zoom it needs agrees with", () => {
+    const view = fittedView(busy, REPOSITORY_WITH_WORKTREES, size, false);
+    const depth = visibleDepthFor(view, false);
+
+    const scene = layoutScene(busy, REPOSITORY_WITH_WORKTREES, {
+      ...size,
+      visibleDepth: depth,
+    });
+    expect(extentOf(scene) * view.k).toBeLessThanOrEqual(
+      Math.min(size.width, size.height),
+    );
+  });
+
+  it("fits the folded picture when the operator collapsed everything", () => {
+    const view = fittedView(busy, REPOSITORY_WITH_WORKTREES, size, true);
+
+    const scene = layoutScene(busy, REPOSITORY_WITH_WORKTREES, {
+      ...size,
+      visibleDepth: 0,
+    });
+    expect(extentOf(scene) * view.k).toBeLessThanOrEqual(
+      Math.min(size.width, size.height),
+    );
+    expect(view.k).toBeGreaterThanOrEqual(MIN_ZOOM);
+  });
+
+  it("never magnifies a picture that already fits", () => {
+    const view = fittedView(work("repo", 1), REPOSITORY_WITH_WORKTREES, size, false);
+
+    expect(view.k).toBeLessThanOrEqual(1);
+  });
+
+  it("leaves the view alone while the canvas has no size", () => {
+    const view = fittedView(busy, REPOSITORY_WITH_WORKTREES, {
+      width: 0,
+      height: 0,
+    }, false);
+
+    expect(view).toEqual({ x: 0, y: 0, k: 1 });
   });
 });

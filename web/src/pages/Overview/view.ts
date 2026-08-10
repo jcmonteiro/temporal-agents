@@ -75,3 +75,39 @@ export function wheelZoomFactor(deltaY: number): number {
   const delta = Math.max(-MAX_WHEEL_DELTA, Math.min(MAX_WHEEL_DELTA, deltaY));
   return Math.exp(-delta * WHEEL_ZOOM_SENSITIVITY);
 }
+
+// Room left between the content and the edge of the canvas when the view is
+// fitted, so a body's label is never cut off.
+const FIT_MARGIN = 48;
+
+/**
+ * The view that brings content of this size, laid out about the canvas centre,
+ * fully into the canvas. Content that already fits is never magnified.
+ *
+ * A canvas that has not been measured yet cannot be fitted, so the view is left
+ * as it is.
+ */
+export function fittedTo(extent: number, width: number, height: number): View {
+  if (width <= 0 || height <= 0 || extent <= 0) return IDENTITY;
+  const room = Math.min(width, height) - 2 * FIT_MARGIN;
+  if (room <= 0) return IDENTITY;
+  return centredAt(Math.min(1, room / extent), width, height);
+}
+
+/**
+ * The view at this zoom, with the canvas centre held still. Content laid out
+ * about that centre therefore stays centred.
+ */
+export function centredAt(zoom: number, width: number, height: number): View {
+  const k = clampZoom(zoom);
+  return { k, x: (width / 2) * (1 - k), y: (height / 2) * (1 - k) };
+}
+
+/** The zoom at which one more level of places appears. */
+export function zoomThatShowsDepth(depth: number): number {
+  if (depth <= 0) return MIN_ZOOM;
+  return DEPTH_ZOOM_THRESHOLDS[Math.min(depth, MAX_VISIBLE_DEPTH) - 1];
+}
+
+/** The least zoom that still counts as below a threshold. */
+export const ZOOM_HAIR = 0.01;

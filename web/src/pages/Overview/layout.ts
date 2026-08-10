@@ -57,12 +57,13 @@ function ringCapacity(radius: number, spacing: number): number {
 /**
  * Pure, deterministic orbit layout (IB §4a). Same input → same output.
  *
- * Items are grouped into three status bands, innermost band first. Every band
- * fills as many rings as it needs: each ring takes only as many satellites as
- * its circumference can hold, and the rest overflow onto the next ring
- * outwards. Later bands start beyond the rings the earlier ones consumed, so
- * a large response grows the constellation outwards instead of crowding
- * satellites and labels on top of each other.
+ * Items are grouped into three status bands, innermost band first, so settled
+ * work always sits closer to the body than active work. A band that holds
+ * nothing takes no ring: several places share the canvas, and a ring reserved
+ * for work that is not there would push every place's satellites outwards and
+ * cost the picture more than it buys. Every band fills as many rings as it
+ * needs: each ring takes only as many satellites as its circumference can hold,
+ * and the rest overflow onto the next ring outwards.
  */
 export function layoutOrbit(items: WorkItem[], opts: Options): OrbitLayout {
   const {
@@ -86,9 +87,7 @@ export function layoutOrbit(items: WorkItem[], opts: Options): OrbitLayout {
 
   buckets.forEach((bucket) => {
     let remaining = bucket;
-    // Every band keeps at least one (possibly empty) ring, so the rings the
-    // operator sees do not jump inwards when a status band empties out.
-    do {
+    while (remaining.length > 0) {
       const ringIdx = orbits.length;
       const radius = innerRadius + ringIdx * ringGap;
       orbits.push(radius);
@@ -109,7 +108,7 @@ export function layoutOrbit(items: WorkItem[], opts: Options): OrbitLayout {
           y: center.y + Math.sin(angle) * radius,
         });
       });
-    } while (remaining.length > 0);
+    }
   });
 
   return { center, orbits, slots };
