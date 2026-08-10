@@ -50,9 +50,9 @@ it("starts a develop pass here and lands on the run", async () => {
 
   await startDevelop("make the flaky test pass");
 
-  expect(window.location.hash).toBe("#/runs/develop-1");
   const started = Object.values(api.launches);
   expect(started).toHaveLength(1);
+  expect(window.location.hash).toBe(`#/runs/${started[0].id}`);
   expect(started[0].label).toBe("make the flaky test pass");
   expect(started[0].locationId).toBe("repo");
 });
@@ -129,10 +129,10 @@ it("retrying the same intent starts the run it already started", async () => {
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Start" }));
   });
-  const identities = Object.keys(api.launches);
+  const started = Object.values(api.launches);
 
-  expect(identities).toHaveLength(1);
-  expect(window.location.hash).toBe("#/runs/develop-1");
+  expect(started).toHaveLength(1);
+  expect(window.location.hash).toBe(`#/runs/${started[0].id}`);
 });
 
 it("asks for something else under an identity of its own", async () => {
@@ -149,7 +149,7 @@ it("asks for something else under an identity of its own", async () => {
   const started = Object.values(api.launches);
   expect(started).toHaveLength(1);
   expect(started[0].label).toBe("and now the other one");
-  expect(window.location.hash).toBe("#/runs/develop-1");
+  expect(window.location.hash).toBe(`#/runs/${started[0].id}`);
 });
 
 it("keeps the launcher out of the way of the work the place already holds", async () => {

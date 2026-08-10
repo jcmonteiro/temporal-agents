@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent } from "@testing-library/dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { RunPage } from "./RunPage";
 import { aDirectoryPlace, aRun, FakeApi, theUnknownPlace } from "../../test/fake-api";
@@ -22,6 +23,7 @@ afterEach(() => {
   cleanup();
   api.restore();
   vi.useRealTimers();
+  window.location.hash = "";
 });
 
 /** Opens the page of one run and waits for the first read. */
@@ -104,4 +106,104 @@ it("reports that the API cannot be reached", async () => {
       "could not be reached",
     ),
   );
+});
+
+it("says who started it and which instruction it ran under", async () => {
+  api.runs = [aRun({ id: "develop-1", label: "Fix the flaky test", locationId: "repo" })];
+  api.startedBy["develop-1"] = "https://issuer.test|operator-1";
+  api.instructionsUsed["develop-1"] = [
+    { key: "review.perform", scope: "directory:/srv/checkout", version: 3 },
+  ];
+
+  await showRun("develop-1");
+
+  expect(screen.getByText("https://issuer.test|operator-1")).toBeTruthy();
+  const provenance = screen.getByRole("region", { name: /instructions it ran under/i });
+  expect(provenance.textContent).toContain("review.perform");
+  expect(provenance.textContent).toContain("directory:/srv/checkout");
+  expect(provenance.textContent).toContain("version 3");
+});
+
+it("says plainly when the hub did not start the run", async () => {
+  api.runs = [aRun({ id: "develop-1", label: "Fix the flaky test", locationId: "repo" })];
+
+  await showRun("develop-1");
+
+  expect(screen.getByText("Not started from the hub")).toBeTruthy();
+});
+
+it("repeats the run in one action, and lands on the new one", async () => {
+  api.runs = [
+    aRun({ id: "develop-1", type: "develop", label: "Fix the flaky test", locationId: "repo" }),
+  ];
+  await showRun("develop-1");
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Run this again" }));
+  });
+
+  const started = Object.values(api.launches);
+  expect(started).toHaveLength(1);
+  // Exactly what the record holds: the same pass, the same instruction, the same
+  // place — and nothing invented.
+  expect(started[0].type).toBe("develop");
+  expect(started[0].label).toBe("Fix the flaky test");
+  expect(started[0].locationId).toBe("repo");
+  expect(window.location.hash).toBe(`#/runs/${started[0].id}`);
+});
+
+it("repeats once however impatiently the operator clicks", async () => {
+  api.runs = [
+    aRun({ id: "develop-1", type: "develop", label: "Fix the flaky test", locationId: "repo" }),
+  ];
+  await showRun("develop-1");
+  const repeat = screen.getByRole("button", { name: "Run this again" });
+
+  await act(async () => {
+    fireEvent.click(repeat);
+    fireEvent.click(repeat);
+  });
+
+  expect(Object.values(api.launches)).toHaveLength(1);
+});
+
+it("refuses to repeat a run whose place was never recorded", async () => {
+  api.runs = [
+    aRun({ id: "develop-1", type: "develop", label: "Fix the flaky test", locationId: "unknown" }),
+  ];
+
+  await showRun("develop-1");
+
+  const repeat = screen.getByRole("button", { name: "Run this again" });
+  expect(repeat.hasAttribute("disabled")).toBe(true);
+  expect(screen.getByText(/never recorded/i)).toBeTruthy();
+  expect(Object.values(api.launches)).toHaveLength(0);
+});
+
+it("refuses to repeat work the hub does not start", async () => {
+  api.runs = [
+    aRun({ id: "run-1", type: "prompt", label: "A one-off prompt", locationId: "repo" }),
+  ];
+
+  await showRun("run-1");
+
+  expect(screen.getByRole("button", { name: "Run this again" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByText(/is not started from the hub/i)).toBeTruthy();
+});
+
+it("says why a repeat would collide, and leads to the work in the way", async () => {
+  api.runs = [
+    aRun({ id: "develop-1", type: "develop", label: "Fix the flaky test", locationId: "repo" }),
+  ];
+  api.busy = { locationId: "repo", runId: "develop-9" };
+  await showRun("develop-1");
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Run this again" }));
+  });
+
+  expect(screen.getByRole("alert").textContent).toContain("develop-9");
+  expect(
+    screen.getByRole("link", { name: /run in the way/i }).getAttribute("href"),
+  ).toBe("#/runs/develop-9");
 });

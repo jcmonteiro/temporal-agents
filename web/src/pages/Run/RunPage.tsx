@@ -1,9 +1,11 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { loadRun, type RunView } from "../../clients/runs";
+import { anIntentToStart, startWork, type StartKind } from "../../clients/start";
+import { ApiError } from "../../clients/http";
 import { STATUS_LABEL } from "../../domain/work-item";
 import { StatusDot } from "../../components/StatusDot";
 import { Icon } from "../../components/Icon";
-import { addressOf, OVERVIEW } from "../../platform/route";
+import { addressOf, goTo, OVERVIEW } from "../../platform/route";
 
 // A run is live while it runs, so the page polls on the same cadence as the rest
 // of the hub.
@@ -195,6 +197,10 @@ function Report({
         <dd style={{ margin: 0, color: "var(--color-text)" }}>
           {view.endedAt ?? "Still running"}
         </dd>
+        <dt>Started by</dt>
+        <dd style={{ margin: 0, color: "var(--color-text)" }}>
+          {view.startedBy ?? "Not started from the hub"}
+        </dd>
         {typeof run.iterations === "number" && (
           <>
             <dt>Iterations</dt>
@@ -208,6 +214,170 @@ function Report({
           </>
         )}
       </dl>
+
+      <Instructions view={view} />
+      <Repeat view={view} />
     </>
   );
+}
+
+/**
+ * Which stored instruction the run resolved for each governed key.
+ *
+ * The text is not here because it is not published: the version is named, so a
+ * page cannot show an instruction that has since been edited as though it were
+ * the one that ran.
+ */
+function Instructions({ view }: { view: Extract<RunView, { known: true }> }): ReactNode {
+  if (view.instructions.length === 0) return null;
+  return (
+    <section
+      aria-labelledby="instructions-heading"
+      style={{ display: "flex", flexDirection: "column", gap: 6 }}
+    >
+      <h2
+        id="instructions-heading"
+        style={{
+          margin: 0,
+          fontSize: "var(--font-size-xs)",
+          letterSpacing: "0.08em",
+          color: "var(--color-text-subtle)",
+          textTransform: "uppercase",
+          fontWeight: 600,
+        }}
+      >
+        Instructions it ran under
+      </h2>
+      <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 4 }}>
+        {view.instructions.map((used) => (
+          <li
+            key={`${used.key}:${used.scope}:${used.version}`}
+            style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-muted)" }}
+          >
+            <span style={{ color: "var(--color-text)" }}>{used.key}</span> · {used.scope} ·
+            version {used.version}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * Running this run again.
+ *
+ * A repeat asks for exactly what the record holds — the same kind of pass, the
+ * same instruction, the same place — and it invents nothing: a run whose place
+ * was never recorded, or a develop pass whose instruction the record does not
+ * hold, cannot be repeated, and is said so rather than started somewhere else or
+ * with something else.
+ */
+function Repeat({ view }: { view: Extract<RunView, { known: true }> }): ReactNode {
+  const [repeating, setRepeating] = useState(false);
+  const [refusal, setRefusal] = useState<ApiError | Error | null>(null);
+  // The identity of the intent to repeat: a second click, or a retry after a
+  // refusal, is the same intent and must not start a second run.
+  const intent = useRef<string | null>(null);
+
+  const kind = repeatableKind(view.run.runType);
+  const why = whyNotRepeatable(view, kind);
+
+  const submit = async (): Promise<void> => {
+    if (repeating || kind === null || why !== null) return;
+    setRepeating(true);
+    setRefusal(null);
+    if (intent.current === null) intent.current = anIntentToStart();
+    const started = await startWork({
+      requestId: intent.current,
+      kind,
+      placeId: view.place?.id ?? "",
+      prompt: kind === "develop" ? view.run.label : undefined,
+    });
+    if (started.ok) {
+      intent.current = null;
+      goTo({ name: "run", runId: started.value.runId });
+    } else {
+      setRefusal(started.error);
+    }
+    setRepeating(false);
+  };
+
+  return (
+    <section style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
+      <button
+        type="button"
+        onClick={() => void submit()}
+        disabled={repeating || why !== null}
+        title={why ?? "Start the same work again"}
+        style={{
+          padding: "8px 14px",
+          borderRadius: "var(--radius-sm)",
+          border: "1px solid var(--color-border-strong)",
+          background: "var(--color-surface-2)",
+          color: "var(--color-text)",
+          fontSize: "var(--font-size-sm)",
+          opacity: repeating || why !== null ? 0.5 : 1,
+        }}
+      >
+        {repeating ? "Starting…" : "Run this again"}
+      </button>
+      {why !== null && (
+        <p
+          role="status"
+          style={{ margin: 0, color: "var(--color-text-subtle)", fontSize: "var(--font-size-sm)" }}
+        >
+          {why}
+        </p>
+      )}
+      {refusal !== null && (
+        <p
+          role="alert"
+          style={{
+            margin: 0,
+            display: "flex",
+            gap: 8,
+            color: "var(--status-failed)",
+            fontSize: "var(--font-size-sm)",
+          }}
+        >
+          {refusal instanceof ApiError && refusal.detail !== "" ? refusal.detail : refusal.message}
+          {refusal instanceof ApiError && refusal.conflictingRunId !== "" && (
+            <a
+              href={addressOf({ name: "run", runId: refusal.conflictingRunId })}
+              style={{ color: "inherit" }}
+            >
+              Show the run in the way
+            </a>
+          )}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** The kind of pass a recorded run type can be started again as, if any. */
+function repeatableKind(runType: string | undefined): StartKind | null {
+  if (runType === "develop" || runType === "review") return runType;
+  return null;
+}
+
+/**
+ * Why this run cannot be repeated, or nothing. Each answer names a fact the
+ * record does not hold, because that is the only reason a repeat is refused
+ * here — everything else is the server's to refuse.
+ */
+function whyNotRepeatable(
+  view: Extract<RunView, { known: true }>,
+  kind: StartKind | null,
+): string | null {
+  if (kind === null) {
+    return `A ${view.run.runType ?? "run"} is not started from the hub, so it cannot be repeated here.`;
+  }
+  if (view.place === null || view.place.kind !== "directory") {
+    return "Where this ran was never recorded, so it cannot be repeated: it would have to run somewhere else.";
+  }
+  if (kind === "develop" && view.run.label.trim() === "") {
+    return "The record does not say what this run was told to do, so it cannot be repeated.";
+  }
+  return null;
 }

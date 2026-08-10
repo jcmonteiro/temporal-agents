@@ -1,5 +1,6 @@
 import type {
   FleetDTO,
+  InstructionUseDTO,
   StartedWorkDTO,
   FleetNode,
   LocatedCollection,
@@ -65,6 +66,10 @@ export class FakeApi {
    * other.
    */
   busy: { locationId: string; runId: string } | null = null;
+  /** Who started a run from the hub, by run id. */
+  startedBy: Record<string, string> = {};
+  /** Which stored instruction a run ran under, by run id. */
+  instructionsUsed: Record<string, InstructionUseDTO[]> = {};
 
   private original: typeof globalThis.fetch | undefined;
 
@@ -134,6 +139,10 @@ export class FakeApi {
     const place = this.locations.find((location) => location.id === run.locationId);
     return this.json({
       ...run,
+      // Provenance is published on a run's own resource only, exactly as the
+      // server publishes it.
+      startedBy: this.startedBy[run.id],
+      instructions: this.instructionsUsed[run.id] ?? [],
       locations: place ? [theUnknownPlace(), place] : [theUnknownPlace()],
     });
   }
@@ -167,7 +176,9 @@ export class FakeApi {
         `${this.busy.runId} is already running in ${place.label}`, this.busy.runId);
     }
     const started: StartedWorkDTO = {
-      id: `${asked.kind}-${Object.keys(this.launches).length + 1}`,
+      // Minted from the request identity, as the server mints it: the same request
+      // always names the same execution.
+      id: `${asked.kind}-${requestId}`,
       kind: "run",
       type: String(asked.kind),
       label: String(asked.prompt ?? ""),

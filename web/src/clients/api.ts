@@ -72,6 +72,15 @@ export interface FleetDTO {
   nodes?: FleetNode[];
 }
 
+// One instruction a run ran under. The text is deliberately absent: the version
+// is named, not copied.
+export interface InstructionUseDTO {
+  key: string;
+  scope: string;
+  version: number;
+  hash?: string;
+}
+
 export interface RunDTO {
   id: string;
   kind: "run";
@@ -84,6 +93,9 @@ export interface RunDTO {
   iterations: number;
   tokens?: number;
   dismissible: boolean;
+  // Provenance, published on a run's own resource only.
+  startedBy?: string;
+  instructions?: InstructionUseDTO[];
 }
 
 export interface ScheduleDTO {

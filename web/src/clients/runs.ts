@@ -1,4 +1,4 @@
-import type { LocationResource, RunDTO } from "./api";
+import type { InstructionUseDTO, LocationResource, RunDTO } from "./api";
 import { ApiError, fetchJSON } from "./http";
 import { fromLocation, fromRun } from "./mapping";
 import type { Place } from "../domain/place";
@@ -15,7 +15,18 @@ import { err, ok, type Result } from "../utils/result";
  */
 export type RunView =
   | { known: false }
-  | { known: true; run: WorkItem; place: Place | null; startedAt: string | null; endedAt: string | null; tokens?: number };
+  | {
+      known: true;
+      run: WorkItem;
+      place: Place | null;
+      startedAt: string | null;
+      endedAt: string | null;
+      tokens?: number;
+      /** Who started it from the hub, absent for work the hub did not start. */
+      startedBy?: string;
+      /** Which stored instruction it resolved for each governed key. */
+      instructions: InstructionUseDTO[];
+    };
 
 /** Reads one run. */
 export async function loadRun(runId: string): Promise<Result<RunView, Error>> {
@@ -38,5 +49,7 @@ export async function loadRun(runId: string): Promise<Result<RunView, Error>> {
     startedAt: dto.startedAt,
     endedAt: dto.endedAt,
     tokens: dto.tokens,
+    startedBy: dto.startedBy,
+    instructions: dto.instructions ?? [],
   });
 }
