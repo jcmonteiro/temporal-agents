@@ -11,28 +11,32 @@ guess.
 
 ## Tasks
 
-- [ ] Add a **location probe** at the edge, over the existing git port: absolute
+- [x] Add a **location probe** at the edge, over the existing git port: absolute
       working directory, the repository's common git directory, and whether the two
       differ. One quick activity, run once at workflow start, retried a bounded
       number of times, and **never fatal** — a failure records nothing and the
       item stays unknown.
-- [ ] Record the probe's facts in the existing per-kind recorded detail, so **no
+- [x] Record the probe's facts in the existing per-kind recorded detail, so **no
       schema migration** is needed.
-- [ ] Wire the probe into every workflow that owns a working directory (run,
+- [x] Wire the probe into every workflow that owns a working directory (run,
       develop, review, pilot, fleet node), without changing any existing step's
-      behaviour or ordering guarantees.
-- [ ] Derive locations in the application core from the recorded facts: a directory
+      behaviour or ordering guarantees. Develop (and therefore a fleet node) probes
+      right after its branch and worktree exist, and upserts its row then, so a
+      *running* node is already in its own worktree rather than its fleet's.
+- [x] Derive locations in the application core from the recorded facts: a directory
       location for the working directory, whose parent is the repository's
       directory location **only when git says they differ**. No path-prefix edges.
-- [ ] Represent directory-less work (a pilot loop acting on a pull request with no
+- [~] Represent directory-less work (a pilot loop acting on a pull request with no
       local checkout) as a `remote` location; surface the branch/ref as an **item**
-      attribute, not a place.
-- [ ] Replay tests stay green: add the probe such that recorded histories in
+      attribute, not a place. The core expresses it and refuses to turn a ref into a
+      place for work that ran in a directory; **no command produces directory-less
+      work yet**, so nothing records a ref, and no store field was added for one.
+- [x] Replay tests stay green: add the probe such that recorded histories in
       `testdata` still replay, and add a new recorded history covering the probe.
-- [ ] Unit tests: worktree-and-repository pair yields a two-level chain; identical
+- [x] Unit tests: worktree-and-repository pair yields a two-level chain; identical
       paths yield one level; missing facts yield unknown; a ref never creates a
       place.
-- [ ] Integration test with testcontainers: recorded runs project into the expected
+- [x] Integration test with testcontainers: recorded runs project into the expected
       registry, closed under ancestry.
 
 ## Done when

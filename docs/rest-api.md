@@ -203,6 +203,26 @@ the places it refers to:
 
 The union and the registry are published as `location.v1` under `/api/v1/schemas`.
 
+#### How a place is established
+
+A place is only ever a **probed fact**, never an inference:
+
+- When a unit of work starts, the server asks git where its working directory is:
+  the working tree the directory belongs to, and whether that working tree is a
+  linked worktree of some repository. Those two answers are recorded with the
+  execution.
+- A `directory` place is the recorded working tree. It has a `parentId` **only**
+  when git reported the work runs in a linked worktree, in which case the parent is
+  the repository that worktree was created from. One path containing another never
+  makes a parent: git puts a worktree outside its repository by default.
+- A fleet reports the repository it orchestrates from, while each of its nodes
+  reports the worktree it develops in — so a node's place hangs under its fleet's.
+- A schedule runs nothing itself, so it reports the place of the most recent run it
+  fired that recorded one.
+- Work whose place could not be established — a directory in no repository, a git
+  that could not answer, or an execution started before the server probed at all —
+  is reported as `unknown`. It is never guessed.
+
 ### Status vocabulary
 
 The closed status vocabulary is:
