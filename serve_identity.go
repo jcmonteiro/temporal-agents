@@ -38,6 +38,18 @@ const (
 	publicURLEnv = "AGENT_HUB_PUBLIC_URL"
 )
 
+// The local compose stack's provider, which is also what an unconfigured loopback
+// deployment signs in against. It is a default rather than something an operator
+// must type, because the alternative to a working default here is either a
+// configuration exercise before the first sign-in or an open API — and the second is
+// what this whole feature exists to remove. The values are exactly the ones in
+// deploy/dex/config.yaml.
+const (
+	localProviderIssuer       = "http://localhost:15556/dex"
+	localProviderClientID     = "agent-hub"
+	localProviderClientSecret = "agent-hub-local-secret"
+)
+
 // sessionSweepInterval is how often expired sessions and abandoned sign-ins are
 // swept. It is generous: expiry is enforced on every read, so sweeping is
 // housekeeping rather than a security control.
@@ -51,6 +63,10 @@ type identityOptions struct {
 	// redirectURI is this deployment's own callback, as registered with the
 	// provider.
 	redirectURI string
+	// local marks the configuration as the local stack's default rather than an
+	// operator's, so a provider that is not running can be reported with the command
+	// that starts it.
+	local bool
 }
 
 // configured reports whether this deployment can sign anybody in.
@@ -62,10 +78,15 @@ func (o identityOptions) configured() bool { return o.provider.Issuer != "" }
 // Half a configuration is refused rather than ignored: an operator who set an issuer
 // and mistyped the client id must be told, not served a hub that silently cannot
 // sign anybody in.
-func identityConfiguration(options serveOptions, lookup func(string) string) (identityOptions, error) {
+func identityConfiguration(options serveOptions, lookup func(string) string, useLocalDefault bool) (identityOptions, error) {
 	issuer := strings.TrimSpace(lookup(oidcIssuerEnv))
 	clientID := strings.TrimSpace(lookup(oidcClientIDEnv))
 	clientSecret := strings.TrimSpace(lookup(oidcClientSecretEnv))
+	local := false
+	if issuer == "" && clientID == "" && clientSecret == "" && useLocalDefault {
+		issuer, clientID, clientSecret = localProviderIssuer, localProviderClientID, localProviderClientSecret
+		local = true
+	}
 	if issuer == "" {
 		if clientID != "" || clientSecret != "" {
 			return identityOptions{}, fmt.Errorf("%s is required when %s or %s is set",
@@ -84,6 +105,7 @@ func identityConfiguration(options serveOptions, lookup func(string) string) (id
 	return identityOptions{
 		provider:    oidcprovider.Config{Issuer: issuer, ClientID: clientID, ClientSecret: clientSecret},
 		redirectURI: public + httpapi.BasePath + "/auth/callback",
+		local:       local,
 	}, nil
 }
 
@@ -138,6 +160,14 @@ func openIdentity(ctx context.Context, dsn string, options identityOptions) (*si
 	provider, err := oidcprovider.New(ctx, options.provider)
 	if err != nil {
 		store.Close()
+		if options.local {
+			// Nobody asked for this provider by name, so the failure has to say where it
+			// came from and how to start it, or it reads as the tool being broken.
+			return nil, fmt.Errorf("could not reach the local identity provider at %s "+
+				"(start it with 'docker compose up -d dex', point %s at another provider, "+
+				"or set %s=1 on a loopback listener): %w",
+				options.provider.Issuer, oidcIssuerEnv, allowUnauthenticatedEnv, err)
+		}
 		return nil, fmt.Errorf("could not reach the identity provider: %w", err)
 	}
 	service, err := identity.NewService(identity.Dependencies{

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -413,5 +415,109 @@ func TestTheSessionResourceKeepsTheFieldNamesTheWebClientReads(t *testing.T) {
 		if _, present := principal[key]; !present {
 			t.Errorf("the principal has no %q; the web client reads %v", key, sortedKeys(principal))
 		}
+	}
+}
+
+// TestAServerThatNeitherAuthenticatesNorWasAskedNotToDoesNotBuild pins that an open
+// surface is always a decision. A missing token, an unconfigured provider, a
+// half-finished deployment: every one of them stops here rather than serving the
+// operator's work to whatever can reach the port.
+func TestAServerThatNeitherAuthenticatesNorWasAskedNotToDoesNotBuild(t *testing.T) {
+	_, err := New(&viewStub{}, Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+
+	if err == nil {
+		t.Fatal("a server with no credential and no explicit opt-out was built")
+	}
+}
+
+// TestEveryRouteButTheDoorAndTheHealthProbeNeedsACredential is the closed door,
+// asserted as a matrix rather than as a sample: a route added later is refused by
+// default, and one deliberately left open has to be named here.
+func TestEveryRouteButTheDoorAndTheHealthProbeNeedsACredential(t *testing.T) {
+	server, _ := newAuthenticatedServer(t, &stubProvider{principal: theOperator})
+
+	open := map[string]bool{
+		BasePath + "/auth/sign-in":  true,
+		BasePath + "/auth/callback": true,
+		BasePath + "/health":        true,
+	}
+	for _, res := range server.resources() {
+		if strings.Contains(res.pattern, "{") {
+			// A pattern with a wildcard is exercised through a concrete path below.
+			continue
+		}
+		for method := range res.methods {
+			t.Run(method+" "+res.pattern, func(t *testing.T) {
+				response := request(t, server, method, res.pattern, nil)
+				refused := response.Code == http.StatusUnauthorized
+				if refused == open[res.pattern] {
+					t.Fatalf("status = %d, want %s", response.Code,
+						map[bool]string{true: "401", false: "anything but 401"}[!open[res.pattern]])
+				}
+			})
+		}
+	}
+	for _, path := range []string{
+		BasePath + "/fleets/fleet-1",
+		BasePath + "/runs/run-1",
+		BasePath + "/schemas/run.v1",
+		BasePath + "/problems/not-found",
+		"/.well-known/api-catalog",
+	} {
+		t.Run("GET "+path, func(t *testing.T) {
+			response := request(t, server, http.MethodGet, path, nil)
+			requireProblem(t, response, http.StatusUnauthorized, codeAuthenticationRequired)
+		})
+	}
+}
+
+// TestAnotherSitesPageCannotChangeAnything pins the rule loopback binding cannot
+// provide: a page the operator happens to be visiting must not be able to start,
+// stop or hide anything here, even though it can reach the port.
+func TestAnotherSitesPageCannotChangeAnything(t *testing.T) {
+	server, _ := newAuthenticatedServer(t, &stubProvider{principal: theOperator})
+	session := signInThroughTheBrowser(t, server)
+
+	for site, refused := range map[string]bool{
+		"cross-site":  true,
+		"same-site":   true,
+		"same-origin": false,
+		"none":        false,
+		"":            false,
+	} {
+		t.Run("Sec-Fetch-Site: "+site, func(t *testing.T) {
+			mutation := newRequest(http.MethodDelete, BasePath+"/dismissals/run:run-1", nil)
+			mutation.AddCookie(session)
+			if site != "" {
+				mutation.Header.Set("Sec-Fetch-Site", site)
+			}
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, mutation)
+
+			if refused {
+				requireProblem(t, response, http.StatusForbidden, codeCrossSiteRequest)
+				return
+			}
+			if response.Code == http.StatusForbidden {
+				t.Fatalf("a request from %q was refused as cross-site", site)
+			}
+		})
+	}
+}
+
+// TestReadingIsUnaffectedByTheCrossSiteRule pins the other half: the rule guards
+// changes, and does not turn an ordinary read into a browser-only endpoint.
+func TestReadingIsUnaffectedByTheCrossSiteRule(t *testing.T) {
+	server, _ := newAuthenticatedServer(t, &stubProvider{principal: theOperator})
+	session := signInThroughTheBrowser(t, server)
+
+	read := newRequest(http.MethodGet, BasePath+"/runs", nil)
+	read.AddCookie(session)
+	read.Header.Set("Sec-Fetch-Site", "cross-site")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, read)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", response.Code)
 	}
 }

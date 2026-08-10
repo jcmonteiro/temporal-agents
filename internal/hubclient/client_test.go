@@ -79,13 +79,17 @@ func TestHTTPServerAndClientShareTheActiveWorkContract(t *testing.T) {
 	source := agenthubtest.New().WithRunning(executions...).WithSchedules(schedules...)
 	service, err := agenthub.NewService(source.Dependencies(time.Unix(0, 0).UTC()))
 	require.NoError(t, err)
+	// The server requires a credential, as every deployment does, and the client
+	// authenticates the way automation always will: with the configured token and no
+	// browser anywhere in the picture.
 	api, err := httpapi.New(service, httpapi.Options{
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), RequestsPerSecond: -1,
+		AuthToken: "a-configured-token",
 	})
 	require.NoError(t, err)
 	server := httptest.NewServer(api)
 	defer server.Close()
-	client, err := New(server.URL+httpapi.BasePath, "", server.Client())
+	client, err := New(server.URL+httpapi.BasePath, "a-configured-token", server.Client())
 	require.NoError(t, err)
 
 	items, err := client.Overview(context.Background())

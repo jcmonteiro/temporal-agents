@@ -18,13 +18,41 @@ func environmentOf(values map[string]string) func(string) string {
 	return func(name string) string { return values[name] }
 }
 
-// TestSigningInIsOffUntilAnIssuerIsConfigured pins the default: a hub with no
-// provider is a hub with no sign-in, and nothing about that is implicit.
-func TestSigningInIsOffUntilAnIssuerIsConfigured(t *testing.T) {
-	options, err := identityConfiguration(serveOptions{address: defaultServeAddress}, environmentOf(nil))
+// TestAnUnconfiguredLoopbackHubSignsInAgainstTheLocalStack pins the local
+// ergonomics the brief asks for: bring the stack up, start the hub, click once. The
+// alternative to a working default is either an open port or a configuration
+// exercise before the first sign-in.
+func TestAnUnconfiguredLoopbackHubSignsInAgainstTheLocalStack(t *testing.T) {
+	options, err := identityConfiguration(serveOptions{address: defaultServeAddress}, environmentOf(nil), true)
+
+	require.NoError(t, err)
+	require.True(t, options.configured())
+	require.Equal(t, localProviderIssuer, options.provider.Issuer)
+	require.True(t, options.local, "the default has to be recognisable, so it can be reported as one")
+}
+
+// TestNothingIsAssumedWhereTheDefaultCannotApply pins the other side: a listener
+// that is not loopback, or an operator who asked for an open API, gets no invented
+// provider.
+func TestNothingIsAssumedWhereTheDefaultCannotApply(t *testing.T) {
+	options, err := identityConfiguration(serveOptions{address: defaultServeAddress}, environmentOf(nil), false)
 
 	require.NoError(t, err)
 	require.False(t, options.configured())
+}
+
+// TestAConfiguredProviderIsNeverReplacedByTheDefault pins that the default only
+// fills a vacuum.
+func TestAConfiguredProviderIsNeverReplacedByTheDefault(t *testing.T) {
+	options, err := identityConfiguration(serveOptions{address: defaultServeAddress}, environmentOf(map[string]string{
+		oidcIssuerEnv:       "https://issuer.example.test",
+		oidcClientIDEnv:     "the-hub",
+		oidcClientSecretEnv: "the-secret",
+	}), true)
+
+	require.NoError(t, err)
+	require.Equal(t, "https://issuer.example.test", options.provider.Issuer)
+	require.False(t, options.local)
 }
 
 // TestHalfAProviderConfigurationIsRefused pins the mistake worth failing on: an
@@ -45,7 +73,7 @@ func TestHalfAProviderConfigurationIsRefused(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := identityConfiguration(serveOptions{address: defaultServeAddress}, environmentOf(environment))
+			_, err := identityConfiguration(serveOptions{address: defaultServeAddress}, environmentOf(environment), false)
 			require.Error(t, err)
 		})
 	}
@@ -62,7 +90,7 @@ func TestTheCallbackIsDerivedFromWhereTheBrowserReachesTheHub(t *testing.T) {
 
 	t.Run("derived from a listener that names a host", func(t *testing.T) {
 		options, err := identityConfiguration(
-			serveOptions{address: "127.0.0.1:8973"}, environmentOf(provider))
+			serveOptions{address: "127.0.0.1:8973"}, environmentOf(provider), false)
 
 		require.NoError(t, err)
 		require.Equal(t, "http://127.0.0.1:8973"+httpapi.BasePath+"/auth/callback", options.redirectURI)
@@ -71,7 +99,7 @@ func TestTheCallbackIsDerivedFromWhereTheBrowserReachesTheHub(t *testing.T) {
 	t.Run("https when the listener serves TLS", func(t *testing.T) {
 		options, err := identityConfiguration(
 			serveOptions{address: "hub.example.test:8973", tlsCert: "hub.crt", tlsKey: "hub.key"},
-			environmentOf(provider))
+			environmentOf(provider), false)
 
 		require.NoError(t, err)
 		require.Equal(t, "https://hub.example.test:8973"+httpapi.BasePath+"/auth/callback", options.redirectURI)
@@ -83,14 +111,14 @@ func TestTheCallbackIsDerivedFromWhereTheBrowserReachesTheHub(t *testing.T) {
 			behindAProxy[key] = value
 		}
 
-		options, err := identityConfiguration(serveOptions{address: "127.0.0.1:8973"}, environmentOf(behindAProxy))
+		options, err := identityConfiguration(serveOptions{address: "127.0.0.1:8973"}, environmentOf(behindAProxy), false)
 
 		require.NoError(t, err)
 		require.Equal(t, "https://hub.example.test"+httpapi.BasePath+"/auth/callback", options.redirectURI)
 	})
 
 	t.Run("required when the listener names no host", func(t *testing.T) {
-		_, err := identityConfiguration(serveOptions{address: "0.0.0.0:8973"}, environmentOf(provider))
+		_, err := identityConfiguration(serveOptions{address: "0.0.0.0:8973"}, environmentOf(provider), false)
 
 		require.ErrorContains(t, err, publicURLEnv)
 	})
@@ -101,7 +129,7 @@ func TestTheCallbackIsDerivedFromWhereTheBrowserReachesTheHub(t *testing.T) {
 			notAURL[key] = value
 		}
 
-		_, err := identityConfiguration(serveOptions{address: "127.0.0.1:8973"}, environmentOf(notAURL))
+		_, err := identityConfiguration(serveOptions{address: "127.0.0.1:8973"}, environmentOf(notAURL), false)
 
 		require.ErrorContains(t, err, publicURLEnv)
 	})

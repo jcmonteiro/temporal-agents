@@ -47,6 +47,8 @@ const (
 	// completed: it is bound to no sign-in this server started, it has been used
 	// already, it expired, or the provider refused it.
 	codeSignInFailed problemCode = "sign-in-failed"
+	// codeCrossSiteRequest is a change requested from another site.
+	codeCrossSiteRequest problemCode = "cross-site-request"
 	// codeTooManyRequests is a caller going faster than the server accepts.
 	codeTooManyRequests problemCode = "too-many-requests"
 	// codeDependencyUnavailable is a dependency of the read path being unreachable:
@@ -131,6 +133,14 @@ var problemTypes = map[problemCode]problemType{
 			"server started for this browser, has been used already, took too long, or was refused " +
 			"by the provider. Which of those it was is deliberately not disclosed. Start again at " +
 			"the sign-in endpoint.",
+	},
+	codeCrossSiteRequest: {
+		Title:  "The request came from another site",
+		Status: http.StatusForbidden,
+		Description: "A change must be requested by this application, from this site. Binding to " +
+			"loopback is no protection here: any page a browser visits can send a request to a " +
+			"local port, and this hub can start agent work. A script or the CLI, which carry no " +
+			"ambient credential for another site to borrow, are unaffected.",
 	},
 	codeTooManyRequests: {
 		Title:  "Too many requests",

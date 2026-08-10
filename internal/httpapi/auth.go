@@ -66,10 +66,9 @@ const (
 // token are the same question with different answers, and a third kind must be
 // addable without this function changing.
 //
-// A deployment with no authenticator configured is served open. That is the
-// remaining unauthenticated mode, and it is removed by this feature's last slice;
-// while it exists, it is a property of the composition root, not something a request
-// can ask for.
+// A server with no authenticator at all exists only where an operator asked for one
+// explicitly (see New), and it is loud about it. There is no path by which a
+// deployment ends up unauthenticated because nobody thought about it.
 func (s *Server) authenticate(next http.Handler) http.Handler {
 	if s.authenticator == nil {
 		return next
@@ -89,12 +88,24 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 	})
 }
 
-// isPublicRoute reports whether a path is one of the few that must answer without a
-// credential: signing in, coming back from the provider, and signing out (which is
-// exactly what a browser holding an unusable cookie needs to be able to do).
+// isPublicRoute reports the whole of what an unauthenticated request may reach.
+//
+// It is three things, and each one has to be reachable for the door to be usable at
+// all: the two routes by which a browser obtains a credential, and the health
+// resource, which a monitor probes with no credential and which discloses only
+// whether dependencies answer.
+//
+// Everything else — every read, the contract, the schemas, the problem catalogue,
+// the service description — is behind the door. A specification is not a secret, but
+// it is also not worth a second, separate rule about who may read what: one rule,
+// applied to everything, cannot be got wrong resource by resource.
+//
+// The application bundle is not an API route and is not covered here (see
+// rootHandler): the page that offers the sign-in has to load before anybody can sign
+// in, and it carries no data of its own.
 func (s *Server) isPublicRoute(path string) bool {
 	switch path {
-	case s.basePath + "/auth/sign-in", s.basePath + "/auth/callback":
+	case s.basePath + "/auth/sign-in", s.basePath + "/auth/callback", s.basePath + "/health":
 		return true
 	default:
 		return false
@@ -404,4 +415,45 @@ func newAuthenticator(options Options) (identity.Authenticator, error) {
 		return nil, nil
 	}
 	return chain, nil
+}
+
+// requireSameSite refuses a mutation that a page on another site caused the browser
+// to make.
+//
+// Loopback binding is not a defence here: any page an operator visits can send a
+// request to 127.0.0.1, and once this hub can start agent work, a cross-site request
+// that mutates is somebody else's page starting work on the operator's machine. The
+// cookie's SameSite attribute already blocks most of it; this is the second, explicit
+// rule, because a defence that depends only on a browser honouring a cookie
+// attribute is one browser bug away from nothing.
+//
+// A request that declares nothing — a script, the CLI, curl — is allowed through:
+// those carry no ambient credential a third party could borrow, and refusing them
+// would break automation to protect it from an attack it cannot suffer.
+func (s *Server) requireSameSite(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !mutates(r.Method) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		switch strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))) {
+		case "", "same-origin", "none":
+			// "none" is a user-initiated navigation, "same-origin" is this application,
+			// and an absent header is a client that is not a browser.
+			next.ServeHTTP(w, r)
+		default:
+			s.writeProblem(w, r, codeCrossSiteRequest,
+				"a change must be requested by this application, from this site")
+		}
+	})
+}
+
+// mutates reports whether a method changes something.
+func mutates(method string) bool {
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
 }

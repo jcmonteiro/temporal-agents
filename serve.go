@@ -131,10 +131,16 @@ Requests must use a loopback Host, the concrete listener host, or a name listed 
 --allow-host. No cross-origin browser access is allowed by default; list each trusted
 frontend origin with --allow-origin.
 
-A person signs in with an identity provider when one is configured (see ENVIRONMENT):
-the browser is redirected to the provider, and comes back holding a session cookie
-only. Every token the provider issues stays on the server. A script keeps using
-AGENT_HUB_AUTH_TOKEN, which needs no browser.
+Every route needs a credential, except signing in, the provider's callback, and the
+health probe. A person signs in with an identity provider: the browser is redirected
+to it and comes back holding a session cookie only, while every token the provider
+issues stays on the server. On a loopback listener an unconfigured hub signs in
+against the local compose stack's provider, so 'docker compose up -d' plus this
+command is a working sign-in.
+
+A script authenticates with AGENT_HUB_AUTH_TOKEN and no browser. On a loopback
+listener the token is minted on first start and stored, readable only by this user,
+so 'list' on this machine needs no configuration.
 
 OPTIONS
   --addr <host:port>       Listener address (default 127.0.0.1:8973)
@@ -161,6 +167,11 @@ ENVIRONMENT
   AGENT_HUB_PUBLIC_URL  The URL a browser reaches this hub at, which the provider
                         redirects back to. Derived from --addr when it names a host;
                         required behind a proxy or on 0.0.0.0.
+  AGENT_HUB_ALLOW_UNAUTHENTICATED
+                        Serve with no credential at all. Loopback only, refused
+                        anywhere else, and announced on every start. It is the only
+                        way to get an open API, so an open API is always somebody's
+                        decision.
 
 The schema is applied by 'temporal-agents migrate'. This server verifies it at
 startup and refuses to run against a database older than the build it is.
@@ -204,10 +215,7 @@ func serveSecurity(options serveOptions, configuredToken string) ([]string, stri
 		return nil, "", fmt.Errorf("parse --addr: %w", err)
 	}
 	token := strings.TrimSpace(configuredToken)
-	loopback := strings.EqualFold(host, "localhost")
-	if ip := net.ParseIP(host); ip != nil {
-		loopback = ip.IsLoopback()
-	}
+	loopback := loopbackHost(host)
 	if (options.tlsCert == "") != (options.tlsKey == "") {
 		return nil, "", errors.New("--tls-cert and --tls-key must be configured together")
 	}
@@ -227,6 +235,26 @@ func serveSecurity(options serveOptions, configuredToken string) ([]string, stri
 		}
 	}
 	return hosts, token, nil
+}
+
+// loopbackHost reports whether a listener host is this machine and nothing else.
+// It is one function because three rules depend on the same answer: whether TLS and
+// a token are required, whether a token may be minted on disk, and whether an open
+// API may be asked for at all.
+func loopbackHost(host string) bool {
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return strings.EqualFold(host, "localhost")
+}
+
+// isLoopbackAddress answers the same question for a listener address.
+func isLoopbackAddress(address string) (bool, error) {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return false, fmt.Errorf("parse --addr: %w", err)
+	}
+	return loopbackHost(host), nil
 }
 
 // localOrigins derives the server origins that browsers can use for the bundled
@@ -269,9 +297,38 @@ func runAPIServer(options serveOptions) error {
 	if err != nil {
 		return err
 	}
-	identityOptions, err := identityConfiguration(options, environment)
+	loopback, err := isLoopbackAddress(options.address)
 	if err != nil {
 		return err
+	}
+	// An open API is possible, and only as an answer to a question somebody asked.
+	openForLocalUse, err := unauthenticatedAllowed(environment, loopback)
+	if err != nil {
+		return err
+	}
+	identityOptions, err := identityConfiguration(options, environment, loopback && !openForLocalUse)
+	if err != nil {
+		return err
+	}
+	// Automation authenticates with a token, and on a loopback machine it is minted
+	// rather than invented by the operator: the alternative to a working default is
+	// either an open port or a configuration exercise before the first command.
+	if !openForLocalUse {
+		authToken, err = ensureLocalToken(authToken, loopback)
+		if err != nil {
+			return err
+		}
+		if authToken == "" && !identityOptions.configured() {
+			return fmt.Errorf("%w: configure %s, an identity provider (%s), "+
+				"or ask for an open API explicitly with %s on a loopback listener",
+				errNoCredential, agentHubAuthTokenEnv, oidcIssuerEnv, allowUnauthenticatedEnv)
+		}
+	}
+	if openForLocalUse {
+		slog.Warn("serving the API without any credential because it was asked for — "+
+			"anything that can reach this port can read every goal, prompt and failure, "+
+			"and can hide work from the overview",
+			"env", allowUnauthenticatedEnv)
 	}
 	ctx := context.Background()
 
@@ -341,14 +398,15 @@ func runAPIServer(options serveOptions) error {
 
 	allowedOrigins := append(localOrigins(options.address, allowedHosts, options.tlsCert != ""), options.allowedOrigins...)
 	api, err := httpapi.New(service, httpapi.Options{
-		Logger:         slog.Default(),
-		AllowedHosts:   allowedHosts,
-		AllowedOrigins: allowedOrigins,
-		AuthToken:      authToken,
-		Authenticator:  signIn.authenticator(),
-		SignIn:         signIn.signIn(),
-		SecureCookies:  options.tlsCert != "",
-		WebDir:         options.webDir,
+		Logger:               slog.Default(),
+		AllowedHosts:         allowedHosts,
+		AllowedOrigins:       allowedOrigins,
+		AuthToken:            authToken,
+		Authenticator:        signIn.authenticator(),
+		SignIn:               signIn.signIn(),
+		SecureCookies:        options.tlsCert != "",
+		AllowUnauthenticated: openForLocalUse,
+		WebDir:               options.webDir,
 		HealthChecks: append([]httpapi.HealthCheck{
 			{
 				Name: "temporal",

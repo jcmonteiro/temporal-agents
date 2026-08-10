@@ -175,12 +175,19 @@ Finished items remain visible until dismissed. A dismissal is Postgres-backed vi
 state and never changes workflow state. Continue-as-new iterations are one run
 resource identified by workflow ID.
 
-A person signs in with an identity provider when one is configured
-(`AGENT_HUB_OIDC_ISSUER`, `AGENT_HUB_OIDC_CLIENT_ID`, `AGENT_HUB_OIDC_CLIENT_SECRET`);
-the local compose stack runs one, so `docker compose up -d` plus one click is a
-working sign-in. The API is the confidential client: the browser receives a
-script-inaccessible session cookie and never a token. Scripts and the CLI keep using
-`AGENT_HUB_AUTH_TOKEN`, which needs no browser.
+Every route needs a credential, except signing in, the provider's callback and the
+health probe. A person signs in with an identity provider: the local compose stack
+runs one, and a loopback listener uses it by default, so `docker compose up -d` plus
+`serve` plus one click is a working sign-in. Point the hub elsewhere with
+`AGENT_HUB_OIDC_ISSUER`, `AGENT_HUB_OIDC_CLIENT_ID` and
+`AGENT_HUB_OIDC_CLIENT_SECRET`. The API is the confidential client: the browser
+receives a script-inaccessible session cookie and never a token.
+
+Scripts and the CLI authenticate with `AGENT_HUB_AUTH_TOKEN` and no browser; on a
+loopback listener `serve` mints that token and `list` reads it, so neither needs
+configuring. An open API is possible only by asking for it
+(`AGENT_HUB_ALLOW_UNAUTHENTICATED=1`), only on loopback, and the process says so on
+every start.
 
 The API binds to `127.0.0.1:8973` by default and accepts only configured HTTP Host
 names. A non-loopback `--addr` requires `--tls-cert`, `--tls-key`, and a strong

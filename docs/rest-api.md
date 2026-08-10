@@ -30,21 +30,19 @@ A person signs in with an identity provider; a script keeps using the bearer tok
 Both credentials are resolved by one port, so a resource never branches on which was
 presented.
 
-The local compose stack runs a provider (Dex) with one operator, so signing in needs
-no external account:
+The local compose stack runs a provider (Dex) with one operator, and a loopback
+listener signs in against it by default, so signing in needs no external account and
+no configuration:
 
 ```sh
 docker compose up -d
-export AGENT_HUB_OIDC_ISSUER=http://localhost:15556/dex
-export AGENT_HUB_OIDC_CLIENT_ID=agent-hub
-export AGENT_HUB_OIDC_CLIENT_SECRET=agent-hub-local-secret
 temporal-agents serve
-# then open http://localhost:8973/api/v1/auth/sign-in
+# then open http://localhost:8973/
 # operator@example.test / operator
 ```
 
-Setting `AGENT_HUB_OIDC_ISSUER` is what turns signing in on. The client id and secret
-are then required. `AGENT_HUB_PUBLIC_URL` states the URL a browser reaches the hub at,
+Point the hub at another provider with `AGENT_HUB_OIDC_ISSUER`; the client id and
+secret are then required, and nothing is defaulted. `AGENT_HUB_PUBLIC_URL` states the URL a browser reaches the hub at,
 which is what the provider redirects back to; it is derived from `--addr` when that
 names a host, and required behind a proxy or on `0.0.0.0`. The provider's local
 configuration, including the operator's credentials, is in `deploy/dex/config.yaml`.
@@ -68,6 +66,24 @@ A request without an accepted credential is `401` with `WWW-Authenticate` and a
 `Link: <…/auth/sign-in>; rel="authenticate"` header. A credential that could not be
 *checked* — an unreachable store — is `503`, not `401`: an outage must not read as
 everybody being signed out.
+
+Every route needs a credential except three: `auth/sign-in` and `auth/callback`,
+which are how a credential is obtained, and `health`, which a monitor probes and
+which discloses only whether dependencies answer. The application bundle is not an
+API route and stays reachable, because the page offering the sign-in has to load.
+
+## Automation
+
+`list` and any other script authenticate with `AGENT_HUB_AUTH_TOKEN` and no browser.
+On a loopback listener `serve` mints that token on first start and stores it in
+`<user config dir>/temporal-agents/api-token`, readable only by its owner, and `list`
+on the same machine reads it from there — so neither command needs configuring. A
+listener that is not loopback never mints one: there, the token is set deliberately
+and must contain at least 32 characters.
+
+There is one way to serve an open API, and it is explicit:
+`AGENT_HUB_ALLOW_UNAUTHENTICATED=1`. It is refused on a non-loopback listener and the
+process announces it on every start.
 
 A non-loopback bind requires TLS and bearer authentication. Set a random token in
 the environment; do not put a fixed token in a command-line argument. The token must
@@ -338,6 +354,10 @@ fields and multiple JSON documents.
 
 ## Security notes
 
+- There is no unauthenticated mode that can be left on unnoticed: a server that
+  neither authenticates nor was explicitly asked not to refuses to start.
+- A change (`POST`, `DELETE`) is refused when the browser reports it as cross-site.
+  Loopback binding is no defence: any page can send a request to a local port.
 - Signing in is server-side. No provider token, refresh token or identity ever reaches
   the browser, and the session cookie is script-inaccessible and same-site.
 - A callback is accepted once, only when it is bound to a sign-in this server started

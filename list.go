@@ -38,14 +38,16 @@ func listCmd(ctx context.Context, out io.Writer, reader workoverview.Reader) err
 	return nil
 }
 
-// listRunning is the command composition root. The CLI uses the same bearer token
-// as remote Agent Hub consumers and the safe loopback endpoint by default.
+// listRunning is the command composition root. The CLI uses the same bearer token as
+// remote Agent Hub consumers and the safe loopback endpoint by default; on this
+// machine the token is the one `serve` minted, so reading the hub stays a single
+// command with no credential to copy (see apitoken.go).
 func listRunning() {
 	apiURL := strings.TrimSpace(os.Getenv(agentHubAPIURLEnv))
 	if apiURL == "" {
 		apiURL = defaultAgentHubAPIURL
 	}
-	reader, err := hubclient.New(apiURL, os.Getenv(agentHubAuthTokenEnv), &http.Client{Timeout: cliHTTPTimeout})
+	reader, err := hubclient.New(apiURL, apiToken(os.Getenv(agentHubAuthTokenEnv)), &http.Client{Timeout: cliHTTPTimeout})
 	if err != nil {
 		fatalf("%v", err)
 	}

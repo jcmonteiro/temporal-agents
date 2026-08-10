@@ -176,6 +176,10 @@ func newTestServer(t *testing.T, view WorkView, mutate ...func(*Options)) *Serve
 		RequestsPerSecond: -1,
 		Now:               func() time.Time { return fixedNow },
 		WebDir:            "",
+		// The tests that are about resources ask for an open server on purpose, which
+		// is the only way to get one: a server that neither authenticates nor was asked
+		// not to does not build (see TestAServerThatNeitherAuthenticatesNorWasAskedNotToDoesNotBuild).
+		AllowUnauthenticated: true,
 	}
 	for _, change := range mutate {
 		change(&options)

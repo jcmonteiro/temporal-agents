@@ -135,6 +135,11 @@ type Options struct {
 	// over TLS never travels in the clear. The composition root sets it when the
 	// listener serves TLS.
 	SecureCookies bool
+	// AllowUnauthenticated serves the API with no credential at all. It exists for a
+	// single-operator loopback machine and nothing else: New refuses to build a server
+	// that neither authenticates nor was explicitly asked not to, so an open surface
+	// is always somebody's decision rather than an oversight.
+	AllowUnauthenticated bool
 	// WebDir, when set, is a directory of built static assets served outside the API's
 	// path, for local convenience. The API itself never depends on it: the same bundle
 	// can be served by anything else without the API changing.
@@ -230,6 +235,14 @@ func New(view WorkView, options Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	if authenticator == nil && !options.AllowUnauthenticated {
+		// The one place an open surface can come from is an explicit request for one.
+		// Everything else — a missing token, an unconfigured provider, a half-finished
+		// deployment — stops here instead of serving the operator's work to whatever can
+		// reach the port.
+		return nil, errors.New("no credential is configured: supply an authentication " +
+			"port or a token, or ask for an unauthenticated server explicitly")
+	}
 	s.authenticator = authenticator
 	for _, host := range options.AllowedHosts {
 		if canonical := canonicalHost(host); canonical != "" {
@@ -316,6 +329,7 @@ func (s *Server) buildHandler() http.Handler {
 	var handler http.Handler = mux
 	handler = s.withTimeout(handler)
 	handler = s.rateLimit(handler)
+	handler = s.requireSameSite(handler)
 	handler = s.authenticate(handler)
 	handler = s.cors(handler)
 	handler = s.requireHost(handler)
