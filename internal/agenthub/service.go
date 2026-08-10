@@ -1010,6 +1010,9 @@ func merge(chains map[string]Execution, iterations map[string]int, e Execution) 
 	if len(newest.Instructions) == 0 {
 		newest.Instructions = older.Instructions
 	}
+	// Waiting is deliberately *not* inherited from an older iteration: only the
+	// iteration that is waiting is waiting, and a finished pass that once waited must
+	// never make the chain look like it still does.
 	chains[e.WorkflowID] = newest
 }
 
@@ -1046,7 +1049,7 @@ func runFrom(chain resolvedChain) (Run, error) {
 		Running:      chain.Running(),
 		Type:         runType(chain.Class),
 		Label:        chain.Label,
-		Status:       chain.Outcome.WorkStatus(),
+		Status:       chain.Status(),
 		StartedAt:    chain.StartedAt,
 		EndedAt:      chain.EndedAt,
 		Iterations:   max(chain.Iterations, 1),

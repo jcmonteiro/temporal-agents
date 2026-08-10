@@ -877,3 +877,54 @@ func runIDs(runs []agenthub.Run) []string {
 	}
 	return out
 }
+
+// A run whose round has stopped for an operator is not making progress, however
+// busy the orchestrator says it is. It reports that it needs input, and the
+// session it waits in never becomes an item of its own.
+func TestARunWaitingForAnOperatorReportsThatItNeedsInput(t *testing.T) {
+	id := "review-" + uuidLike("7")
+	waiting := agenthubtest.Run(id, "review the branch", agenthub.OutcomeRunning, ago(time.Hour))
+	waiting.RunID = "iteration-1"
+	waiting.WaitingSince = ago(30 * time.Minute)
+	// The orchestrator knows only that the workflow is running, which is true and
+	// is exactly why the durable fact must win here.
+	live := agenthubtest.Run(id, "review the branch", agenthub.OutcomeRunning, ago(time.Hour))
+	live.RunID = "iteration-1"
+
+	source := agenthubtest.New().WithRecorded(waiting).WithRunning(live)
+
+	runs, err := newService(t, source).Runs(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("Runs: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("got %d runs, want the one waiting run", len(runs))
+	}
+	if runs[0].Status != agenthub.StatusWaitingInput {
+		t.Errorf("status = %q, want %q", runs[0].Status, agenthub.StatusWaitingInput)
+	}
+	if !runs[0].Running {
+		t.Error("a waiting run is still a live execution, and must not be reported as settled")
+	}
+}
+
+// The moment the decision is in, the run stops asking: the newest iteration is
+// what the chain reports, so a pass that once waited cannot leave the chain
+// looking like it still does.
+func TestARunThatHasBeenAnsweredStopsAskingForInput(t *testing.T) {
+	id := "review-" + uuidLike("8")
+	waited := agenthubtest.Run(id, "review the branch", agenthub.OutcomeSucceeded, ago(2*time.Hour))
+	waited.RunID, waited.WaitingSince = "iteration-1", ago(90*time.Minute)
+	next := agenthubtest.Run(id, "review the branch", agenthub.OutcomeRunning, ago(time.Hour))
+	next.RunID = "iteration-2"
+
+	source := agenthubtest.New().WithRecorded(waited, next).WithRunning(next)
+
+	runs, err := newService(t, source).Runs(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("Runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Status != agenthub.StatusInProgress {
+		t.Fatalf("runs = %+v, want one run in progress", runs)
+	}
+}

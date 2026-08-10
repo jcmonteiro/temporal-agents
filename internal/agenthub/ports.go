@@ -77,6 +77,25 @@ type Execution struct {
 	// the zero value for an execution whose place was never established, which the
 	// core reads as the unknown place.
 	Place RecordedPlace
+	// WaitingSince is when the execution started waiting for an operator's decision,
+	// and the zero time whenever it is not waiting. Only the durable record has it:
+	// to the orchestrator a paused round is a workflow that is running, which is
+	// exactly what it is — but not what an operator needs to be told.
+	WaitingSince time.Time
+}
+
+// Status is how the execution stands in the overview's vocabulary.
+//
+// It is the outcome's status, except for the one thing an outcome cannot express: a
+// running execution that has stopped for a human is not making progress, and saying
+// "in progress" about it would hide the decision it is waiting for. The waiting
+// round's own session is never an item of its own, so this is the only place that
+// work is visible.
+func (e Execution) Status() WorkStatus {
+	if e.Outcome == OutcomeRunning && !e.WaitingSince.IsZero() {
+		return StatusWaitingInput
+	}
+	return e.Outcome.WorkStatus()
 }
 
 // InstructionUse is one instruction a unit of work ran under: which governed

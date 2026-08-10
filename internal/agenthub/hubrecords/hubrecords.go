@@ -265,6 +265,11 @@ func executionFrom(record execstore.Execution) agenthub.Execution {
 			Repository: record.Detail.Repository,
 		},
 	}
+	// Only the durable record knows an execution is waiting for a human: the
+	// orchestrator sees a workflow that is running, which is exactly what it is.
+	if record.Detail.WaitingSince != nil {
+		e.WaitingSince = *record.Detail.WaitingSince
+	}
 	for _, node := range record.Detail.Nodes {
 		e.NodeOutcomes = append(e.NodeOutcomes, agenthub.NodeOutcome{
 			NodeID:  node.ID,
