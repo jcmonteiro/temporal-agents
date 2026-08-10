@@ -173,6 +173,10 @@ func TestAContextAProcessDoesNotUseIsNotThatProcessesDependency(t *testing.T) {
 
 func TestMigratingAnUpToDateDatabaseChangesNothing(t *testing.T) {
 	dsn := pgtest.NewDatabase(t)
+	// requireCurrentSchema reads the DSN from the environment, as a starting process
+	// does, so the check must point at this test's own database and not at whatever the
+	// machine happens to export.
+	t.Setenv(databaseURLEnv, dsn)
 	require.NoError(t, migrateSchemas(context.Background(), dsn, allSchemaContexts(), &bytes.Buffer{}))
 	first := recordedMigrations(t, dsn)
 
