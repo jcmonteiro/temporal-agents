@@ -40,6 +40,14 @@ type Source struct {
 	schedules []agenthub.ScheduleState
 	// dismissals holds the dismissals by their identifier.
 	dismissals map[string]agenthub.Dismissal
+	// registrations holds the registered places by their probed directory.
+	registrations map[string]agenthub.PlaceRegistration
+	// directories holds what the inspector answers for a directory an operator
+	// names. A directory that is not in it does not exist as far as the fake is
+	// concerned, which is how a test drives the refusals.
+	directories map[string]agenthub.RecordedPlace
+	// notRepositories holds directories that exist but that no repository holds.
+	notRepositories map[string]bool
 	// err, when set, fails every operation, standing in for an unreachable
 	// dependency.
 	err error
@@ -53,6 +61,8 @@ var (
 	_ agenthub.PlanSource       = (*Source)(nil)
 	_ agenthub.ScheduleSource   = (*Source)(nil)
 	_ agenthub.DismissalStore   = (*Source)(nil)
+	_ agenthub.PlaceStore       = (*Source)(nil)
+	_ agenthub.PlaceInspector   = (*Source)(nil)
 )
 
 // New returns an empty source.
@@ -61,6 +71,9 @@ func New() *Source {
 		executionStates: map[string]agenthub.Execution{},
 		plans:           map[string]agenthub.Plan{},
 		dismissals:      map[string]agenthub.Dismissal{},
+		registrations:   map[string]agenthub.PlaceRegistration{},
+		directories:     map[string]agenthub.RecordedPlace{},
+		notRepositories: map[string]bool{},
 	}
 }
 
@@ -81,6 +94,8 @@ func (s *Source) Dependencies(now time.Time) agenthub.Dependencies {
 		Plans:       s,
 		Schedules:   s,
 		Dismissals:  s,
+		Places:      s,
+		Inspector:   s,
 		Now:         func() time.Time { return now },
 	}
 }
@@ -571,4 +586,67 @@ func Run(id, label string, outcome agenthub.ExecutionOutcome, startedAt time.Tim
 		Label:      label,
 		StartedAt:  startedAt,
 	}
+}
+
+// WithDirectory makes directory answerable by the inspector, with the facts the
+// probe would establish for it. A directory nothing was said about does not exist.
+func (s *Source) WithDirectory(directory string, facts agenthub.RecordedPlace) *Source {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.directories[directory] = facts
+	return s
+}
+
+// WithUnversionedDirectory makes directory exist with no repository holding it.
+func (s *Source) WithUnversionedDirectory(directory string) *Source {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notRepositories[directory] = true
+	return s
+}
+
+// Inspect implements agenthub.PlaceInspector over what the test said is there.
+func (s *Source) Inspect(_ context.Context, directory string) (agenthub.RecordedPlace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return agenthub.RecordedPlace{}, s.err
+	}
+	if facts, ok := s.directories[directory]; ok {
+		return facts, nil
+	}
+	if s.notRepositories[directory] {
+		return agenthub.RecordedPlace{}, fmt.Errorf("%w: %s", agenthub.ErrNotARepository, directory)
+	}
+	return agenthub.RecordedPlace{}, fmt.Errorf("%w: %s", agenthub.ErrNoSuchDirectory, directory)
+}
+
+// Registrations implements agenthub.PlaceStore.
+func (s *Source) Registrations(context.Context) ([]agenthub.PlaceRegistration, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return nil, s.err
+	}
+	out := make([]agenthub.PlaceRegistration, 0, len(s.registrations))
+	for _, registration := range s.registrations {
+		out = append(out, registration)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Place.Directory < out[j].Place.Directory })
+	return out, nil
+}
+
+// Register implements agenthub.PlaceStore, idempotently on the probed directory
+// exactly as the durable adapter must: a repeat keeps the original registration.
+func (s *Source) Register(_ context.Context, registration agenthub.PlaceRegistration) (agenthub.PlaceRegistration, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return agenthub.PlaceRegistration{}, s.err
+	}
+	if existing, ok := s.registrations[registration.Place.Directory]; ok {
+		return existing, nil
+	}
+	s.registrations[registration.Place.Directory] = registration
+	return registration, nil
 }

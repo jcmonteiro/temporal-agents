@@ -26,7 +26,7 @@ func TestMain(m *testing.M) { os.Exit(pgtest.Run(m)) }
 
 // newTestStore gives the calling test a database of its own on the shared container,
 // with the schema applied, and closes it afterwards.
-func newTestStore(t *testing.T) *Dismissals {
+func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	store := openTestStore(t, pgtest.NewDatabase(t))
 	require.NoError(t, store.Migrate(context.Background()))
@@ -35,7 +35,7 @@ func newTestStore(t *testing.T) *Dismissals {
 
 // openTestStore connects a store to an existing test database, which is how a test
 // stands in for a second server against the same schema.
-func openTestStore(t *testing.T, dsn string) *Dismissals {
+func openTestStore(t *testing.T, dsn string) *Store {
 	t.Helper()
 	store, err := Open(context.Background(), dsn)
 	require.NoError(t, err)

@@ -19,8 +19,10 @@ import (
 
 	"temporal-agents/internal/agenthub"
 	"temporal-agents/internal/agenthub/hubpg"
+	"temporal-agents/internal/agenthub/hubplace"
 	"temporal-agents/internal/agenthub/hubrecords"
 	"temporal-agents/internal/agenthub/hubtemporal"
+	"temporal-agents/internal/gitcli"
 	"temporal-agents/internal/httpapi"
 	"temporal-agents/internal/scoped/scopedpg"
 	"temporal-agents/internal/setting"
@@ -29,7 +31,7 @@ import (
 // The serve command is the composition root for the Agent Hub API. The core and
 // every adapter stay unaware of each other until here: the orchestration client is
 // put behind the live ports, the execution store behind the record and plan ports,
-// Postgres behind the dismissal port, and the application service behind the HTTP
+// Postgres behind the dismissal and place ports, and the application service behind the HTTP
 // driving port. That is the only dependency direction a hexagonal application
 // permits — adapters point inward, never the core outward.
 
@@ -156,7 +158,7 @@ OPTIONS
 ENVIRONMENT
   TEMPORAL_ADDRESS  Temporal server address (default localhost:17233)
   DATABASE_URL          Postgres connection string for execution records, plans,
-                        durable dismissals, and sessions (required)
+                        the hub's own state, and sessions (required)
   AGENT_HUB_AUTH_TOKEN  Bearer token of at least 32 characters (required outside
                         loopback). Generate one with: openssl rand -base64 32
   AGENT_HUB_OIDC_ISSUER Identity provider's issuer URL. Setting it turns signing in
@@ -350,16 +352,17 @@ func runAPIServer(options serveOptions) error {
 	}
 	defer recordStore.Close()
 
-	// Dismissals are the one durable write this process owns.
+	// What the operator hid, and where the operator allows the hub to work, are the
+	// durable writes this process owns.
 	dsn, err := databaseURL()
 	if err != nil {
 		return err
 	}
-	dismissals, err := hubpg.Open(ctx, dsn)
+	hubStore, err := hubpg.Open(ctx, dsn)
 	if err != nil {
-		return fmt.Errorf("could not reach the dismissal store: %w", err)
+		return fmt.Errorf("could not reach the hub store: %w", err)
 	}
-	defer dismissals.Close()
+	defer hubStore.Close()
 
 	// What the tool is configured to do is read from the same database, through the
 	// catalogue that owns the rules: the API answers the effective value and the scope
@@ -402,7 +405,12 @@ func runAPIServer(options serveOptions) error {
 		Collections: records,
 		Plans:       records,
 		Schedules:   schedules,
-		Dismissals:  dismissals,
+		Dismissals:  hubStore,
+		Places:      hubStore,
+		// A place an operator names is checked against this machine, through the same
+		// probe the workflows record their place with: the API server runs beside the
+		// worker, so what it can see is what the work will run in.
+		Inspector: hubplace.Inspector{Prober: gitcli.New()},
 	})
 	if err != nil {
 		return err
@@ -442,9 +450,9 @@ func runAPIServer(options serveOptions) error {
 				},
 			},
 			{
-				Name: "dismissal-store",
+				Name: "hub-store",
 				Check: func(ctx context.Context) error {
-					_, err := dismissals.Dismissals(ctx)
+					_, err := hubStore.Dismissals(ctx)
 					return err
 				},
 			},

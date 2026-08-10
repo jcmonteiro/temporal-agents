@@ -40,6 +40,8 @@ func TestNewServiceRequiresEveryPort(t *testing.T) {
 		"plans":       func(d *agenthub.Dependencies) { d.Plans = nil },
 		"schedules":   func(d *agenthub.Dependencies) { d.Schedules = nil },
 		"dismissals":  func(d *agenthub.Dependencies) { d.Dismissals = nil },
+		"places":      func(d *agenthub.Dependencies) { d.Places = nil },
+		"inspector":   func(d *agenthub.Dependencies) { d.Inspector = nil },
 	}
 	for name, remove := range cases {
 		t.Run("without the "+name+" port", func(t *testing.T) {

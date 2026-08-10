@@ -129,7 +129,7 @@ func TestTwoServersShareOneSchema(t *testing.T) {
 
 // dismiss records one dismissal and fails the test when the adapter cannot return
 // the stored resource.
-func dismiss(t *testing.T, store *Dismissals, ctx context.Context, d agenthub.Dismissal) agenthub.Dismissal {
+func dismiss(t *testing.T, store *Store, ctx context.Context, d agenthub.Dismissal) agenthub.Dismissal {
 	t.Helper()
 	stored, err := store.Dismiss(ctx, d)
 	require.NoError(t, err)

@@ -75,6 +75,11 @@ type Dependencies struct {
 	Schedules ScheduleSource
 	// Dismissals is the operator's view state.
 	Dismissals DismissalStore
+	// Places is the registry of places an operator asked the hub to know about.
+	Places PlaceStore
+	// Inspector answers what a directory an operator names actually is, so a
+	// registration is checked against the machine rather than believed.
+	Inspector PlaceInspector
 	// Now supplies the current time, and defaults to time.Now. It is injectable so
 	// a test can assert on a written timestamp.
 	Now func() time.Time
@@ -103,6 +108,10 @@ func NewService(deps Dependencies) (*Service, error) {
 		return nil, errors.New("the schedule source is required")
 	case deps.Dismissals == nil:
 		return nil, errors.New("the dismissal store is required")
+	case deps.Places == nil:
+		return nil, errors.New("the place store is required")
+	case deps.Inspector == nil:
+		return nil, errors.New("the place inspector is required")
 	}
 	if deps.Now == nil {
 		deps.Now = time.Now

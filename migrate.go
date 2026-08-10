@@ -71,8 +71,9 @@ var executionStoreSchema = schemaContext{
 	},
 }
 
-// agentHubSchema is the schema behind the Agent Hub's dismissals, the one durable
-// write the read API owns.
+// agentHubSchema is the schema behind the Agent Hub's own state: what the operator
+// hid from the overview, and where the operator allows the hub to work. They are the
+// durable writes the read API owns.
 var agentHubSchema = schemaContext{
 	name: "agent-hub",
 	open: func(ctx context.Context, dsn string) (contextSchema, error) {
@@ -111,8 +112,8 @@ func allSchemaContexts() []schemaContext {
 }
 
 // workerSchemaContexts are the schemas the worker writes through. It never touches
-// the hub's dismissals, so it must not be stopped by their version: a context a
-// process does not use is not that process's dependency.
+// the hub's own state, so it must not be stopped by its version: a context a process
+// does not use is not that process's dependency.
 func workerSchemaContexts() []schemaContext {
 	return []schemaContext{executionStoreSchema, scopedConfigSchema}
 }
