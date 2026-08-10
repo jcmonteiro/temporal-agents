@@ -69,7 +69,12 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
     (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false);
   const [playing, setPlaying] = useState(!prefersReducedMotion);
 
-  // Drag state kept in a ref so pointer moves don't re-render until we setView.
+  // Whether a pan is in progress. This drives the cursor, so it is state: the
+  // ref below alone would leave the cursor stuck on "grabbing" after pointer-up,
+  // because releasing it schedules no render.
+  const [dragging, setDragging] = useState(false);
+
+  // Drag geometry kept in a ref so pointer moves don't re-render until we setView.
   const drag = useRef<{
     pointerId: number;
     startX: number;
@@ -171,6 +176,7 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
       // A genuine drag has started: now capture the pointer so panning keeps
       // tracking even if the cursor leaves the canvas.
       d.moved = true;
+      setDragging(true);
       hostRef.current?.setPointerCapture(e.pointerId);
     }
     if (!d.moved) return;
@@ -190,6 +196,7 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
       }
     }
     drag.current = null;
+    setDragging(false);
   }, []);
 
   // A click on empty canvas clears the selection. Clicks that land on a
@@ -208,7 +215,6 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
     [clearSelection],
   );
 
-  const isDragging = drag.current?.moved ?? false;
   const percent = Math.round(view.k * 100);
 
   return (
@@ -226,7 +232,7 @@ export function Orbit({ items, selected, onSelect, onClear }: Props): ReactNode 
         height: "100%",
         overflow: "hidden",
         touchAction: "none",
-        cursor: isDragging ? "grabbing" : "grab",
+        cursor: dragging ? "grabbing" : "grab",
         background:
           "radial-gradient(1200px 700px at 50% 50%, var(--canvas-glow) 0%, var(--color-bg) 70%)",
       }}
