@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { loadOverview } from "../../clients/work-items";
+import { loadOverview, type OverviewData } from "../../clients/work-items";
 import {
   STATUS_ORDER,
   type WorkItem,
@@ -18,13 +18,20 @@ function countByStatus(items: WorkItem[]): StatusCounts {
   return counts;
 }
 
-type State =
-  | { kind: "loading" }
-  | { kind: "error"; message: string }
-  | { kind: "ready"; items: WorkItem[]; upNext: WorkItem[] };
+// The overview is live data: poll the API on this cadence so running work and
+// schedules stay current without a page reload.
+const REFRESH_INTERVAL_MS = 5_000;
+
+// `data` holds the last successful snapshot; `error` the last failure. Both can
+// be set at once, so a failed refresh reports the problem without discarding
+// the constellation the operator is looking at.
+interface State {
+  data: OverviewData | null;
+  error: string | null;
+}
 
 export function OverviewPage(): ReactNode {
-  const [state, setState] = useState<State>({ kind: "loading" });
+  const [state, setState] = useState<State>({ data: null, error: null });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Statuses currently shown. Empty set means "show all" — the natural
   // starting point, and what clearing the filter returns to.
@@ -34,22 +41,26 @@ export function OverviewPage(): ReactNode {
 
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
+    const refresh = async (): Promise<void> => {
       const result = await loadOverview();
       if (cancelled) return;
-      if (result.ok) {
-        setState({ kind: "ready", items: result.value.items, upNext: result.value.upNext });
-      } else {
-        setState({ kind: "error", message: result.error.message });
-      }
-    })();
+      setState((prev) =>
+        result.ok
+          ? { data: result.value, error: null }
+          : { data: prev.data, error: result.error.message },
+      );
+    };
+    void refresh();
+    const timer = setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
+    // Stop polling and ignore an in-flight response once unmounted.
     return () => {
       cancelled = true;
+      clearInterval(timer);
     };
   }, []);
 
-  const items = state.kind === "ready" ? state.items : [];
-  const upNext = state.kind === "ready" ? state.upNext : [];
+  const items = state.data?.items ?? [];
+  const upNext = state.data?.upNext ?? [];
 
   const counts = useMemo(() => countByStatus(items), [items]);
   const filtered = useMemo(
@@ -111,7 +122,7 @@ export function OverviewPage(): ReactNode {
             onSelect={(it) => setSelectedId(it.id)}
             onClear={() => setSelectedId(null)}
           />
-          {state.kind !== "ready" && <StatusOverlay state={state} />}
+          <StatusOverlay state={state} />
         </div>
       </main>
       <RightRail
@@ -126,11 +137,14 @@ export function OverviewPage(): ReactNode {
   );
 }
 
-function StatusOverlay({ state }: { state: Exclude<State, { kind: "ready" }> }): ReactNode {
-  const message =
-    state.kind === "loading"
-      ? "Loading orbit…"
-      : `Could not reach the Agent Hub API: ${state.message}`;
+// Shows the first load and any refresh failure. Nothing is rendered once data
+// is present and the latest refresh succeeded.
+function StatusOverlay({ state }: { state: State }): ReactNode {
+  const isError = state.error !== null;
+  if (!isError && state.data !== null) return null;
+  const message = isError
+    ? `Could not reach the Agent Hub API: ${state.error}`
+    : "Loading orbit…";
   return (
     <div
       role="status"
@@ -140,7 +154,7 @@ function StatusOverlay({ state }: { state: Exclude<State, { kind: "ready" }> }):
         display: "grid",
         placeItems: "center",
         pointerEvents: "none",
-        color: state.kind === "error" ? "var(--status-failed)" : "var(--color-text-muted)",
+        color: isError ? "var(--status-failed)" : "var(--color-text-muted)",
         fontSize: "var(--font-size-sm)",
       }}
     >
