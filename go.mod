@@ -3,6 +3,7 @@ module temporal-agents
 go 1.25.4
 
 require (
+	github.com/coreos/go-oidc/v3 v3.16.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/stretchr/testify v1.11.1
@@ -11,6 +12,7 @@ require (
 	go.temporal.io/api v1.63.3
 	go.temporal.io/sdk v1.46.0
 	go.temporal.io/sdk/contrib/sysinfo v0.1.1
+	golang.org/x/oauth2 v0.36.0
 	golang.org/x/time v0.11.0
 	google.golang.org/grpc v1.79.3
 	google.golang.org/protobuf v1.36.11
@@ -37,6 +39,7 @@ require (
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/facebookgo/clock v0.0.0-20150410010913-600d898af40a // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.3 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect

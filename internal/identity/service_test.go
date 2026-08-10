@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"temporal-agents/internal/identity"
+	"temporal-agents/internal/identity/identitytest"
 )
 
 // The core's rules are tested with no network and no database, because none of them
@@ -72,132 +72,6 @@ func (p *fakeProvider) Issuer() string { return p.issuer }
 
 func (p *fakeProvider) SignOutURL(context.Context, string) string { return "" }
 
-// fakeStore is an in-memory stand-in for the whole identity store, with the two
-// properties the rules depend on: taking a pending sign-in consumes it, and a
-// session is found by the digest of the browser's token.
-type fakeStore struct {
-	mu         sync.Mutex
-	sessions   map[string]identity.Session
-	pending    map[string]identity.PendingSignIn
-	principals map[string]identity.Principal
-	// failWith, when set, is what every read reports: a store that cannot be
-	// reached, which must never be mistaken for a refused credential.
-	failWith error
-}
-
-func newFakeStore() *fakeStore {
-	return &fakeStore{
-		sessions:   map[string]identity.Session{},
-		pending:    map[string]identity.PendingSignIn{},
-		principals: map[string]identity.Principal{},
-	}
-}
-
-func key(hash []byte) string { return string(hash) }
-
-func (s *fakeStore) CreateSession(_ context.Context, session identity.Session) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.sessions[key(session.TokenHash)] = session
-	return nil
-}
-
-func (s *fakeStore) Session(_ context.Context, hash []byte) (identity.Session, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.failWith != nil {
-		return identity.Session{}, s.failWith
-	}
-	session, ok := s.sessions[key(hash)]
-	if !ok {
-		return identity.Session{}, identity.ErrNoSession
-	}
-	return session, nil
-}
-
-func (s *fakeStore) UpdateSessionTokens(_ context.Context, hash []byte, tokens identity.Tokens) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	session, ok := s.sessions[key(hash)]
-	if !ok {
-		return identity.ErrNoSession
-	}
-	session.Tokens = tokens
-	s.sessions[key(hash)] = session
-	return nil
-}
-
-func (s *fakeStore) EndSession(_ context.Context, hash []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.sessions[key(hash)]; !ok {
-		return identity.ErrNoSession
-	}
-	delete(s.sessions, key(hash))
-	return nil
-}
-
-func (s *fakeStore) DeleteExpiredSessions(_ context.Context, before time.Time) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	removed := 0
-	for hash, session := range s.sessions {
-		if session.Expired(before) {
-			delete(s.sessions, hash)
-			removed++
-		}
-	}
-	return removed, nil
-}
-
-func (s *fakeStore) StartSignIn(_ context.Context, pending identity.PendingSignIn) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pending[key(pending.TokenHash)] = pending
-	return nil
-}
-
-func (s *fakeStore) TakePendingSignIn(_ context.Context, hash []byte) (identity.PendingSignIn, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	pending, ok := s.pending[key(hash)]
-	if !ok {
-		return identity.PendingSignIn{}, identity.ErrNoPendingSignIn
-	}
-	delete(s.pending, key(hash))
-	return pending, nil
-}
-
-func (s *fakeStore) DeleteExpiredSignIns(_ context.Context, before time.Time) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	removed := 0
-	for hash, pending := range s.pending {
-		if pending.Expired(before) {
-			delete(s.pending, hash)
-			removed++
-		}
-	}
-	return removed, nil
-}
-
-func (s *fakeStore) UpsertPrincipal(_ context.Context, principal identity.Principal) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.principals[principal.ID()] = principal
-	return nil
-}
-
-func (s *fakeStore) Principal(_ context.Context, issuer, subject string) (identity.Principal, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	principal, ok := s.principals[identity.Principal{Issuer: issuer, Subject: subject}.ID()]
-	if !ok {
-		return identity.Principal{}, identity.ErrNoPrincipal
-	}
-	return principal, nil
-}
-
 // signedIn is the principal the fake provider vouches for throughout.
 var signedIn = identity.Principal{
 	Issuer:  "https://issuer.test",
@@ -213,7 +87,7 @@ func (c *testClock) now() time.Time { return c.at }
 
 // newService wires the core over the fakes, with a counting token generator so a
 // test can name the secrets a sign-in minted.
-func newService(t *testing.T, store *fakeStore, provider *fakeProvider, clock *testClock, mutate ...func(*identity.Dependencies)) *identity.Service {
+func newService(t *testing.T, store *identitytest.Store, provider *fakeProvider, clock *testClock, mutate ...func(*identity.Dependencies)) *identity.Service {
 	t.Helper()
 	minted := 0
 	dependencies := identity.Dependencies{
@@ -238,7 +112,7 @@ func newService(t *testing.T, store *fakeStore, provider *fakeProvider, clock *t
 
 // newFixture wires the usual arrangement: a provider that vouches for signedIn and
 // a store that holds nothing yet.
-func newFixture(t *testing.T, mutate ...func(*identity.Dependencies)) (*identity.Service, *fakeStore, *fakeProvider, *testClock) {
+func newFixture(t *testing.T, mutate ...func(*identity.Dependencies)) (*identity.Service, *identitytest.Store, *fakeProvider, *testClock) {
 	t.Helper()
 	clock := &testClock{at: time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)}
 	provider := &fakeProvider{
@@ -253,7 +127,7 @@ func newFixture(t *testing.T, mutate ...func(*identity.Dependencies)) (*identity
 		},
 		refreshed: identity.Tokens{Access: "access-2", Refresh: "refresh-2"},
 	}
-	store := newFakeStore()
+	store := identitytest.NewStore()
 	return newService(t, store, provider, clock, mutate...), store, provider, clock
 }
 
@@ -384,7 +258,7 @@ func TestAProviderThatRefusesTheExchangeSignsNobodyIn(t *testing.T) {
 			RequestToken: signIn.RequestToken, State: stateOf(t, signIn), Code: "code",
 		})
 		require.ErrorIs(t, err, identity.ErrSignInFailed)
-		require.Empty(t, store.sessions)
+		require.Zero(t, store.Sessions())
 	})
 
 	t.Run("the provider sends an error instead of a code", func(t *testing.T) {
@@ -397,7 +271,7 @@ func TestAProviderThatRefusesTheExchangeSignsNobodyIn(t *testing.T) {
 		})
 		require.ErrorIs(t, err, identity.ErrSignInFailed)
 		require.Zero(t, provider.exchanges)
-		require.Empty(t, store.sessions)
+		require.Zero(t, store.Sessions())
 	})
 
 	t.Run("the provider discloses no stable subject", func(t *testing.T) {
@@ -410,7 +284,7 @@ func TestAProviderThatRefusesTheExchangeSignsNobodyIn(t *testing.T) {
 			RequestToken: signIn.RequestToken, State: stateOf(t, signIn), Code: "code",
 		})
 		require.ErrorIs(t, err, identity.ErrSignInFailed)
-		require.Empty(t, store.sessions)
+		require.Zero(t, store.Sessions())
 	})
 }
 
@@ -441,7 +315,7 @@ func TestAnExpiredSessionStopsWorkingAndIsForgotten(t *testing.T) {
 
 	_, err := service.Authenticate(ctx, identity.Credential{SessionToken: grant.SessionToken})
 	require.ErrorIs(t, err, identity.ErrUnauthenticated)
-	require.Empty(t, store.sessions, "an expired session is ended rather than merely refused")
+	require.Zero(t, store.Sessions(), "an expired session is ended rather than merely refused")
 }
 
 // TestALongSessionSurvivesTheProvidersTokenExpiring is what a long-lived stream
@@ -476,7 +350,7 @@ func TestASessionTheProviderWillNotRenewEnds(t *testing.T) {
 
 	_, err := service.Authenticate(ctx, identity.Credential{SessionToken: grant.SessionToken})
 	require.ErrorIs(t, err, identity.ErrUnauthenticated)
-	require.Empty(t, store.sessions)
+	require.Zero(t, store.Sessions())
 }
 
 // TestAnUnreachableProviderDoesNotSignTheOperatorOut separates a transient failure
@@ -493,7 +367,7 @@ func TestAnUnreachableProviderDoesNotSignTheOperatorOut(t *testing.T) {
 	_, err := service.Authenticate(ctx, identity.Credential{SessionToken: grant.SessionToken})
 	require.ErrorIs(t, err, identity.ErrProviderUnavailable)
 	require.NotErrorIs(t, err, identity.ErrUnauthenticated)
-	require.Len(t, store.sessions, 1)
+	require.Equal(t, 1, store.Sessions())
 }
 
 // TestAnUnknownOrMissingSessionIsRefused pins that a forged or stale cookie is
@@ -519,7 +393,7 @@ func TestAStoreThatCannotBeReachedIsNotARefusedCredential(t *testing.T) {
 	service, store, _, _ := newFixture(t)
 	ctx := context.Background()
 	grant := completeSignIn(t, service)
-	store.failWith = errors.New("the session store is unreachable")
+	store.FailWith = errors.New("the session store is unreachable")
 
 	_, err := service.Authenticate(ctx, identity.Credential{SessionToken: grant.SessionToken})
 	require.Error(t, err)
@@ -576,7 +450,7 @@ func TestPurgingRemovesOnlyWhatHasAgedOut(t *testing.T) {
 // TestBuildingTheCoreWithoutItsPortsIsRefused pins that a half-wired hub does not
 // start: it would answer requests it cannot authenticate.
 func TestBuildingTheCoreWithoutItsPortsIsRefused(t *testing.T) {
-	store := newFakeStore()
+	store := identitytest.NewStore()
 	complete := identity.Dependencies{
 		Provider:       &fakeProvider{issuer: "https://issuer.test"},
 		Sessions:       store,
