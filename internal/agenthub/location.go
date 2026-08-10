@@ -277,6 +277,60 @@ func (l Location) ancestry() string {
 	return chain.String()
 }
 
+// RecordedPlace is what the system recorded about where one unit of work ran. It is
+// the raw fact, not the place: the core turns it into a Location (see Location), so
+// no adapter decides what a recorded directory means and no consumer re-derives it.
+//
+// It carries only what the honesty rules allow to be recorded — the working tree the
+// work ran in, the repository that working tree belongs to when the probe found the
+// two to differ, and a ref for work that has no local directory at all. A place that
+// was never recorded is the zero value, which is the unknown place.
+type RecordedPlace struct {
+	// Directory is the absolute path of the working tree the work ran in.
+	Directory string
+	// Repository is the absolute path of the repository that working tree belongs
+	// to. It is set only when the probe established that the two differ — a linked
+	// worktree — because that is the one parent edge the system has a fact for.
+	// Filesystem path containment never fills it in: git puts a worktree outside its
+	// repository by default, so prefix logic would invent wrong parents.
+	Repository string
+	// Ref identifies work that has no local directory (a loop acting on a pull
+	// request nobody checked out). It is read only when Directory is empty: a ref of
+	// work that *does* run in a directory is an attribute of that work, not a place.
+	Ref string
+}
+
+// Recorded reports whether anything at all was recorded about the place. A probe that
+// failed, or one that never ran, recorded nothing.
+func (p RecordedPlace) Recorded() bool { return p.Directory != "" || p.Ref != "" }
+
+// Location derives the place from the recorded facts.
+//
+// Nothing recorded is the unknown place, and that is not an error: a probe is allowed
+// to fail, and work whose place could not be established is shown as unknown rather
+// than guessed at. A fact that *was* recorded but cannot be expressed as a place is
+// the opposite case — the probe wrote something no location can hold — so it is
+// reported as the defect it is (see ErrInvalidLocation), never quietly downgraded to
+// unknown.
+func (p RecordedPlace) Location() (Location, error) {
+	if p.Directory == "" {
+		if p.Ref == "" {
+			return UnknownLocation(), nil
+		}
+		return NewRemoteLocation(p.Ref, nil)
+	}
+	if p.Repository == "" || p.Repository == p.Directory {
+		// The work ran in the repository itself. One place, no parent: an edge here
+		// would have to come from comparing paths, which is exactly what is forbidden.
+		return NewDirectoryLocation(p.Directory, nil)
+	}
+	repository, err := NewDirectoryLocation(p.Repository, nil)
+	if err != nil {
+		return Location{}, err
+	}
+	return NewDirectoryLocation(p.Directory, &repository)
+}
+
 // LocationRegistry is the flat set of places one response refers to: every referenced
 // location plus all of its ancestors, each exactly once, ordered so a parent always
 // precedes its children.
