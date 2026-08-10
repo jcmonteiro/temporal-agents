@@ -11,6 +11,7 @@ import (
 
 	"temporal-agents/internal/agenthub/hubpg"
 	"temporal-agents/internal/execstore/execpg"
+	"temporal-agents/internal/identity/identitypg"
 	"temporal-agents/internal/schema"
 )
 
@@ -78,11 +79,21 @@ var agentHubSchema = schemaContext{
 	},
 }
 
+// identitySchema is the schema behind who has signed in: the principals, their
+// sessions, and the sign-ins in flight. It is the API server's alone — the worker
+// authenticates nobody — which is why it is not in the worker's list below.
+var identitySchema = schemaContext{
+	name: "identity",
+	open: func(ctx context.Context, dsn string) (contextSchema, error) {
+		return identitypg.Open(ctx, dsn)
+	},
+}
+
 // allSchemaContexts lists every context whose schema lives in this database, in the
 // order `migrate` reports them. Adding a context means adding it here and nowhere
 // else.
 func allSchemaContexts() []schemaContext {
-	return []schemaContext{executionStoreSchema, agentHubSchema}
+	return []schemaContext{executionStoreSchema, agentHubSchema, identitySchema}
 }
 
 // workerSchemaContexts are the schemas the worker writes through. It never touches
@@ -94,7 +105,7 @@ func workerSchemaContexts() []schemaContext {
 
 // serveSchemaContexts are the schemas the API server reads and writes through.
 func serveSchemaContexts() []schemaContext {
-	return []schemaContext{executionStoreSchema, agentHubSchema}
+	return []schemaContext{executionStoreSchema, agentHubSchema, identitySchema}
 }
 
 // migrateHelp writes the command's usage.
