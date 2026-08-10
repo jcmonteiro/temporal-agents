@@ -105,6 +105,20 @@ type PlaceView interface {
 	RegisterPlace(ctx context.Context, directory, by string) (agenthub.RegisteredPlace, error)
 }
 
+// WorkStarter is the surface that starts agent work.
+//
+// It is a driving port entirely of its own, and deliberately not a method on the
+// work view: everything the view offers reads what happened, while this runs an
+// agent on the operator's machine. A deployment that publishes no starter serves no
+// way to start work, and the read surface then remains read-only by construction.
+//
+// *agenthub.Service implements it.
+type WorkStarter interface {
+	// StartWork starts one unit of agent work in a place the hub knows, exactly once
+	// per request identity.
+	StartWork(ctx context.Context, request agenthub.StartRequest) (agenthub.StartedWork, error)
+}
+
 // SettingsView is the read the configuration surface answers from: what every
 // governed setting is, and where each answer came from.
 //
@@ -176,6 +190,9 @@ type Options struct {
 	// path, for local convenience. The API itself never depends on it: the same bundle
 	// can be served by anything else without the API changing.
 	WebDir string
+	// Start is the surface that starts agent work. It is nil for a deployment that
+	// only watches, which then offers no way to start anything.
+	Start WorkStarter
 	// Places is the registry of where the hub may work, and the write that adds to
 	// it. It is nil for a deployment that publishes no registry, which then serves no
 	// places resource.
@@ -212,6 +229,7 @@ type Server struct {
 	signIn          SignIn
 	secureCookies   bool
 	webDir          string
+	start           WorkStarter
 	places          PlaceView
 	settings        SettingsView
 	healthChecks    []HealthCheck
@@ -249,6 +267,7 @@ func New(view WorkView, options Options) (*Server, error) {
 		signIn:          options.SignIn,
 		secureCookies:   options.SecureCookies,
 		webDir:          options.WebDir,
+		start:           options.Start,
 		places:          options.Places,
 		settings:        options.Settings,
 		healthChecks:    options.HealthChecks,
@@ -335,7 +354,7 @@ func (s *Server) resources() []resource {
 		{pattern: s.basePath + "/active-work", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleActiveWork}},
 		{pattern: s.basePath + "/fleets", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleFleets}},
 		{pattern: s.basePath + "/fleets/{id}", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleFleet}},
-		{pattern: s.basePath + "/runs", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleRuns}},
+		{pattern: s.basePath + "/runs", methods: s.runCollectionMethods()},
 		{pattern: s.basePath + "/runs/{id}", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleRun}},
 		{pattern: s.basePath + "/schedules", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleSchedules}},
 		{pattern: s.basePath + "/dismissals", methods: map[string]http.HandlerFunc{
@@ -367,6 +386,16 @@ func (s *Server) resources() []resource {
 		})
 	}
 	return append(list, s.authRoutes()...)
+}
+
+// runCollectionMethods are the methods the run collection offers: reading the runs
+// always, and starting one where the deployment configures a starter.
+func (s *Server) runCollectionMethods() map[string]http.HandlerFunc {
+	methods := map[string]http.HandlerFunc{http.MethodGet: s.handleRuns}
+	if s.start != nil {
+		methods[http.MethodPost] = s.handleStartWork
+	}
+	return methods
 }
 
 // buildHandler wires the routing table and the middleware chain. The order is
@@ -513,6 +542,36 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	s.writeJSON(w, r, http.StatusOK, modelRunCollection,
 		newLocatedCollection(items, limit, agenthub.NewLocationRegistry(locations...)))
+}
+
+// handleStartWork starts agent work and answers with the run it started.
+//
+// It answers 201 for a repeated request too, with the same resource: the request
+// identity names the work, so a retry addresses the run it already created rather
+// than a second one, and reporting a conflict where the caller got exactly what it
+// asked for would be a refusal of nothing.
+func (s *Server) handleStartWork(w http.ResponseWriter, r *http.Request) {
+	var request startWorkRequest
+	if !s.decodeJSONBody(w, r, &request) {
+		return
+	}
+	by := ""
+	if principal, ok := PrincipalFrom(r.Context()); ok {
+		by = principal.ID()
+	}
+	started, err := s.start.StartWork(r.Context(), agenthub.StartRequest{
+		RequestID: request.RequestID,
+		Kind:      request.Kind,
+		PlaceID:   request.PlaceID,
+		Prompt:    request.Prompt,
+		StartedBy: by,
+	})
+	if err != nil {
+		s.writeServiceProblem(w, r, err)
+		return
+	}
+	w.Header().Set("Location", s.basePath+"/runs/"+started.RunID)
+	s.writeJSON(w, r, http.StatusCreated, modelStartedWork, startedWorkFrom(started))
 }
 
 // handleRun answers one run chain.
@@ -716,6 +775,10 @@ func (s *Server) writeServiceProblem(w http.ResponseWriter, r *http.Request, err
 	case errors.Is(err, agenthub.ErrNotDismissible):
 		s.writeProblem(w, r, codeNotDismissible,
 			"only an item that has finished can be dismissed")
+	case errors.Is(err, agenthub.ErrPlaceIsBusy):
+		// The request is fine and will succeed once the work in that place settles, so
+		// the detail names what it collided with.
+		s.writeProblem(w, r, codePlaceIsBusy, err.Error())
 	case errors.Is(err, agenthub.ErrNoSuchDirectory), errors.Is(err, agenthub.ErrNotARepository):
 		// The request is well formed; the machine it names does not hold what it says.
 		// The detail names the mistake, because "no such directory" and "no repository

@@ -143,6 +143,7 @@ move to it deliberately.
 | `GET /api/v1/fleets` | Running fleets and non-dismissed terminal fleets |
 | `GET /api/v1/fleets/{id}` | One fleet and its plan node graph |
 | `GET /api/v1/runs` | Running standalone chains and non-dismissed terminal chains |
+| `POST /api/v1/runs` | Start a develop or review pass in a known place |
 | `GET /api/v1/runs/{id}` | One standalone chain |
 | `GET /api/v1/schedules` | One item per schedule |
 | `GET /api/v1/dismissals` | View-state dismissals in force |
@@ -325,6 +326,47 @@ The response is `201 Created`, with a `Location` header such as:
 
 The identity is derived from kind and item ID. Repeating the same POST is idempotent
 and keeps the original dismissal time. Delete the returned resource to undo it.
+
+## Starting work
+
+```http
+POST /api/v1/runs
+Content-Type: application/json
+
+{"requestId":"5f9c…","kind":"develop","placeId":"5f2b…","prompt":"make the flaky test pass"}
+```
+
+```json
+{"id":"develop-1f2e…","kind":"run","type":"develop","label":"make the flaky test pass",
+ "locationId":"5f2b…","startedAt":"2026-08-06T12:00:00Z","startedBy":"https://issuer.test|operator-1",
+ "locations":[…]}
+```
+
+Three rules are the server's, and none of them is the client's to remember:
+
+- **A request never carries a path.** It names a place, and the server resolves the
+  working tree from its own registry — the places it registered, and the places it
+  has watched work run in. There is no directory field, and an unknown field is
+  refused rather than ignored.
+- **One request identity is one run.** `requestId` is the caller's own; the same
+  identity always names the same execution, so a double click, a retried request or a
+  reload answers `201` with the run it already started. Mint a fresh identity per
+  intent, not per attempt.
+- **Work that would collide is refused** with `409` (`place-is-busy`), naming what is
+  already running there: two loops in one working tree stash and commit over each
+  other. A linked worktree is a place of its own, so work in it does not make its
+  repository busy.
+
+What may be started is `develop` (with a `prompt`) and `review` (without one). A
+fleet needs its plan approved and a schedule a recurrence, so neither is started
+here.
+
+The answer is `started-work.v1`, not a run: a start returns as soon as the
+orchestrator accepts the submission, so the resource carries the run's identity, its
+place and its provenance, and no status, iterations or token usage — those are facts
+only once the work is observable. Follow the `Location` header to `GET
+/api/v1/runs/{id}`, which answers `404` for a moment while the orchestrator catches
+up.
 
 ## Places
 

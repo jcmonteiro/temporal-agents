@@ -475,6 +475,74 @@
             "$ref": "#/components/responses/InternalError"
           }
         }
+      },
+      "post": {
+        "tags": [
+          "Runs"
+        ],
+        "summary": "Start agent work",
+        "description": "Starts one develop or review pass in a place the hub knows. The request names a place and never a path: the server resolves the working tree from its own registry, which is the allowlist of where the hub may work. The request identity makes the start repeatable \u2014 the same identity always names the same execution, so a double click, a retried request or a reload ends with one run. A start is refused when work is already running in that place, because two loops in one working tree commit over each other.",
+        "operationId": "startWork",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartWorkRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The work that was started. A repeated request identity answers with the run it already started.",
+            "headers": {
+              "Location": {
+                "description": "The run resource URL.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Link": {
+                "$ref": "#/components/headers/DescribedBy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartedWork"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "409": {
+            "$ref": "#/components/responses/PlaceIsBusy"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
+          },
+          "default": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
       }
     },
     "/api/v1/runs/{id}": {
@@ -1349,6 +1417,16 @@
       },
       "NotAPlace": {
         "description": "The directory is not one the hub can work in: nothing is there, or no repository holds it.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "PlaceIsBusy": {
+        "description": "Work is already running in the place the start names.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -2480,6 +2558,90 @@
             "minLength": 1,
             "maxLength": 4096,
             "description": "An absolute, cleaned path of a directory a repository holds, on the machine the work runs on. The place that is registered is the working tree the probe resolves it to."
+          }
+        }
+      },
+      "StartWorkRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requestId",
+          "kind",
+          "placeId"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "The caller's own identity for this request. The same identity always names the same execution, so repeating a request is not a second run."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "develop",
+              "review"
+            ],
+            "description": "What to start. A fleet needs its plan approved and a schedule a recurrence, so neither is started here."
+          },
+          "placeId": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The place to work in, as published in a location registry. There is no path field: the server resolves the directory."
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 10000,
+            "description": "What the agent is told to do. Required for a develop pass, refused for a review, which reviews what is already there."
+          }
+        }
+      },
+      "StartedWork": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "type",
+          "label",
+          "locationId",
+          "startedAt",
+          "locations"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The run's identity, which /api/v1/runs/{id} answers for once the orchestrator reports it. A start returns before that, so this resource carries what is certain and no invented status."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "run"
+            ]
+          },
+          "type": {
+            "$ref": "#/components/schemas/RunType"
+          },
+          "label": {
+            "type": "string",
+            "description": "What the agent was told to do, empty for a review."
+          },
+          "locationId": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "startedBy": {
+            "type": "string",
+            "description": "The principal who started it, absent where nobody is authenticated."
+          },
+          "locations": {
+            "$ref": "#/components/schemas/LocationRegistry"
           }
         }
       }

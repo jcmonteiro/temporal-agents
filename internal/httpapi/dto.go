@@ -560,3 +560,77 @@ func placeFrom(place agenthub.RegisteredPlace, standalone bool) placeResource {
 	}
 	return resource
 }
+
+// startedWorkResource is work that has just been started.
+//
+// It is a model of its own rather than a run: a start returns as soon as the
+// orchestrator has accepted the submission, and the run's status, iterations and
+// token usage are not facts yet. Answering with a run resource would mean inventing
+// them, and a consumer would read invented facts as observed ones.
+type startedWorkResource struct {
+	// ID is the run's identity: the workflow ID of the chain, which is what
+	// /api/v1/runs/{id} answers for once the orchestrator reports it.
+	ID string `json:"id"`
+	// Kind is always "run": what was started is a run satellite.
+	Kind agenthub.ItemKind `json:"kind"`
+	// Type says which kind of pass it is, in the run vocabulary.
+	Type agenthub.RunType `json:"type"`
+	// Label is what the agent was told to do, empty for a review.
+	Label string `json:"label"`
+	// LocationID references the place it runs in.
+	LocationID string `json:"locationId"`
+	// StartedAt is when the work was first started under this request identity, in
+	// UTC. A repeated request does not move it.
+	StartedAt *string `json:"startedAt"`
+	// StartedBy identifies the principal who started it, absent where nobody is
+	// authenticated.
+	StartedBy string `json:"startedBy,omitempty"`
+	// Locations is the registry this resource's reference resolves against. It is
+	// carried here because the resource is served on its own.
+	Locations []locationResource `json:"locations"`
+}
+
+// startWorkRequest is the body of a start.
+//
+// There is no directory field, and there is no field a future reader could mistake
+// for one: the place is named, and the server resolves where that is. The request
+// identity is the caller's own, and it is what makes a double click, a retried
+// fetch and a reload end with one run.
+type startWorkRequest struct {
+	// RequestID is the caller's identity for this request.
+	RequestID string `json:"requestId"`
+	// Kind is what to start ("develop", "review").
+	Kind agenthub.StartKind `json:"kind"`
+	// PlaceID references the place to work in.
+	PlaceID string `json:"placeId"`
+	// Prompt is what the agent is told to do. It is required for a develop pass and
+	// refused for a review.
+	Prompt string `json:"prompt,omitempty"`
+}
+
+// startedWorkFrom projects started work onto its representation.
+func startedWorkFrom(started agenthub.StartedWork) startedWorkResource {
+	return startedWorkResource{
+		ID:         started.RunID,
+		Kind:       agenthub.KindRun,
+		Type:       runTypeOf(started.Kind),
+		Label:      started.Prompt,
+		LocationID: started.Location.ID(),
+		StartedAt:  timestamp(started.StartedAt),
+		StartedBy:  started.StartedBy,
+		Locations:  locationsFrom(agenthub.NewLocationRegistry(started.Location)),
+	}
+}
+
+// runTypeOf names started work in the same vocabulary the run collection uses, so
+// the resource a start answers with and the run it becomes describe one thing.
+func runTypeOf(kind agenthub.StartKind) agenthub.RunType {
+	switch kind {
+	case agenthub.StartDevelop:
+		return agenthub.RunTypeDevelop
+	case agenthub.StartReview:
+		return agenthub.RunTypeReview
+	default:
+		return agenthub.RunTypePrompt
+	}
+}

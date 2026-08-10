@@ -396,6 +396,13 @@ func runAPIServer(options serveOptions) error {
 	if err != nil {
 		return err
 	}
+	// Starting work is the one thing this process submits rather than reads. It goes
+	// to the very queue the worker listens on, so the hub asks for the same work the
+	// command line does and the worker executes it unchanged.
+	launcher, err := hubtemporal.NewLauncher(orchestrator, TaskQueue)
+	if err != nil {
+		return err
+	}
 	records, err := hubrecords.New(recordStore, recordStore)
 	if err != nil {
 		return err
@@ -411,6 +418,8 @@ func runAPIServer(options serveOptions) error {
 		// probe the workflows record their place with: the API server runs beside the
 		// worker, so what it can see is what the work will run in.
 		Inspector: hubplace.Inspector{Prober: gitcli.New()},
+		Launcher:  launcher,
+		Launches:  hubStore,
 	})
 	if err != nil {
 		return err
@@ -427,6 +436,7 @@ func runAPIServer(options serveOptions) error {
 		SecureCookies:        options.tlsCert != "",
 		AllowUnauthenticated: openForLocalUse,
 		WebDir:               options.webDir,
+		Start:                service,
 		Places:               service,
 		Settings:             settings,
 		HealthChecks: append([]httpapi.HealthCheck{

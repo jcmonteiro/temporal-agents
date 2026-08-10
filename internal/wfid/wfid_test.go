@@ -77,3 +77,51 @@ func TestFleetNodeIDWithoutAFleet(t *testing.T) {
 		t.Fatalf(`FleetNodeID("", "-core") = (%q, true), want ok=false`, got)
 	}
 }
+
+// The identity a client request maps to. It is what makes a retried start return
+// the run it already started instead of starting a second one.
+
+func TestOneRequestIdentityAlwaysNamesTheSameExecution(t *testing.T) {
+	first, ok := ForRequest(ClassDevelop, "request-1")
+	if !ok {
+		t.Fatal("a develop request must map to an execution")
+	}
+	again, _ := ForRequest(ClassDevelop, "request-1")
+	if first != again {
+		t.Errorf("the same request mapped to %q and %q", first, again)
+	}
+	other, _ := ForRequest(ClassDevelop, "request-2")
+	if other == first {
+		t.Error("two requests mapped to one execution")
+	}
+	// The same words asking for different work are different work.
+	review, _ := ForRequest(ClassReview, "request-1")
+	if review == first {
+		t.Error("a review and a develop of one request mapped to one execution")
+	}
+}
+
+func TestAMintedIDClassifiesAsWhatItWasMintedFor(t *testing.T) {
+	for _, class := range []Class{ClassDevelop, ClassReview, ClassPilot} {
+		id, ok := ForRequest(class, "request-1")
+		if !ok {
+			t.Fatalf("%s cannot be minted", class)
+		}
+		if got := Classify(id); got != class {
+			t.Errorf("%q classifies as %s, want %s", id, got, class)
+		}
+	}
+}
+
+func TestAClassWithNoConventionIsNotMinted(t *testing.T) {
+	// A fleet is planned and approved before it runs, and a schedule is not a
+	// workflow at all. Minting an ID for either here would invent a convention.
+	for _, class := range []Class{ClassFleet, ClassSchedule, ClassRun} {
+		if _, ok := ForRequest(class, "request-1"); ok {
+			t.Errorf("%s was minted an ID, want a refusal", class)
+		}
+	}
+	if _, ok := ForRequest(ClassDevelop, ""); ok {
+		t.Error("an empty request identity was minted an ID")
+	}
+}

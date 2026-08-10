@@ -50,6 +50,8 @@ const (
 	modelDismissal            = "dismissal.v1"
 	modelDismissalCollection  = "dismissal-collection.v1"
 	modelDismissalRequest     = "dismissal-request.v1"
+	modelStartedWork          = "started-work.v1"
+	modelStartRequest         = "start-request.v1"
 	modelPlace                = "place.v1"
 	modelPlaceCollection      = "place-collection.v1"
 	modelPlaceRequest         = "place-request.v1"
@@ -75,6 +77,8 @@ var modelSchemas = map[string]string{
 	modelDismissal:            "Dismissal",
 	modelDismissalCollection:  "DismissalCollection",
 	modelDismissalRequest:     "DismissalRequest",
+	modelStartedWork:          "StartedWork",
+	modelStartRequest:         "StartWorkRequest",
 	modelPlace:                "Place",
 	modelPlaceCollection:      "PlaceCollection",
 	modelPlaceRequest:         "PlaceRegistrationRequest",
@@ -386,7 +390,7 @@ func (s *Server) handleServiceDescription(w http.ResponseWriter, r *http.Request
 		"resources": []resourceEntry{
 			{Name: "active-work", Href: s.basePath + "/active-work", Methods: []string{"GET"}, Schema: s.schemaURI(modelActiveWorkCollection)},
 			{Name: "fleets", Href: s.basePath + "/fleets", Methods: []string{"GET"}, Schema: s.schemaURI(modelFleetCollection)},
-			{Name: "runs", Href: s.basePath + "/runs", Methods: []string{"GET"}, Schema: s.schemaURI(modelRunCollection)},
+			{Name: "runs", Href: s.basePath + "/runs", Methods: []string{"GET", "POST"}, Schema: s.schemaURI(modelRunCollection)},
 			{Name: "schedules", Href: s.basePath + "/schedules", Methods: []string{"GET"}, Schema: s.schemaURI(modelScheduleCollection)},
 			{Name: "dismissals", Href: s.basePath + "/dismissals", Methods: []string{"GET", "POST"}, Schema: s.schemaURI(modelDismissalCollection)},
 			{Name: "places", Href: s.basePath + "/places", Methods: []string{"GET", "POST"}, Schema: s.schemaURI(modelPlaceCollection)},

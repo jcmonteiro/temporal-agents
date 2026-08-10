@@ -80,6 +80,10 @@ type Dependencies struct {
 	// Inspector answers what a directory an operator names actually is, so a
 	// registration is checked against the machine rather than believed.
 	Inspector PlaceInspector
+	// Launcher submits work to the orchestrator.
+	Launcher Launcher
+	// Launches remembers what was started from the hub, and by whom.
+	Launches LaunchStore
 	// Now supplies the current time, and defaults to time.Now. It is injectable so
 	// a test can assert on a written timestamp.
 	Now func() time.Time
@@ -112,6 +116,10 @@ func NewService(deps Dependencies) (*Service, error) {
 		return nil, errors.New("the place store is required")
 	case deps.Inspector == nil:
 		return nil, errors.New("the place inspector is required")
+	case deps.Launcher == nil:
+		return nil, errors.New("the launcher is required")
+	case deps.Launches == nil:
+		return nil, errors.New("the launch store is required")
 	}
 	if deps.Now == nil {
 		deps.Now = time.Now

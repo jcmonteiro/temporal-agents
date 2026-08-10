@@ -55,6 +55,7 @@ type Store struct {
 var (
 	_ agenthub.DismissalStore = (*Store)(nil)
 	_ agenthub.PlaceStore     = (*Store)(nil)
+	_ agenthub.LaunchStore    = (*Store)(nil)
 )
 
 // Open connects to the Postgres instance at dsn and verifies the connection is
@@ -220,4 +221,56 @@ func (d *Store) Register(ctx context.Context, registration agenthub.PlaceRegistr
 		return agenthub.PlaceRegistration{}, fmt.Errorf("register the place: %w", err)
 	}
 	return stored, nil
+}
+
+// launchSQL upserts on the request identity, keeping everything the first launch
+// recorded. That is what makes a repeated request one run: the second request
+// describes the launch that is already there rather than recording a second one.
+const launchSQL = `
+INSERT INTO launches (request_id, workflow_id, kind, directory, prompt, started_at, started_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (request_id)
+DO UPDATE SET request_id = launches.request_id
+RETURNING request_id, workflow_id, kind, directory, prompt, started_at, started_by`
+
+// Launch implements agenthub.LaunchStore.
+func (d *Store) Launch(ctx context.Context, launch agenthub.Launch) (agenthub.Launch, error) {
+	stored, err := scanLaunch(d.pool.QueryRow(ctx, launchSQL,
+		launch.RequestID, launch.WorkflowID, string(launch.Kind), launch.Place.Directory,
+		launch.Prompt, launch.StartedAt, launch.StartedBy))
+	if err != nil {
+		return agenthub.Launch{}, fmt.Errorf("record the start: %w", err)
+	}
+	return stored, nil
+}
+
+// launchOfSQL reads what one request started.
+const launchOfSQL = `
+SELECT request_id, workflow_id, kind, directory, prompt, started_at, started_by
+FROM launches
+WHERE request_id = $1`
+
+// LaunchOf implements agenthub.LaunchStore, reporting agenthub.ErrNotFound for a
+// request that started nothing, so the core can tell a repeat from a first attempt.
+func (d *Store) LaunchOf(ctx context.Context, requestID string) (agenthub.Launch, error) {
+	launch, err := scanLaunch(d.pool.QueryRow(ctx, launchOfSQL, requestID))
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return agenthub.Launch{}, agenthub.ErrNotFound
+	case err != nil:
+		return agenthub.Launch{}, fmt.Errorf("read what this request started: %w", err)
+	}
+	return launch, nil
+}
+
+// scanLaunch reads one launch row.
+func scanLaunch(row pgx.Row) (agenthub.Launch, error) {
+	var launch agenthub.Launch
+	var kind string
+	if err := row.Scan(&launch.RequestID, &launch.WorkflowID, &kind, &launch.Place.Directory,
+		&launch.Prompt, &launch.StartedAt, &launch.StartedBy); err != nil {
+		return agenthub.Launch{}, err
+	}
+	launch.Kind = agenthub.StartKind(kind)
+	return launch, nil
 }

@@ -48,6 +48,11 @@ type Source struct {
 	directories map[string]agenthub.RecordedPlace
 	// notRepositories holds directories that exist but that no repository holds.
 	notRepositories map[string]bool
+	// launches holds what was started from the hub, by request identity.
+	launches map[string]agenthub.Launch
+	// started holds every submitted specification, in order, so a test can assert
+	// what the orchestrator was asked to run.
+	started []agenthub.StartSpec
 	// err, when set, fails every operation, standing in for an unreachable
 	// dependency.
 	err error
@@ -63,6 +68,8 @@ var (
 	_ agenthub.DismissalStore   = (*Source)(nil)
 	_ agenthub.PlaceStore       = (*Source)(nil)
 	_ agenthub.PlaceInspector   = (*Source)(nil)
+	_ agenthub.LaunchStore      = (*Source)(nil)
+	_ agenthub.Launcher         = (*Source)(nil)
 )
 
 // New returns an empty source.
@@ -74,6 +81,7 @@ func New() *Source {
 		registrations:   map[string]agenthub.PlaceRegistration{},
 		directories:     map[string]agenthub.RecordedPlace{},
 		notRepositories: map[string]bool{},
+		launches:        map[string]agenthub.Launch{},
 	}
 }
 
@@ -81,6 +89,15 @@ func New() *Source {
 // test drives the "a dependency is unavailable" paths.
 func Failing(err error) *Source {
 	s := New()
+	s.err = err
+	return s
+}
+
+// Fail makes every later operation fail with err, standing in for a dependency
+// that goes down while the world is already set up.
+func (s *Source) Fail(err error) *Source {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.err = err
 	return s
 }
@@ -96,6 +113,8 @@ func (s *Source) Dependencies(now time.Time) agenthub.Dependencies {
 		Dismissals:  s,
 		Places:      s,
 		Inspector:   s,
+		Launcher:    s,
+		Launches:    s,
 		Now:         func() time.Time { return now },
 	}
 }
@@ -649,4 +668,50 @@ func (s *Source) Register(_ context.Context, registration agenthub.PlaceRegistra
 	}
 	s.registrations[registration.Place.Directory] = registration
 	return registration, nil
+}
+
+// Start implements agenthub.Launcher by remembering what was submitted.
+func (s *Source) Start(_ context.Context, spec agenthub.StartSpec) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return s.err
+	}
+	s.started = append(s.started, spec)
+	return nil
+}
+
+// Started returns what the orchestrator was asked to run, in order.
+func (s *Source) Started() []agenthub.StartSpec {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]agenthub.StartSpec(nil), s.started...)
+}
+
+// Launch implements agenthub.LaunchStore, idempotently on the request identity
+// exactly as the durable adapter must.
+func (s *Source) Launch(_ context.Context, launch agenthub.Launch) (agenthub.Launch, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return agenthub.Launch{}, s.err
+	}
+	if existing, ok := s.launches[launch.RequestID]; ok {
+		return existing, nil
+	}
+	s.launches[launch.RequestID] = launch
+	return launch, nil
+}
+
+// LaunchOf implements agenthub.LaunchStore.
+func (s *Source) LaunchOf(_ context.Context, requestID string) (agenthub.Launch, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return agenthub.Launch{}, s.err
+	}
+	if launch, ok := s.launches[requestID]; ok {
+		return launch, nil
+	}
+	return agenthub.Launch{}, agenthub.ErrNotFound
 }

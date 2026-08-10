@@ -112,3 +112,40 @@ func FleetNodeID(fleetID, workflowID string) (string, bool) {
 	}
 	return nodeID, true
 }
+
+// requestNamespace is the UUID namespace client request identities are hashed
+// under. It is a constant of this package because the mapping must be the same in
+// every process and for all time: it is what makes "the same request" mean "the
+// same execution" after a retry, a reload, or a restart.
+var requestNamespace = uuid.MustParse("2f1b1a1e-2f5c-4c0a-9f9a-9a4b1d3a7c21")
+
+// ForRequest returns the workflow ID a client request identity maps to.
+//
+// The identity is hashed rather than used directly, so a caller cannot choose a
+// workflow ID (and with it collide with, or address, work it did not start), while
+// the same identity still always names the same execution. The class's own prefix
+// is kept, so an ID minted here classifies exactly as one minted by the CLI.
+//
+// A class with no convention of its own is refused rather than given a made-up
+// prefix: what may be started is a decision of the core, not a fallback here.
+func ForRequest(class Class, requestID string) (string, bool) {
+	prefix, ok := prefixOf(class)
+	if !ok || requestID == "" {
+		return "", false
+	}
+	return prefix + uuid.NewSHA1(requestNamespace, []byte(string(class)+"\x00"+requestID)).String(), true
+}
+
+// prefixOf reports the ID prefix a class is minted under.
+func prefixOf(class Class) (string, bool) {
+	switch class {
+	case ClassDevelop:
+		return developPrefix, true
+	case ClassReview:
+		return reviewPrefix, true
+	case ClassPilot:
+		return pilotPrefix, true
+	default:
+		return "", false
+	}
+}

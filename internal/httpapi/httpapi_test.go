@@ -187,6 +187,10 @@ func newTestServer(t *testing.T, view WorkView, mutate ...func(*Options)) *Serve
 		// the default test server has one: a resource served by production and by no test
 		// would be a resource nothing keeps honest.
 		Settings: settingsStub{},
+		// A hub that can be worked in can be started in, so the default test server
+		// offers the start surface: a route served by production and by no test is a
+		// route nothing keeps honest.
+		Start: &starterStub{},
 		// The same reasoning applies to the place registry: a deployment that can be
 		// worked in publishes it, so the default test server does too.
 		Places: &placesStub{},
@@ -485,7 +489,9 @@ func TestInvalidLimitIsAResolvableProblem(t *testing.T) {
 func TestUnknownAndWrongMethodAreProblemDocuments(t *testing.T) {
 	server := newTestServer(t, &viewStub{})
 	requireProblem(t, request(t, server, http.MethodGet, BasePath+"/nothing", nil), http.StatusNotFound, codeNotFound)
-	wrong := request(t, server, http.MethodPost, BasePath+"/runs", strings.NewReader("{}"))
+	// The schedules are read-only: creating one needs a recurrence editor, which is
+	// a surface of its own.
+	wrong := request(t, server, http.MethodPost, BasePath+"/schedules", strings.NewReader("{}"))
 	requireProblem(t, wrong, http.StatusMethodNotAllowed, codeMethodNotAllowed)
 	if got := wrong.Header().Get("Allow"); got != "GET, HEAD" {
 		t.Errorf("Allow = %q, want GET, HEAD", got)
@@ -1758,4 +1764,37 @@ func (p *placesStub) RegisterPlace(_ context.Context, directory, by string) (age
 	place := agenthub.RegisteredPlace{Location: location, RegisteredAt: fixedNow, RegisteredBy: by}
 	p.places = append(p.places, place)
 	return place, nil
+}
+
+// starterStub stands in for the start surface. The rules a start obeys — one run
+// per request identity, no second loop in one working tree — are the core's, and are
+// asserted there; what the transport owns is the request it builds, the resource it
+// answers with and the problem it reports, so the stub records and replays.
+type starterStub struct {
+	requests []agenthub.StartRequest
+	started  agenthub.StartedWork
+	err      error
+}
+
+func (s *starterStub) StartWork(_ context.Context, request agenthub.StartRequest) (agenthub.StartedWork, error) {
+	s.requests = append(s.requests, request)
+	if s.err != nil {
+		return agenthub.StartedWork{}, s.err
+	}
+	started := s.started
+	if started.RunID == "" {
+		place, err := agenthub.RecordedPlace{Directory: "/srv/repos/pricing"}.Location()
+		if err != nil {
+			return agenthub.StartedWork{}, err
+		}
+		started = agenthub.StartedWork{
+			RunID:     "develop-1",
+			Kind:      request.Kind,
+			Location:  place,
+			Prompt:    request.Prompt,
+			StartedAt: fixedNow,
+			StartedBy: request.StartedBy,
+		}
+	}
+	return started, nil
 }
