@@ -175,6 +175,13 @@ Finished items remain visible until dismissed. A dismissal is Postgres-backed vi
 state and never changes workflow state. Continue-as-new iterations are one run
 resource identified by workflow ID.
 
+A person signs in with an identity provider when one is configured
+(`AGENT_HUB_OIDC_ISSUER`, `AGENT_HUB_OIDC_CLIENT_ID`, `AGENT_HUB_OIDC_CLIENT_SECRET`);
+the local compose stack runs one, so `docker compose up -d` plus one click is a
+working sign-in. The API is the confidential client: the browser receives a
+script-inaccessible session cookie and never a token. Scripts and the CLI keep using
+`AGENT_HUB_AUTH_TOKEN`, which needs no browser.
+
 The API binds to `127.0.0.1:8973` by default and accepts only configured HTTP Host
 names. A non-loopback `--addr` requires `--tls-cert`, `--tls-key`, and a strong
 `AGENT_HUB_AUTH_TOKEN`; remote clients send the token only over HTTPS. Additional Host

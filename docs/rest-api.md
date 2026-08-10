@@ -24,6 +24,51 @@ The CLI `list` command reads this API at the default versioned endpoint. Set
 set `AGENT_HUB_AUTH_TOKEN`; the CLI sends it as a bearer token. The CLI refuses a
 non-loopback plaintext HTTP endpoint.
 
+## Sign in
+
+A person signs in with an identity provider; a script keeps using the bearer token.
+Both credentials are resolved by one port, so a resource never branches on which was
+presented.
+
+The local compose stack runs a provider (Dex) with one operator, so signing in needs
+no external account:
+
+```sh
+docker compose up -d
+export AGENT_HUB_OIDC_ISSUER=http://localhost:15556/dex
+export AGENT_HUB_OIDC_CLIENT_ID=agent-hub
+export AGENT_HUB_OIDC_CLIENT_SECRET=agent-hub-local-secret
+temporal-agents serve
+# then open http://localhost:8973/api/v1/auth/sign-in
+# operator@example.test / operator
+```
+
+Setting `AGENT_HUB_OIDC_ISSUER` is what turns signing in on. The client id and secret
+are then required. `AGENT_HUB_PUBLIC_URL` states the URL a browser reaches the hub at,
+which is what the provider redirects back to; it is derived from `--addr` when that
+names a host, and required behind a proxy or on `0.0.0.0`. The provider's local
+configuration, including the operator's credentials, is in `deploy/dex/config.yaml`.
+
+The routes are:
+
+| Route | Purpose |
+|---|---|
+| `GET /api/v1/auth/sign-in?return=<path>` | Redirects to the provider. `return` is honoured only when it is a path inside the application. |
+| `GET /api/v1/auth/callback` | Where the provider sends the browser back. Sets the session cookie and redirects. |
+| `GET /api/v1/auth/session` | Who the request is made by (`session.v1`). |
+| `DELETE /api/v1/auth/session` | Ends the session immediately and clears the cookie. |
+
+The API is the confidential client. The authorization-code exchange, the refresh and
+the provider's tokens are server-side; the browser holds one `HttpOnly`, `SameSite=Lax`
+session cookie and nothing else. The cookie is also `Secure` when the deployment serves
+TLS. Sessions are server-side records, so ending one takes effect on the next request
+rather than at the next expiry.
+
+A request without an accepted credential is `401` with `WWW-Authenticate` and a
+`Link: <…/auth/sign-in>; rel="authenticate"` header. A credential that could not be
+*checked* — an unreachable store — is `503`, not `401`: an outage must not read as
+everybody being signed out.
+
 A non-loopback bind requires TLS and bearer authentication. Set a random token in
 the environment; do not put a fixed token in a command-line argument. The token must
 contain at least 32 characters.
@@ -293,6 +338,13 @@ fields and multiple JSON documents.
 
 ## Security notes
 
+- Signing in is server-side. No provider token, refresh token or identity ever reaches
+  the browser, and the session cookie is script-inaccessible and same-site.
+- A callback is accepted once, only when it is bound to a sign-in this server started
+  for this browser (state, nonce, PKCE, and a server-side pending record). Which check
+  refused a callback is never disclosed.
+- The sign-in, callback and session routes have their own, tighter attempt limit,
+  because they are the only routes where trying repeatedly could pay.
 - Loopback is the default bind. A non-loopback `--addr` requires `--tls-cert`,
   `--tls-key`, and a strong `AGENT_HUB_AUTH_TOKEN`. Plaintext remote HTTP is refused.
 - Every request Host must match the loopback names, the concrete listener host, or an

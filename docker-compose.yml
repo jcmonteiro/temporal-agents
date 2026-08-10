@@ -55,6 +55,24 @@ services:
       timeout: 5s
       retries: 10
 
+  # The local identity provider, so signing in works with no external account and no
+  # provider registration: bring the stack up, click once, signed in. Its
+  # configuration (including the one local operator's credentials) is in
+  # deploy/dex/config.yaml.
+  #
+  # The host port is fixed rather than assigned, because an OpenID provider's issuer
+  # identifier is part of what every client verifies: the provider has to be reachable
+  # at exactly the URL it was configured with.
+  dex:
+    image: ghcr.io/dexidp/dex:v2.44.0@sha256:5d0656fce7d453c0e3b2706abf40c0d0ce5b371fb0b73b3cf714d05f35fa5f86
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./deploy/dex/config.yaml:/etc/dex/config.yaml:ro
+    ports:
+      # Loopback only. The provider issues the hub's sessions, and its local client
+      # secret is fixed and public, so nothing outside this machine may reach it.
+      - "127.0.0.1:15556:5556"
+
 volumes:
   temporal-storage:
   postgres-storage:

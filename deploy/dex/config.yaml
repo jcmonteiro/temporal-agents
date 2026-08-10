@@ -1,0 +1,49 @@
+# The local identity provider's configuration, mounted into the compose stack's dex
+# service.
+#
+# It exists so a contributor gets a working sign-in with no external account and no
+# provider registration: one `docker compose up -d`, one click, signed in. Nothing
+# here is a secret worth protecting — the whole stack is loopback-bound and the
+# credentials are deliberately fixed and guessable, exactly as the local Postgres'
+# are.
+
+# What the provider calls itself, and therefore what every client verifies. It must
+# be the URL a browser reaches Dex at, which is why the host port below is fixed
+# rather than assigned by Docker.
+issuer: http://localhost:15556/dex
+
+# Nothing here has to survive a restart: a local sign-in is cheap to repeat, and a
+# volume would only be one more thing to reset when something goes wrong.
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  # One connector and one operator: an approval screen would ask a question with a
+  # single possible answer.
+  skipApprovalScreen: true
+
+# The hub as a confidential client. The secret is fixed and public on purpose: it is
+# local-only configuration, and inventing a per-contributor secret would turn the
+# documented one-command start into a configuration exercise.
+staticClients:
+  - id: agent-hub
+    secret: agent-hub-local-secret
+    name: Agent Hub
+    redirectURIs:
+      - http://localhost:8973/api/v1/auth/callback
+      - http://127.0.0.1:8973/api/v1/auth/callback
+
+# A password database with one operator, so a local sign-in looks like every other
+# sign-in: a form, a password, a redirect back.
+enablePasswordDB: true
+staticPasswords:
+  # operator@example.test / operator
+  # The bcrypt hash of "operator" is checked in deliberately, so nobody has to
+  # generate one before their first sign-in.
+  - email: operator@example.test
+    hash: "$2a$10$zt0cB3a0GgVzD05GzBrVnuo9gfItSKmT6MHqzBOVQE4ZJPsmBvuFO"
+    username: operator
+    userID: 08a8684b-db88-4b73-90a9-3cd1661f5466

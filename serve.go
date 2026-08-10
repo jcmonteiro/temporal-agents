@@ -131,6 +131,11 @@ Requests must use a loopback Host, the concrete listener host, or a name listed 
 --allow-host. No cross-origin browser access is allowed by default; list each trusted
 frontend origin with --allow-origin.
 
+A person signs in with an identity provider when one is configured (see ENVIRONMENT):
+the browser is redirected to the provider, and comes back holding a session cookie
+only. Every token the provider issues stays on the server. A script keeps using
+AGENT_HUB_AUTH_TOKEN, which needs no browser.
+
 OPTIONS
   --addr <host:port>       Listener address (default 127.0.0.1:8973)
   --web-dir <path>         Built SPA directory for local convenience (default web/dist;
@@ -142,10 +147,20 @@ OPTIONS
 
 ENVIRONMENT
   TEMPORAL_ADDRESS  Temporal server address (default localhost:17233)
-  DATABASE_URL          Postgres connection string for execution records, plans, and
-                        durable dismissals (required)
+  DATABASE_URL          Postgres connection string for execution records, plans,
+                        durable dismissals, and sessions (required)
   AGENT_HUB_AUTH_TOKEN  Bearer token of at least 32 characters (required outside
                         loopback). Generate one with: openssl rand -base64 32
+  AGENT_HUB_OIDC_ISSUER Identity provider's issuer URL. Setting it turns signing in
+                        on; the local compose stack runs one at
+                        http://localhost:15556/dex
+  AGENT_HUB_OIDC_CLIENT_ID
+  AGENT_HUB_OIDC_CLIENT_SECRET
+                        This deployment's registered confidential client. Both are
+                        required when the issuer is set; the secret stays server-side.
+  AGENT_HUB_PUBLIC_URL  The URL a browser reaches this hub at, which the provider
+                        redirects back to. Derived from --addr when it names a host;
+                        required behind a proxy or on 0.0.0.0.
 
 The schema is applied by 'temporal-agents migrate'. This server verifies it at
 startup and refuses to run against a database older than the build it is.
@@ -154,6 +169,10 @@ EXAMPLES
   temporal-agents serve
   temporal-agents serve --web-dir=
   temporal-agents serve --allow-origin http://localhost:5173
+  AGENT_HUB_OIDC_ISSUER=http://localhost:15556/dex \
+    AGENT_HUB_OIDC_CLIENT_ID=agent-hub \
+    AGENT_HUB_OIDC_CLIENT_SECRET=agent-hub-local-secret \
+    temporal-agents serve
   AGENT_HUB_AUTH_TOKEN="$(openssl rand -base64 32)" temporal-agents serve \
     --addr 0.0.0.0:8973 --tls-cert hub.crt --tls-key hub.key \
     --allow-host hub.example.test
@@ -250,6 +269,10 @@ func runAPIServer(options serveOptions) error {
 	if err != nil {
 		return err
 	}
+	identityOptions, err := identityConfiguration(options, environment)
+	if err != nil {
+		return err
+	}
 	ctx := context.Background()
 
 	// Both schemas this process reads and writes through are verified before anything
@@ -278,6 +301,15 @@ func runAPIServer(options serveOptions) error {
 		return fmt.Errorf("could not reach the dismissal store: %w", err)
 	}
 	defer dismissals.Close()
+
+	// Signing in is opened before anything is served, so a hub configured with a
+	// provider it cannot reach stops here with a message instead of failing at an
+	// operator's first click.
+	signIn, err := openIdentity(ctx, dsn, identityOptions)
+	if err != nil {
+		return err
+	}
+	defer signIn.Close()
 
 	orchestrator, err := connectTemporal()
 	if err != nil {
@@ -313,8 +345,11 @@ func runAPIServer(options serveOptions) error {
 		AllowedHosts:   allowedHosts,
 		AllowedOrigins: allowedOrigins,
 		AuthToken:      authToken,
+		Authenticator:  signIn.authenticator(),
+		SignIn:         signIn.signIn(),
+		SecureCookies:  options.tlsCert != "",
 		WebDir:         options.webDir,
-		HealthChecks: []httpapi.HealthCheck{
+		HealthChecks: append([]httpapi.HealthCheck{
 			{
 				Name: "temporal",
 				Check: func(ctx context.Context) error {
@@ -342,7 +377,7 @@ func runAPIServer(options serveOptions) error {
 					return err
 				},
 			},
-		},
+		}, signIn.healthCheck()...),
 	})
 	if err != nil {
 		return err
@@ -361,6 +396,8 @@ func runAPIServer(options serveOptions) error {
 	// an in-flight read finishes but the process can never wait forever.
 	signalCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Housekeeping runs for as long as the server does, and stops with it.
+	go signIn.sweepExpired(signalCtx, slog.Default())
 	shutdownDone := make(chan error, 1)
 	go func() {
 		<-signalCtx.Done()
@@ -373,6 +410,7 @@ func runAPIServer(options serveOptions) error {
 		"address", options.address,
 		"tls", options.tlsCert != "",
 		"basePath", httpapi.BasePath,
+		"signIn", identityOptions.configured(),
 		"webDir", options.webDir)
 	if options.tlsCert != "" {
 		err = server.ListenAndServeTLS(options.tlsCert, options.tlsKey)

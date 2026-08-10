@@ -142,6 +142,9 @@ ENVIRONMENT
                         serve and history)
   TEMPORAL_ADDRESS      Temporal endpoint used by execution commands
                         (default localhost:17233)
+  AGENT_HUB_OIDC_*      Identity provider serve signs people in with
+                        (see 'serve --help'). Automation keeps using
+                        AGENT_HUB_AUTH_TOKEN and needs no browser.
 
 The schema is applied by 'temporal-agents migrate'. Run it before 'worker' or
 'serve': both verify the schema at startup and refuse to run against an older one.
