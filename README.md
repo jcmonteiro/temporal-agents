@@ -165,6 +165,35 @@ Configuring an instruction from the hub arrives with the prompt configuration
 surface; today the shipped defaults are what every place resolves to, so behaviour
 is unchanged for anyone who configures nothing.
 
+### Steering a review round
+
+Where an operator has switched it on, a review round stops and asks before the
+agent acts on what a review produced. It is off by default, so a loop nobody asked
+to steer keeps running exactly as it always did.
+
+- The switch is the `steering.enabled` setting, resolved through the same chain as
+  an instruction — the place, its repository, the installation, the shipped default
+  — once at the loop's start and carried through every pass.
+- There are two pause points, both immediately before the agent acts: after a local
+  review has produced its findings, and after a pull request's unresolved comments
+  are known.
+- The wait is unbounded. Nothing expires while a human is thinking.
+- Three decisions are accepted: proceed with guidance, proceed without guidance, and
+  stop. Guidance is required when guiding — empty text is a mistake, not a decision
+  — and the first decision wins, so a second browser tab cannot start a second
+  implementation pass.
+- The guidance reaches the agent as a block of its own, immediately in front of the
+  material it applies to; nothing the agent was already given changes.
+- While a round waits, the run reports that it needs input. The session it waits in
+  is recorded (so its cost is attributable) but is never an item of its own: the
+  loop is the work.
+- A loop's ending is recorded by name — converged, stopped by a human, or the pass
+  cap — so history says why a loop ended and not merely that it did.
+
+The hub surface that shows a waiting round and sends a decision arrives with the
+later steering slices; today a decision is sent to the waiting session through
+orchestration tooling.
+
 ## Commands
 
 | Command | What it does |
