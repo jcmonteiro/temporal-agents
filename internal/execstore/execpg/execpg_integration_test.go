@@ -271,6 +271,32 @@ func TestPostgres_ListExecutionsFilters(t *testing.T) {
 	})
 }
 
+func TestPostgres_ListExecutionChainsIncludesDetachedChildrenButNotSupervisedChildren(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	for _, execution := range []execstore.Execution{
+		{
+			WorkflowID: "review-detached", RunID: "detached-1", Kind: execstore.KindReview,
+			ParentWorkflowID: "develop-1", StartedAt: stamp, Status: execstore.StatusRunning,
+			Detail: execstore.Detail{Detached: true},
+		},
+		{
+			WorkflowID: "review-supervised", RunID: "supervised-1", Kind: execstore.KindReview,
+			ParentWorkflowID: "develop-2", StartedAt: stamp, Status: execstore.StatusRunning,
+		},
+	} {
+		require.NoError(t, store.SaveExecution(ctx, execution))
+	}
+
+	chains, err := store.ListExecutionChains(ctx, execstore.ChainFilter{
+		Kinds: []execstore.Kind{execstore.KindReview},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, chains, 1)
+	require.Equal(t, "review-detached", chains[0].Latest.WorkflowID)
+}
+
 func TestPostgres_ListExecutionChainsLimitsIdentitiesAfterFullAggregation(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

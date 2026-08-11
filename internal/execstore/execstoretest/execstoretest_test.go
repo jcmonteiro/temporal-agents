@@ -8,6 +8,36 @@ import (
 	"temporal-agents/internal/execstore"
 )
 
+func TestExecutionChainsIncludeDetachedChildrenButNotSupervisedChildren(t *testing.T) {
+	store := New()
+	started := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
+	for _, execution := range []execstore.Execution{
+		{
+			WorkflowID: "review-detached", RunID: "detached-1", Kind: execstore.KindReview,
+			ParentWorkflowID: "develop-1", StartedAt: started, Status: execstore.StatusRunning,
+			Detail: execstore.Detail{Detached: true},
+		},
+		{
+			WorkflowID: "review-supervised", RunID: "supervised-1", Kind: execstore.KindReview,
+			ParentWorkflowID: "develop-2", StartedAt: started, Status: execstore.StatusRunning,
+		},
+	} {
+		if err := store.SaveExecution(context.Background(), execution); err != nil {
+			t.Fatalf("save execution: %v", err)
+		}
+	}
+
+	chains, err := store.ListExecutionChains(context.Background(), execstore.ChainFilter{
+		Kinds: []execstore.Kind{execstore.KindReview},
+	})
+	if err != nil {
+		t.Fatalf("ListExecutionChains: %v", err)
+	}
+	if len(chains) != 1 || chains[0].Latest.WorkflowID != "review-detached" {
+		t.Fatalf("chains = %+v, want only the detached review", chains)
+	}
+}
+
 // TestStoreKeepsWritesAndReadsAsSeparateViews pins the fake's two responsibilities:
 // workflow tests can inspect each attempted write, while read-port consumers see the
 // current row that PostgreSQL upserts by run ID.

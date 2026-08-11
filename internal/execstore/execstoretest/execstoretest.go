@@ -271,7 +271,7 @@ func executionChains(executions []execstore.Execution, filter execstore.ChainFil
 		if filter.WorkflowID != "" && execution.WorkflowID != filter.WorkflowID {
 			continue
 		}
-		if execution.ParentWorkflowID != "" || execution.ScheduleID != "" {
+		if (execution.ParentWorkflowID != "" && !execution.Detail.Detached) || execution.ScheduleID != "" {
 			continue
 		}
 		groups[execution.WorkflowID] = append(groups[execution.WorkflowID], execution)

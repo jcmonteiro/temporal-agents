@@ -160,7 +160,7 @@ func selectedExecutionsSQL(tree bool) string {
 	SELECT workflow_id, MIN(started_at) AS chain_started
 	FROM executions
 	WHERE kind = ANY($1::text[])
-		AND parent_workflow_id IS NULL
+		AND (parent_workflow_id IS NULL OR detail @> '{"detached": true}'::jsonb)
 		AND schedule_id IS NULL
 		AND ($2 = '' OR workflow_id = $2)
 		AND NOT (workflow_id = ANY($3::text[]))
