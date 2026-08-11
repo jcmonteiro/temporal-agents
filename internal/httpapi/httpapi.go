@@ -648,6 +648,7 @@ func (s *Server) handleStartWork(w http.ResponseWriter, r *http.Request) {
 		Kind:      request.Kind,
 		PlaceID:   request.PlaceID,
 		Prompt:    request.Prompt,
+		Worktree:  request.Worktree,
 		StartedBy: by,
 	})
 	if err != nil {

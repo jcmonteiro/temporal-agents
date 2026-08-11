@@ -696,6 +696,9 @@ type startWorkRequest struct {
 	// Prompt is what the agent is told to do. It is required for a develop pass and
 	// refused for a review.
 	Prompt string `json:"prompt,omitempty"`
+	// Worktree asks development to run in a fresh server-managed worktree. It never
+	// names a path; the server owns the worktree base.
+	Worktree bool `json:"worktree"`
 }
 
 // startedWorkFrom projects started work onto its representation.

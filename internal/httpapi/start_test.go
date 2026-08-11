@@ -34,7 +34,7 @@ func startWork(t *testing.T, server *Server, body string, prepare ...func(*http.
 func aStartOf(placeID string) string {
 	body, _ := json.Marshal(startWorkRequest{
 		RequestID: "request-1", Kind: agenthub.StartDevelop,
-		PlaceID: placeID, Prompt: "make the flaky test pass",
+		PlaceID: placeID, Prompt: "make the flaky test pass", Worktree: true,
 	})
 	return string(body)
 }
@@ -115,7 +115,8 @@ func TestAStartCarriesTheRequestIdentityAndThePrincipalToTheCore(t *testing.T) {
 		t.Fatalf("requests = %d, want one", len(starter.requests))
 	}
 	asked := starter.requests[0]
-	if asked.RequestID != "request-1" || asked.Kind != agenthub.StartDevelop || asked.PlaceID != "dir-1" {
+	if asked.RequestID != "request-1" || asked.Kind != agenthub.StartDevelop ||
+		asked.PlaceID != "dir-1" || !asked.Worktree {
 		t.Errorf("request = %+v, want what the body asked for", asked)
 	}
 	if asked.StartedBy != (identity.Principal{

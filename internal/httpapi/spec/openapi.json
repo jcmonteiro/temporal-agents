@@ -3253,6 +3253,10 @@
             "type": "string",
             "maxLength": 10000,
             "description": "What the agent is told to do. Required for a develop pass, refused for a review, which reviews what is already there."
+          },
+          "worktree": {
+            "type": "boolean",
+            "description": "Whether development runs in a fresh server-managed worktree. It never names a path. Refused for a review."
           }
         }
       },

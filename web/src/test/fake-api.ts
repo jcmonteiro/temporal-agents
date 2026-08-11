@@ -63,6 +63,14 @@ export class FakeApi {
    * memory of what it started, which is what makes a repeated request one run.
    */
   launches: Record<string, StartedWorkDTO> = {};
+  /** Start requests received at the HTTP edge, for launcher contract assertions. */
+  startRequests: Array<{
+    requestId?: string;
+    kind?: string;
+    placeId?: string;
+    prompt?: string;
+    worktree?: boolean;
+  }> = [];
   /**
    * The place work is already running in, if any. A start there is refused, as
    * the server refuses one: two loops in one working tree commit over each
@@ -239,7 +247,9 @@ export class FakeApi {
       kind?: string;
       placeId?: string;
       prompt?: string;
+      worktree?: boolean;
     };
+    this.startRequests.push(asked);
     const requestId = String(asked.requestId ?? "");
     const existing = this.launches[requestId];
     if (existing) return this.json(existing, 201);

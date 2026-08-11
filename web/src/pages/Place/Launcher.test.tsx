@@ -45,16 +45,28 @@ async function startDevelop(what: string): Promise<void> {
   });
 }
 
-it("starts a develop pass here and lands on the run", async () => {
+it("starts development in a fresh worktree by default", async () => {
   await showPlace();
 
+  const worktree = screen.getByLabelText("Use a fresh worktree") as HTMLInputElement;
+  expect(worktree.checked).toBe(true);
   await startDevelop("make the flaky test pass");
 
   const started = Object.values(api.launches);
   expect(started).toHaveLength(1);
+  expect(api.startRequests[0].worktree).toBe(true);
   expect(window.location.hash).toBe(`#/runs/${started[0].id}`);
   expect(started[0].label).toBe("make the flaky test pass");
   expect(started[0].locationId).toBe("repo");
+});
+
+it("can develop in the selected checkout instead", async () => {
+  await showPlace();
+
+  fireEvent.click(screen.getByLabelText("Use a fresh worktree"));
+  await startDevelop("make the flaky test pass");
+
+  expect(api.startRequests[0].worktree).toBe(false);
 });
 
 it("says development starts from this place in a fresh worktree", async () => {
@@ -69,7 +81,11 @@ it("says development starts from this place in a fresh worktree", async () => {
     ...launcher.querySelectorAll("textarea"),
   ];
   for (const field of fields) {
-    expect(field.getAttribute("type") === "radio" || field.id === "launch-prompt").toBe(true);
+    expect(
+      field.getAttribute("type") === "radio" ||
+      field.getAttribute("type") === "checkbox" ||
+      field.id === "launch-prompt",
+    ).toBe(true);
   }
 });
 

@@ -16,6 +16,7 @@ import type { Place } from "../../domain/place";
 export function Launcher({ place }: { place: Place }): ReactNode {
   const [kind, setKind] = useState<StartKind>("develop");
   const [prompt, setPrompt] = useState("");
+  const [worktree, setWorktree] = useState(true);
   const [starting, setStarting] = useState(false);
   const [refusal, setRefusal] = useState<ApiError | Error | null>(null);
   // The identity of the *intent*, minted once and kept until it succeeds. A
@@ -40,6 +41,7 @@ export function Launcher({ place }: { place: Place }): ReactNode {
       kind,
       placeId: place.id,
       prompt: kind === "develop" ? prompt.trim() : undefined,
+      worktree: kind === "develop" ? worktree : undefined,
     });
     if (started.ok) {
       intent.current = null;
@@ -79,9 +81,9 @@ export function Launcher({ place }: { place: Place }): ReactNode {
           fontSize: "var(--font-size-sm)",
         }}
       >
-        {kind === "develop" ? "Starts from " : "In "}
+        {kind === "develop" && worktree ? "Starts from " : "In "}
         {place.directory ?? place.ref ?? place.label}
-        {kind === "develop" && " in a fresh worktree"}
+        {kind === "develop" && worktree && " in a fresh worktree"}
       </p>
 
       <form
@@ -118,7 +120,26 @@ export function Launcher({ place }: { place: Place }): ReactNode {
         </fieldset>
 
         {kind === "develop" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: "var(--font-size-sm)",
+                color: "var(--color-text)",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={worktree}
+                onChange={(event) => {
+                  const next = event.target.checked;
+                  change(() => setWorktree(next));
+                }}
+              />
+              Use a fresh worktree
+            </label>
             <label
               htmlFor="launch-prompt"
               style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-muted)" }}

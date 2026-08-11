@@ -25,6 +25,8 @@ export interface StartWork {
   placeId: string;
   /** What the agent is told to do. A review takes none. */
   prompt?: string;
+  /** Whether development is isolated in a new server-managed worktree. */
+  worktree?: boolean;
 }
 
 /** The work the hub started. It has no status yet: it has only just begun. */
@@ -46,6 +48,7 @@ export async function startWork(work: StartWork): Promise<Result<StartedWork, Er
   // A review reviews what is already there, and the server refuses a prompt on
   // one. Sending an empty string would be sending a prompt.
   if (work.prompt !== undefined && work.prompt !== "") body.prompt = work.prompt;
+  if (work.worktree !== undefined) body.worktree = work.worktree;
   const response = await postJSON<StartedWorkDTO>("/runs", body);
   if (!response.ok) return err(response.error);
   const started = response.value;

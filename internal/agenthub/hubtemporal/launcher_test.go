@@ -52,6 +52,7 @@ func TestADevelopPassIsSubmittedAsTheWorkerExecutesIt(t *testing.T) {
 		Kind:       agenthub.StartDevelop,
 		Directory:  "/srv/repos/pricing",
 		Prompt:     "make the flaky test pass",
+		Worktree:   true,
 	})
 
 	if err != nil {
@@ -84,6 +85,27 @@ func TestADevelopPassIsSubmittedAsTheWorkerExecutesIt(t *testing.T) {
 	if call.options.WorkflowIDConflictPolicy != enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING {
 		t.Errorf("conflict policy = %v, want the existing execution to be used",
 			call.options.WorkflowIDConflictPolicy)
+	}
+}
+
+func TestADevelopPassCanUseTheSelectedCheckout(t *testing.T) {
+	starter := &fakeStarter{}
+	launcher, _ := NewLauncher(starter, "agents", "/srv/worktrees")
+
+	err := launcher.Start(context.Background(), agenthub.StartSpec{
+		WorkflowID: "develop-2",
+		Kind:       agenthub.StartDevelop,
+		Directory:  "/srv/repos/pricing",
+		Prompt:     "make the flaky test pass",
+		Worktree:   false,
+	})
+
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	input := starter.calls[0].args[0].(codereview.DevelopInput)
+	if input.WorktreesDir != "" {
+		t.Errorf("input = %+v, want development in the selected checkout", input)
 	}
 }
 

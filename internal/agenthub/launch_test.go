@@ -37,6 +37,7 @@ func TestStartingADevelopPassSubmitsItInThePlaceTheServerResolved(t *testing.T) 
 		Kind:      agenthub.StartDevelop,
 		PlaceID:   place.ID(),
 		Prompt:    "make the flaky test pass",
+		Worktree:  true,
 		StartedBy: "operator-1",
 	})
 
@@ -51,6 +52,7 @@ func TestStartingADevelopPassSubmitsItInThePlaceTheServerResolved(t *testing.T) 
 	require.Equal(t, "/srv/repos/pricing", submitted[0].Directory,
 		"the directory is the server's answer, never the caller's")
 	require.Equal(t, "make the flaky test pass", submitted[0].Prompt)
+	require.True(t, submitted[0].Worktree)
 	require.Equal(t, started.RunID, submitted[0].WorkflowID,
 		"the run an operator is given must be the execution that was submitted")
 }
@@ -206,6 +208,9 @@ func TestAStartTheHubCannotHonourIsRefusedAndStartsNothing(t *testing.T) {
 		},
 		"a review told what to do": {
 			RequestID: "r", Kind: agenthub.StartReview, PlaceID: place.ID(), Prompt: "do the thing",
+		},
+		"a review asked to create a worktree": {
+			RequestID: "r", Kind: agenthub.StartReview, PlaceID: place.ID(), Worktree: true,
 		},
 		"a prompt beyond the bound": {
 			RequestID: "r", Kind: agenthub.StartDevelop, PlaceID: place.ID(),

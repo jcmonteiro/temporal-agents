@@ -341,7 +341,7 @@ and keeps the original dismissal time. Delete the returned resource to undo it.
 POST /api/v1/runs
 Content-Type: application/json
 
-{"requestId":"5f9c…","kind":"develop","placeId":"5f2b…","prompt":"make the flaky test pass"}
+{"requestId":"5f9c…","kind":"develop","placeId":"5f2b…","prompt":"make the flaky test pass","worktree":true}
 ```
 
 ```json

@@ -92,6 +92,8 @@ type StartRequest struct {
 	// Prompt is what the agent is told to do. It is required for a develop pass and
 	// refused for a review, which reviews what is already there.
 	Prompt string
+	// Worktree asks development to run in a fresh server-managed worktree.
+	Worktree bool
 	// StartedBy identifies the principal asking, empty where nobody is
 	// authenticated. It is recorded for audit only.
 	StartedBy string
@@ -110,6 +112,8 @@ type StartSpec struct {
 	Directory string
 	// Prompt is what the agent is told to do, empty for a review.
 	Prompt string
+	// Worktree selects a fresh server-managed worktree for development.
+	Worktree bool
 	// StartedBy is the initiating principal, used only to address human checkpoints.
 	StartedBy string
 }
@@ -199,6 +203,9 @@ func ValidateStartRequest(request StartRequest) error {
 		if request.Prompt != "" {
 			return fmt.Errorf("%w: a review pass takes no prompt: it reviews what is already there", ErrInvalid)
 		}
+		if request.Worktree {
+			return fmt.Errorf("%w: a review pass runs in the selected working tree", ErrInvalid)
+		}
 	default:
 		return fmt.Errorf("%w: %q cannot be started here, only %v", ErrInvalid, request.Kind, StartKinds())
 	}
@@ -273,6 +280,7 @@ func (s *Service) StartWork(ctx context.Context, request StartRequest) (StartedW
 		Kind:       request.Kind,
 		Directory:  directory,
 		Prompt:     request.Prompt,
+		Worktree:   request.Worktree,
 		StartedBy:  request.StartedBy,
 	}
 	if err := s.deps.Launcher.Start(ctx, spec); err != nil {

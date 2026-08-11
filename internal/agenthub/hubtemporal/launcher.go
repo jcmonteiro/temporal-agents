@@ -85,10 +85,14 @@ func (l *Launcher) Start(ctx context.Context, spec agenthub.StartSpec) error {
 func submission(spec agenthub.StartSpec, worktreesDir string) (any, any, error) {
 	switch spec.Kind {
 	case agenthub.StartDevelop:
+		developWorktreesDir := ""
+		if spec.Worktree {
+			developWorktreesDir = worktreesDir
+		}
 		return codereview.DevelopWorkflow, codereview.DevelopInput{
 			Initiator:    spec.StartedBy,
 			WorkDir:      spec.Directory,
-			WorktreesDir: worktreesDir,
+			WorktreesDir: developWorktreesDir,
 			Prompt:       spec.Prompt,
 			WithRemote:   true,
 		}, nil
