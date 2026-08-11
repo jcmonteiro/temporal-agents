@@ -37,7 +37,7 @@ func TestParseServeFlagsMakesExposureExplicit(t *testing.T) {
 		"--tls-cert", "/run/secrets/hub.crt",
 		"--tls-key", "/run/secrets/hub.key",
 		"--allow-host", "hub.example.test",
-		"--allow-origin", "http://localhost:5173",
+		"--allow-origin", "http://localhost:3001",
 		"--allow-origin=https://hub.example.test",
 	})
 	if err != nil {
@@ -55,7 +55,7 @@ func TestParseServeFlagsMakesExposureExplicit(t *testing.T) {
 	if len(got.allowedHosts) != 1 || got.allowedHosts[0] != "hub.example.test" {
 		t.Errorf("allowed hosts = %v, want hub.example.test", got.allowedHosts)
 	}
-	want := []string{"http://localhost:5173", "https://hub.example.test"}
+	want := []string{"http://localhost:3001", "https://hub.example.test"}
 	if len(got.allowedOrigins) != len(want) {
 		t.Fatalf("allowed origins = %v, want %v", got.allowedOrigins, want)
 	}

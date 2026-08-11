@@ -191,7 +191,7 @@ startup and refuses to run against a database older than the build it is.
 EXAMPLES
   temporal-agents serve
   temporal-agents serve --web-dir=
-  temporal-agents serve --allow-origin http://localhost:5173
+  temporal-agents serve --allow-origin http://localhost:3001
   AGENT_HUB_OIDC_ISSUER=http://localhost:15556/dex \
     AGENT_HUB_OIDC_CLIENT_ID=agent-hub \
     AGENT_HUB_OIDC_CLIENT_SECRET=agent-hub-local-secret \

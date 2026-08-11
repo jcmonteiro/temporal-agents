@@ -10,6 +10,7 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    port: 3001,
     proxy: {
       "/api/v1": "http://127.0.0.1:3000",
     },

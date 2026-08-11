@@ -109,7 +109,7 @@ The server explicitly allows its own configured origins for the bundled UI. Each
 additional browser origin must be listed separately:
 
 ```sh
-temporal-agents serve --allow-origin http://localhost:5173
+temporal-agents serve --allow-origin http://localhost:3001
 ```
 
 `web/dist` is served as a single-page application for local convenience when it
