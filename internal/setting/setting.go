@@ -61,9 +61,9 @@ var specs = []Spec{
 		Key: KeySteeringEnabled,
 		Purpose: "Stop a review round for the operator to steer it, instead of building " +
 			"on the review's findings straight away.",
-		// Off by factory default: a run that waits for a human it was never promised
-		// would look like a run that hung.
-		Factory: false,
+		// On by factory default: review findings wait for an operator before an agent
+		// acts on them. Scoped overrides and per-run CLI input can switch it off.
+		Factory: true,
 	},
 }
 

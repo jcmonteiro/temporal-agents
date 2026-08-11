@@ -35,32 +35,32 @@ func TestASettingResolvesThroughTheRealStoreAtEveryLevelOfTheChain(t *testing.T)
 
 	shipped, err := resolver.Resolve(ctx, forWorktree)
 	require.NoError(t, err)
-	require.False(t, shipped.Enabled(setting.KeySteeringEnabled), "steering ships switched off")
+	require.True(t, shipped.Enabled(setting.KeySteeringEnabled), "steering ships switched on")
 	requireSource(t, shipped, setting.FactoryScope)
 
-	save(t, store, setting.GlobalScope, true)
+	save(t, store, setting.GlobalScope, false)
 	installation, err := resolver.Resolve(ctx, forWorktree)
 	require.NoError(t, err)
-	require.True(t, installation.Enabled(setting.KeySteeringEnabled))
+	require.False(t, installation.Enabled(setting.KeySteeringEnabled))
 	requireSource(t, installation, setting.GlobalScope)
 
-	save(t, store, setting.DirectoryScope(repository), false)
+	save(t, store, setting.DirectoryScope(repository), true)
 	fromRepository, err := resolver.Resolve(ctx, forWorktree)
 	require.NoError(t, err)
-	require.False(t, fromRepository.Enabled(setting.KeySteeringEnabled),
+	require.True(t, fromRepository.Enabled(setting.KeySteeringEnabled),
 		"a worktree inherits the repository it belongs to")
 	requireSource(t, fromRepository, setting.DirectoryScope(repository))
 
-	save(t, store, setting.DirectoryScope(worktree), true)
+	save(t, store, setting.DirectoryScope(worktree), false)
 	fromWorktree, err := resolver.Resolve(ctx, forWorktree)
 	require.NoError(t, err)
-	require.True(t, fromWorktree.Enabled(setting.KeySteeringEnabled))
+	require.False(t, fromWorktree.Enabled(setting.KeySteeringEnabled))
 	requireSource(t, fromWorktree, setting.DirectoryScope(worktree))
 
 	// The worktree's own value is its own; the repository keeps answering for itself.
 	forRepository, err := resolver.Resolve(ctx, setting.Request{Scopes: setting.Chain(repository, "")})
 	require.NoError(t, err)
-	require.False(t, forRepository.Enabled(setting.KeySteeringEnabled),
+	require.True(t, forRepository.Enabled(setting.KeySteeringEnabled),
 		"a worktree's override must not leak up into the repository")
 }
 

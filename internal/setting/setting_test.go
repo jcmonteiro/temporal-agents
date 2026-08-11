@@ -26,13 +26,13 @@ func TestASettingResolvesThroughThePlaceItIsAskedForBeforeAnythingBroader(t *tes
 	}{
 		{
 			name:      "nothing is configured anywhere",
-			want:      false,
+			want:      true,
 			wantScope: setting.FactoryScope,
 		},
 		{
 			name:      "only the shipped default is published",
-			stored:    map[scoped.Scope]string{setting.FactoryScope: "false"},
-			want:      false,
+			stored:    map[scoped.Scope]string{setting.FactoryScope: "true"},
+			want:      true,
 			wantScope: setting.FactoryScope,
 		},
 		{

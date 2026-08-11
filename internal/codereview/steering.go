@@ -24,8 +24,8 @@ import (
 // resolved once at the loop's start and carried from there, so this is a read of
 // what the loop decided when it began, never a fresh question.
 //
-// A loop that resolved nothing (one started before settings were resolved) reads the
-// shipped default, which is off: an unattended run must behave exactly as it did.
+// A loop that resolved nothing reads the shipped default, which is on: review
+// findings wait for an operator unless a scoped setting or run input switches it off.
 func steered(settings setting.Resolution) bool {
 	return settings.Enabled(setting.KeySteeringEnabled)
 }

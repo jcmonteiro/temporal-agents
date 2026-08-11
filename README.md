@@ -167,9 +167,9 @@ is unchanged for anyone who configures nothing.
 
 ### Steering a review round
 
-Where an operator has switched it on, a review round stops and asks before the
-agent acts on what a review produced. It is off by default, so a loop nobody asked
-to steer keeps running exactly as it always did.
+A review round stops and asks before the agent acts on what a review produced.
+Steering is on by default. A scoped setting, or `--no-steering` on a CLI run, can
+switch it off for autonomous execution.
 
 - The switch is the `steering.enabled` setting, resolved through the same chain as
   an instruction — the place, its repository, the installation, the shipped default

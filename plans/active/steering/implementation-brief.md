@@ -41,9 +41,10 @@ constraint** with the reason.
   stopped by a human, or limit reached — because a single "converged" flag cannot
   express the now-reachable endings, and the interface and history must both explain
   why a loop ended.
-- **Steering is opt-in through the scoped setting** the prompts feature provides, off
-  by default, resolved once at the start of the work. *Reason:* unattended runs must be
-  unaffected.
+- **Steering is on by default and can be disabled through the scoped setting or a
+  per-run command-line option**, resolved once at the start of the work. *Reason:*
+  interactive review is the normal behavior, while unattended runs need an explicit
+  autonomous mode.
 
 ## 3. The guidance artifact (hard constraints)
 
@@ -104,7 +105,7 @@ constraint** with the reason.
 
 ## 7. Seams this work must not cross
 
-- No command-line surface for steering.
+- No command-line conversation surface; the command line only selects autonomous mode.
 - No configuration written from a conversation.
 - No second satellite for a waiting session, and no duplicate of the run's identity.
 - No change to unattended behaviour when steering is off.

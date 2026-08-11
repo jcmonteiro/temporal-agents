@@ -425,7 +425,7 @@ GET /api/v1/settings
 
 ```json
 {"items":[{"key":"steering.enabled","purpose":"Stop a review round …",
-           "enabled":false,"source":"factory","version":1}],"count":1,"limit":1}
+           "enabled":true,"source":"factory","version":1}],"count":1,"limit":1}
 ```
 
 `source` is the *kind* of scope the value came from — `directory`, `global`, or

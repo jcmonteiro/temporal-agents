@@ -28,7 +28,7 @@ autonomous outcomes or babysits a terminal.
 
 ## Desired outcome
 
-When this ships, and only where the operator has asked for it:
+When this ships:
 
 - After each review round, the loop **pauses and asks the operator for guidance**
   before the next implementation pass.
@@ -45,7 +45,7 @@ When this ships, and only where the operator has asked for it:
   or accept the work as finished.
 - Every ending is **recorded honestly**: converged on its own, accepted by a human,
   stopped by a human, or stopped by the limit.
-- Loops nobody asked to steer keep running exactly as they do today.
+- Steering is the default, and an operator can explicitly disable it for work that must run autonomously.
 
 ## Success signals
 
@@ -55,7 +55,7 @@ When this ships, and only where the operator has asked for it:
 - An operator away from the hub still learns that a decision is waiting, and finds it
   waiting when they return, hours later.
 - A run's history states why the loop ended and what guidance it was given.
-- An unattended run with steering switched off behaves exactly as before.
+- An unattended run with steering explicitly switched off behaves exactly as before.
 
 ## Success signals that must not regress
 
