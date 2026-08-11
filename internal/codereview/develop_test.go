@@ -59,9 +59,12 @@ func TestDevelopWorkflow_HappyPath_DevelopsThenTriggersReview(t *testing.T) {
 	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1", "sha2"}, nil)
-	// The review loop is triggered as a child workflow; mock it so the child
-	// starts and completes without running its own activities.
-	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
+	// The default review outlives this Develop workflow, so its input must identify
+	// it as detached lifecycle ownership. The read side uses that durable fact to
+	// show the Review after Develop has completed.
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.MatchedBy(func(in ReviewInput) bool {
+		return in.Detached
+	})).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
 
 	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing"})
 
@@ -90,7 +93,9 @@ func TestDevelopWorkflow_AwaitReview_SeedsFromDependencyBranchesAndAwaitsReview(
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.MatchedBy(func(req EnsureDevelopedRequest) bool {
 		return req.BaseSHA == "seeded-head"
 	})).Return([]string{"sha1"}, nil)
-	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.MatchedBy(func(in ReviewInput) bool {
+		return !in.Detached
+	})).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
 
 	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{
 		WorkDir: "/repo", Branch: "feat/b", WorktreesDir: "/wt", Prompt: "expose via REST",
@@ -409,7 +414,9 @@ func TestDevelopWorkflow_WithRemote_OrchestratesReviewOpenPRAndPilot(t *testing.
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
 	// The full remote pipeline runs as supervised children this workflow waits on.
-	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.Anything).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
+	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.MatchedBy(func(in ReviewInput) bool {
+		return !in.Detached
+	})).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
 	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).
 		Return(OpenPRResult{Summary: "opened", URL: "https://github.com/acme/widgets/pull/7"}, nil)
 	// The pilot loop is triggered with chaining enabled so it loops until Copilot

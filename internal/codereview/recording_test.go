@@ -219,6 +219,20 @@ func TestDevelopWorkflow_TerminalRecordFailure_StillReturnsTheResult(t *testing.
 	require.Contains(t, out, "Developed branch feat/x", "the run's own summary is handed back intact")
 }
 
+func TestReviewWorkflow_DetachedReviewRecordsLifecycleOwnership(t *testing.T) {
+	store := execstoretest.New()
+	env := newReviewEnvWithStore(t, store)
+
+	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).
+		Return(AgentResult{Output: "feedback"}, nil)
+
+	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo", Detached: true})
+
+	recorded := store.Last(t)
+	require.Equal(t, execstore.KindReview, recorded.Kind)
+	require.True(t, recorded.Detail.Detached)
+}
+
 func TestReviewWorkflow_ChildReviewRecordsItsParent(t *testing.T) {
 	store := execstoretest.New()
 	env := newDevelopEnvWithStore(t, store)

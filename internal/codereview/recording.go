@@ -71,6 +71,9 @@ type DevelopState struct {
 type ReviewState struct {
 	WorkflowID string
 	RunID      string
+	// Detached reports that the parent does not supervise this review's lifecycle,
+	// so the review remains independently visible after the parent closes.
+	Detached bool
 	// ParentWorkflowID is the develop run that spawned this review, or empty for a
 	// standalone `code review`. It is what tells the two apart in history.
 	ParentWorkflowID string
@@ -184,7 +187,8 @@ func (a *Activities) PersistReviewWorkflowState(ctx context.Context, in ReviewSt
 		return execstore.ErrNotConfigured
 	}
 	detail := execstore.Detail{
-		Pass: in.Pass, Resets: in.Resets, Converged: in.Converged, Ending: string(in.Ending), Error: in.Error,
+		Detached: in.Detached,
+		Pass:     in.Pass, Resets: in.Resets, Converged: in.Converged, Ending: string(in.Ending), Error: in.Error,
 		WaitingSince: waitingSince(in.WaitingSince), WaitingSession: in.WaitingSession,
 		Directory: in.Place.Directory, Repository: in.Place.Repository,
 		Instructions: instructionUses(in.Instructions),
@@ -312,6 +316,7 @@ func startReviewState(ctx workflow.Context, in ReviewInput) (ReviewState, error)
 	st := ReviewState{
 		WorkflowID:       id.WorkflowID,
 		RunID:            id.RunID,
+		Detached:         in.Detached,
 		ParentWorkflowID: id.ParentWorkflowID,
 		Pass:             in.Pass,
 		Resets:           in.Resets,

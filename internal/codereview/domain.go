@@ -266,6 +266,11 @@ const MaxReviewPasses = 5
 type ReviewInput struct {
 	// Initiator is the principal who started work from the hub, empty for CLI or schedules.
 	Initiator string
+	// Detached reports that the workflow keeps running after its parent closes and
+	// therefore owns an overview item of its own. A supervised child and a
+	// standalone review both leave it false: the former belongs to its parent, and
+	// the latter is already top-level.
+	Detached bool
 	// WorkDir is the repository directory the CLI was invoked from.
 	WorkDir string
 	// Payload is the previous pass's raw review output, carried over verbatim.

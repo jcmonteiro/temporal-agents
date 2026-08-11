@@ -681,8 +681,15 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	// is intentional but means a single `develop --summary` triggers two
 	// independent summary agent runs (this develop completion plus the review
 	// completion), each a full, billable Pi run.
+	// Detached lifecycle ownership is an input to the review, not an inference from
+	// its parent ID: supervised review children use the same ID shape. Gate the new
+	// input value so a Develop history that already scheduled its child replays the
+	// original payload.
+	detached := workflow.GetVersion(
+		ctx, "develop-detached-review-ownership", workflow.DefaultVersion, 1) == 1
 	child := workflow.ExecuteChildWorkflow(childCtx, ReviewWorkflow,
-		ReviewInput{Initiator: in.Initiator, WorkDir: in.WorkDir, TokensSoFar: agentResult.Tokens, Summary: in.Summary})
+		ReviewInput{Initiator: in.Initiator, Detached: detached, WorkDir: in.WorkDir,
+			TokensSoFar: agentResult.Tokens, Summary: in.Summary})
 	if err := child.GetChildWorkflowExecution().Get(ctx, nil); err != nil {
 		return "", fmt.Errorf("start review workflow: %w", err)
 	}

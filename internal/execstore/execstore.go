@@ -175,6 +175,11 @@ func (e Execution) Duration() time.Duration {
 // jsonb column, so adding a field is a code change rather than a migration.
 // Every field is omitempty: a record only carries what its kind produced.
 type Detail struct {
+	// Detached reports that a child workflow keeps running after its parent closes
+	// and therefore owns an overview item of its own. It preserves the actual
+	// ParentWorkflowID for execution-tree correlation while defining independent
+	// lifecycle ownership.
+	Detached bool `json:"detached,omitempty"`
 	// Branch is the branch a develop execution worked on.
 	Branch string `json:"branch,omitempty"`
 	// PRURL is the pull request a develop (via its --with-remote open-PR stage) or
