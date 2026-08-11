@@ -11,6 +11,7 @@ import { registryOf, workIn, type PlaceRegistry } from "../../domain/place";
 import { RightRail, type Selected } from "../../components/RightRail";
 import { Orbit } from "./Orbit";
 import { useSteering } from "../../platform/steering";
+import { waitingFor } from "../../platform/waiting-time";
 
 type StatusCounts = Record<WorkItemStatus, number>;
 
@@ -162,7 +163,7 @@ export function OverviewPage(): ReactNode {
               <strong>{steering.sessions.length} review round{steering.sessions.length === 1 ? "" : "s"} waiting for guidance</strong>
               {steering.sessions.map((session) => (
                 <button key={session.id} type="button" onClick={() => steering.open(session.id)} style={{ display: "block", marginTop: 8 }}>
-                  Guide {session.itemId} · since {session.waitingSince ?? "an unknown time"}
+                  Guide {session.itemId} · {waitingFor(session.waitingSince)}
                 </button>
               ))}
             </section>

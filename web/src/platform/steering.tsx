@@ -15,6 +15,7 @@ import {
   questionSteeringSession,
 } from "../clients/steering";
 import { connectConversation, connectHubEvents } from "../clients/streams";
+import { waitingFor } from "./waiting-time";
 
 const GUIDANCE_LIMIT = 8 * 1024;
 const REFRESH_INTERVAL_MS = 5_000;
@@ -195,7 +196,7 @@ function SteeringModal({
         <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
           <div>
             <h2 id="steering-title" style={{ margin: 0 }}>{session?.round === "pass-limit" ? "Review pass limit reached" : "Guide this review round"}</h2>
-            {session?.waitingSince && <small>Waiting since {session.waitingSince}</small>}
+            {session && <small>{waitingFor(session.waitingSince)}</small>}
           </div>
           <button type="button" aria-label="Close steering" onClick={onClose}>×</button>
         </div>
@@ -261,7 +262,7 @@ export function SteeringButton({ itemId }: { itemId: string }): ReactNode {
   if (!session) return null;
   return (
     <button type="button" onClick={() => steering.open(session.id)}>
-      Needs guidance · waiting since {session.waitingSince ?? "an unknown time"}
+      Needs guidance · {waitingFor(session.waitingSince)}
     </button>
   );
 }

@@ -52,6 +52,16 @@ async function openModal(): Promise<HTMLElement> {
   return dialog;
 }
 
+it("describes the elapsed wait without exposing its timestamp", async () => {
+  const waitingSince = new Date(Date.now() - (5 * 24 + 1) * 60 * 60 * 1_000).toISOString();
+  api.steeringSessions["steering-review-1"] = aSteeringSession({ waitingSince });
+
+  const dialog = await openModal();
+
+  expect(within(dialog).getByText("waiting for 5 days")).toBeTruthy();
+  expect(dialog.textContent).not.toContain(waitingSince);
+});
+
 it("cannot build with empty guidance and manages keyboard focus", async () => {
   const dialog = await openModal();
   const guidance = within(dialog).getByLabelText("Guidance for the implementing agent");

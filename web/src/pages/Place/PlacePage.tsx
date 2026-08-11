@@ -16,6 +16,7 @@ import { WorkItemDetail } from "../../components/WorkItemDetail";
 import { addressOf, OVERVIEW } from "../../platform/route";
 import { Launcher } from "./Launcher";
 import { useSteering } from "../../platform/steering";
+import { waitingFor } from "../../platform/waiting-time";
 import { PromptConfiguration } from "../Settings/PromptConfiguration";
 
 // The page shows live work, so it polls on the same cadence as the overview.
@@ -99,7 +100,7 @@ export function PlacePage({ placeId }: { placeId: string }): ReactNode {
         {view?.found === false && <NotFound placeId={placeId} />}
         {steering.sessions.filter((session) => session.locationId === placeId).map((session) => (
           <button key={session.id} type="button" onClick={() => steering.open(session.id)}>
-            {session.itemId} needs guidance · waiting since {session.waitingSince ?? "an unknown time"}
+            {session.itemId} needs guidance · {waitingFor(session.waitingSince)}
           </button>
         ))}
         {view?.found === true && (
