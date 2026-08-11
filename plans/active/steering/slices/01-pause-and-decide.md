@@ -2,12 +2,12 @@
 
 **Discharges:** IB §1 (durable wait, unbounded, no second satellite, own execution
 row, stable identity), IB §2 (pause points, three decisions, first decision wins,
-named endings, opt-in setting).
+named endings, default-on setting with explicit opt-out).
 
-**Demo:** with steering switched on for a place, a local review round pauses instead of
-implementing; the run reports that it needs input; sending each of the three decisions
-by hand (through orchestration tooling, before any interface exists) resumes the loop
-correspondingly; with steering off, the loop behaves exactly as before.
+**Demo:** a local review round pauses by default instead of implementing; the run
+reports that it needs input; sending each of the three decisions by hand (through
+orchestration tooling, before any interface exists) resumes the loop correspondingly;
+with steering explicitly off, the loop behaves exactly as before.
 
 ## Tasks
 
