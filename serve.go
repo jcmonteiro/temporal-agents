@@ -24,6 +24,7 @@ import (
 	"temporal-agents/internal/agenthub/hubtemporal"
 	"temporal-agents/internal/gitcli"
 	"temporal-agents/internal/httpapi"
+	"temporal-agents/internal/identity"
 	"temporal-agents/internal/instruction"
 	"temporal-agents/internal/notification"
 	"temporal-agents/internal/notification/notificationpg"
@@ -120,6 +121,13 @@ func parseServeFlags(args []string) (serveOptions, error) {
 	}
 	if strings.TrimSpace(options.address) == "" {
 		return serveOptions{}, errors.New("--addr must not be empty")
+	}
+	for index, configured := range options.allowedOrigins {
+		origin, err := identity.ParseBrowserOrigin(configured)
+		if err != nil {
+			return serveOptions{}, fmt.Errorf("--allow-origin: %w", err)
+		}
+		options.allowedOrigins[index] = origin
 	}
 	return options, nil
 }
@@ -312,6 +320,10 @@ func runAPIServer(options serveOptions) error {
 	if err != nil {
 		return err
 	}
+	allowedOrigins := append(
+		localOrigins(options.address, allowedHosts, options.tlsCert != ""),
+		options.allowedOrigins...,
+	)
 	loopback, err := isLoopbackAddress(options.address)
 	if err != nil {
 		return err
@@ -402,7 +414,7 @@ func runAPIServer(options serveOptions) error {
 	// Signing in is opened before anything is served, so a hub configured with a
 	// provider it cannot reach stops here with a message instead of failing at an
 	// operator's first click.
-	signIn, err := openIdentity(ctx, dsn, identityOptions)
+	signIn, err := openIdentity(ctx, dsn, identityOptions, allowedOrigins)
 	if err != nil {
 		return err
 	}
@@ -471,7 +483,6 @@ func runAPIServer(options serveOptions) error {
 		Places:        hubplaces.Adapter{Registry: service},
 	}
 
-	allowedOrigins := append(localOrigins(options.address, allowedHosts, options.tlsCert != ""), options.allowedOrigins...)
 	api, err := httpapi.New(service, httpapi.Options{
 		Logger:               slog.Default(),
 		AllowedHosts:         allowedHosts,

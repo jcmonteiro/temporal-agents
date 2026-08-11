@@ -38,7 +38,7 @@ func TestParseServeFlagsMakesExposureExplicit(t *testing.T) {
 		"--tls-key", "/run/secrets/hub.key",
 		"--allow-host", "hub.example.test",
 		"--allow-origin", "http://127.0.0.1:3001",
-		"--allow-origin=https://hub.example.test",
+		"--allow-origin=https://hub.example.test/",
 	})
 	if err != nil {
 		t.Fatalf("parseServeFlags: %v", err)
@@ -70,11 +70,18 @@ func TestParseServeFlagsMakesExposureExplicit(t *testing.T) {
 // origin and positional arguments are all rejected rather than interpreted.
 func TestParseServeFlagsRefusesAmbiguousInput(t *testing.T) {
 	cases := map[string][]string{
-		"empty address":       {"--addr="},
-		"empty origin":        {"--allow-origin", "  "},
-		"empty host":          {"--allow-host", "  "},
-		"positional argument": {"unexpected"},
-		"unknown option":      {"--listen", ":9000"},
+		"empty address":        {"--addr="},
+		"empty origin":         {"--allow-origin", "  "},
+		"wildcard origin":      {"--allow-origin", "*"},
+		"opaque origin":        {"--allow-origin", "null"},
+		"origin with path":     {"--allow-origin", "https://ui.example/app"},
+		"origin with query":    {"--allow-origin", "https://ui.example?mode=dev"},
+		"origin with fragment": {"--allow-origin", "https://ui.example/#app"},
+		"origin with user":     {"--allow-origin", "https://user@ui.example"},
+		"non-HTTP origin":      {"--allow-origin", "file://ui.example"},
+		"empty host":           {"--allow-host", "  "},
+		"positional argument":  {"unexpected"},
+		"unknown option":       {"--listen", ":9000"},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {

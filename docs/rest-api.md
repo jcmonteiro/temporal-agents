@@ -51,7 +51,7 @@ The routes are:
 
 | Route | Purpose |
 |---|---|
-| `GET /api/v1/auth/sign-in?return=<path>` | Redirects to the provider. `return` is honoured only when it is a path inside the application. |
+| `GET /api/v1/auth/sign-in?return=<target>` | Redirects to the provider. `return` is honoured only when it is an application-relative path or an absolute URL on an exact `--allow-origin` frontend origin. |
 | `GET /api/v1/auth/callback` | Where the provider sends the browser back. Sets the session cookie and redirects. |
 | `GET /api/v1/auth/session` | Who the request is made by (`session.v1`). |
 | `DELETE /api/v1/auth/session` | Ends the session immediately and clears the cookie. |
@@ -106,8 +106,9 @@ process itself still listens on loopback. The proxy must keep the upstream conne
 on the same host and must preserve the client's `Authorization` header unchanged.
 
 The server allows its own configured origins for the bundled UI. Each additional
-browser origin must be listed separately. For example, a UI on port 3001 that calls
-the API on port 3000 needs:
+browser origin must be listed separately. An allowed value must be an exact HTTP(S)
+origin: credentials, paths, queries, fragments, `*`, and `null` are rejected at
+startup. For example, a UI on port 3001 that calls the API on port 3000 needs:
 
 ```sh
 temporal-agents serve --allow-origin http://127.0.0.1:3001
@@ -119,8 +120,10 @@ exact allowlisted origin with `Access-Control-Allow-Credentials: true`. Listing 
 origin does not allow cross-site mutations.
 
 The bundled UI uses `credentials: "include"`. Its API endpoint defaults to the
-same-origin `/api/v1` path. Set the versioned endpoint when building a bundle that
-calls a sibling origin directly:
+same-origin `/api/v1` path. For a separate sibling origin, sign-in carries the UI's
+absolute return URL; the API accepts it only because that UI origin is allowlisted.
+Set the versioned endpoint when building a bundle that calls a sibling origin
+directly:
 
 ```sh
 VITE_AGENT_HUB_API_URL=http://127.0.0.1:3000/api/v1 pnpm --dir web build
@@ -489,7 +492,9 @@ fields and multiple JSON documents.
   origin is configured; a cross-site request remains blocked. Loopback binding is no
   defence: any page can send a request to a local port.
 - Signing in is server-side. No provider token, refresh token or identity ever reaches
-  the browser, and the session cookie is script-inaccessible and same-site.
+  the browser, and the session cookie is script-inaccessible and same-site. A callback
+  returns only to an application-relative path or an absolute URL whose exact origin
+  is in the frontend allowlist; every other requested target becomes `/`.
 - A callback is accepted once, only when it is bound to a sign-in this server started
   for this browser (state, nonce, PKCE, and a server-side pending record). Which check
   refused a callback is never disclosed.

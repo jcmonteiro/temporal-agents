@@ -149,7 +149,7 @@ type signInService struct {
 // openIdentity wires the identity context: the provider adapter, the Postgres store
 // and the core over them. It returns nil when this deployment configures no
 // provider, which is the mode that still serves an open (or token-only) API.
-func openIdentity(ctx context.Context, dsn string, options identityOptions) (*signInService, error) {
+func openIdentity(ctx context.Context, dsn string, options identityOptions, allowedReturnOrigins []string) (*signInService, error) {
 	if !options.configured() {
 		return nil, nil
 	}
@@ -171,11 +171,12 @@ func openIdentity(ctx context.Context, dsn string, options identityOptions) (*si
 		return nil, fmt.Errorf("could not reach the identity provider: %w", err)
 	}
 	service, err := identity.NewService(identity.Dependencies{
-		Provider:       provider,
-		Sessions:       store,
-		Principals:     store,
-		PendingSignIns: store,
-		RedirectURI:    options.redirectURI,
+		Provider:             provider,
+		Sessions:             store,
+		Principals:           store,
+		PendingSignIns:       store,
+		RedirectURI:          options.redirectURI,
+		AllowedReturnOrigins: allowedReturnOrigins,
 	})
 	if err != nil {
 		store.Close()

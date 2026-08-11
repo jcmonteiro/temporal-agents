@@ -171,7 +171,8 @@ type Options struct {
 	// other name must be explicit to prevent DNS rebinding.
 	AllowedHosts []string
 	// AllowedOrigins lists the browser origins allowed to call the API cross-origin.
-	// It is empty by default. A request that supplies any other Origin is rejected.
+	// Each value must be an HTTP(S) origin with no credentials, path, query, or
+	// fragment. It is empty by default. Any other request Origin is rejected.
 	AllowedOrigins []string
 	// AuthToken, when set, requires an Authorization: Bearer header with this value.
 	// The composition root requires it whenever the listener is not loopback. It is a
@@ -346,12 +347,12 @@ func New(view WorkView, options Options) (*Server, error) {
 			s.allowedHosts[canonical] = struct{}{}
 		}
 	}
-	for _, origin := range options.AllowedOrigins {
-		if trimmed := strings.TrimSpace(origin); trimmed != "" && trimmed != "*" {
-			// A wildcard is refused silently rather than honoured: it would expose an
-			// unauthenticated API to every page a browser visits.
-			s.allowedOrigins[trimmed] = true
+	for _, configured := range options.AllowedOrigins {
+		origin, err := identity.ParseBrowserOrigin(configured)
+		if err != nil {
+			return nil, err
 		}
+		s.allowedOrigins[origin] = true
 	}
 	s.handler = s.buildHandler()
 	return s, nil

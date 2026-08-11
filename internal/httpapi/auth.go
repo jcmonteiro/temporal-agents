@@ -28,6 +28,7 @@ import (
 // *identity.Service implements it.
 type SignIn interface {
 	// BeginSignIn starts a sign-in for a browser that wants to end up at returnTo.
+	// The identity core validates it against its configured frontend origins.
 	BeginSignIn(ctx context.Context, returnTo string) (identity.SignIn, error)
 	// CompleteSignIn finishes one, or refuses it.
 	CompleteSignIn(ctx context.Context, callback identity.Callback) (identity.Grant, error)
@@ -162,8 +163,8 @@ func PrincipalFrom(ctx context.Context) (identity.Principal, bool) {
 // handleSignIn sends the browser to the provider.
 //
 // The requested destination is carried in the pending record rather than in the
-// redirect, so nothing a consumer supplies is ever reflected into a Location header
-// (see identity.SafeReturnPath for the narrowing the core applies to it).
+// provider redirect. The identity core narrows it to an application path or an
+// absolute URL on an explicitly allowed frontend origin.
 func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 	if !s.allowSignInAttempt(w, r) {
 		return

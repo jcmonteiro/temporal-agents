@@ -173,7 +173,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			// The answer depends on the request's origin, so a cache must not serve one
 			// origin's response to another.
 			header.Add("Vary", "Origin")
-			header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			header.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 			header.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, If-None-Match")
 			header.Set("Access-Control-Expose-Headers", strings.Join([]string{
 				"ETag", "Link", requestIDHeader, "Retry-After", "Deprecation", "Sunset",

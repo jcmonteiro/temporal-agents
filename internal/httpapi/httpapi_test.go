@@ -663,7 +663,7 @@ func TestCORSRejectsUnlistedOriginsAndAllowsCredentialedExactMatches(t *testing.
 	}
 
 	allowed := newTestServer(t, view, func(options *Options) {
-		options.AllowedOrigins = []string{"https://hub.example", "*"}
+		options.AllowedOrigins = []string{"https://hub.example"}
 	})
 	for origin, want := range map[string]struct {
 		status      int
@@ -689,6 +689,26 @@ func TestCORSRejectsUnlistedOriginsAndAllowsCredentialedExactMatches(t *testing.
 		if got := res.Header().Get("Access-Control-Allow-Credentials"); got != wantCredentials {
 			t.Errorf("origin %s allows credentials as %q, want %q", origin, got, wantCredentials)
 		}
+		if want.allowOrigin != "" && !strings.Contains(res.Header().Get("Access-Control-Allow-Methods"), http.MethodPatch) {
+			t.Errorf("origin %s does not advertise PATCH: %q", origin, res.Header().Get("Access-Control-Allow-Methods"))
+		}
+	}
+}
+
+// TestInvalidAllowedOriginsStopTheServer pins validation at the adapter boundary,
+// including callers that do not use the serve command's flag parser.
+func TestInvalidAllowedOriginsStopTheServer(t *testing.T) {
+	for _, origin := range []string{"*", "null", "https://ui.example/app"} {
+		t.Run(origin, func(t *testing.T) {
+			_, err := New(&viewStub{}, Options{
+				AllowUnauthenticated: true,
+				AllowedOrigins:       []string{origin},
+			})
+
+			if err == nil {
+				t.Fatalf("New with origin %q = nil error, want a refusal", origin)
+			}
+		})
 	}
 }
 

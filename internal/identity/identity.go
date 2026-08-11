@@ -18,6 +18,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -155,8 +157,8 @@ type PendingSignIn struct {
 	// CodeVerifier is the PKCE verifier whose challenge went to the provider, so an
 	// intercepted code cannot be exchanged by anyone else.
 	CodeVerifier string
-	// ReturnTo is where the browser is sent once signed in. It is always a path
-	// inside this application (see SafeReturnPath).
+	// ReturnTo is where the browser is sent once signed in. It is either a path
+	// inside this application or an absolute URL on an allowlisted frontend origin.
 	ReturnTo string
 	// StartedAt is when the sign-in began.
 	StartedAt time.Time
@@ -171,6 +173,66 @@ func (p PendingSignIn) Expired(now time.Time) bool { return !now.Before(p.Expire
 // DefaultReturnPath is where a browser lands when it did not ask for anywhere in
 // particular, or asked for somewhere this server will not send it.
 const DefaultReturnPath = "/"
+
+// ReturnTarget is a callback destination that cannot name an origin unless the
+// operator explicitly allowed it.
+type ReturnTarget struct{ value string }
+
+// String returns the validated destination for a Location header.
+func (t ReturnTarget) String() string {
+	if t.value == "" {
+		return DefaultReturnPath
+	}
+	return t.value
+}
+
+// DefaultReturnTarget is the safe destination used when a requested target is not
+// valid or is not allowlisted.
+func DefaultReturnTarget() ReturnTarget { return ReturnTarget{value: DefaultReturnPath} }
+
+// NewReturnTarget accepts either an application-relative path or an absolute HTTP(S)
+// URL on one of the exact allowed origins. It rejects every other absolute URL.
+func NewReturnTarget(candidate string, allowedOrigins []string) (ReturnTarget, error) {
+	target := strings.TrimSpace(candidate)
+	if strings.HasPrefix(target, "/") {
+		if safe := SafeReturnPath(target); safe == target {
+			return ReturnTarget{value: safe}, nil
+		}
+		return ReturnTarget{}, fmt.Errorf("invalid relative return target %q", candidate)
+	}
+	parsed, err := url.Parse(target)
+	if err != nil || !parsed.IsAbs() || parsed.Opaque != "" || parsed.User != nil || parsed.Host == "" {
+		return ReturnTarget{}, fmt.Errorf("invalid absolute return target %q", candidate)
+	}
+	origin, err := ParseBrowserOrigin(parsed.Scheme + "://" + parsed.Host)
+	if err != nil {
+		return ReturnTarget{}, fmt.Errorf("invalid absolute return target %q", candidate)
+	}
+	for _, allowed := range allowedOrigins {
+		if origin == allowed {
+			return ReturnTarget{value: target}, nil
+		}
+	}
+	return ReturnTarget{}, fmt.Errorf("return target origin %q is not allowed", origin)
+}
+
+// ParseBrowserOrigin validates and canonicalizes one browser origin. Only HTTP(S)
+// origins are accepted; credentials, paths, queries, fragments, wildcard and opaque
+// origins are not origins this service can trust.
+func ParseBrowserOrigin(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || trimmed == "*" || strings.EqualFold(trimmed, "null") {
+		return "", fmt.Errorf("invalid browser origin %q", raw)
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.Host == "" || parsed.Hostname() == "" || parsed.User != nil || parsed.Opaque != "" ||
+		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.ForceQuery ||
+		parsed.Fragment != "" {
+		return "", fmt.Errorf("invalid browser origin %q", raw)
+	}
+	return parsed.Scheme + "://" + parsed.Host, nil
+}
 
 // SafeReturnPath narrows a requested destination to a path inside this
 // application. Anything else — an absolute URL, a scheme-relative "//host/path", a

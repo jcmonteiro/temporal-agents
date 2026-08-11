@@ -37,6 +37,9 @@ type Dependencies struct {
 	// RedirectURI is this deployment's own callback, as registered with the
 	// provider. It travels in both exchanges and must be identical in each.
 	RedirectURI string
+	// AllowedReturnOrigins are the exact frontend origins an absolute callback
+	// destination may name. Relative application paths need no entry.
+	AllowedReturnOrigins []string
 	// SessionLifetime and SignInLifetime override the defaults above.
 	SessionLifetime time.Duration
 	SignInLifetime  time.Duration
@@ -49,15 +52,16 @@ type Dependencies struct {
 
 // Service implements the sign-in sequence over the ports.
 type Service struct {
-	provider        Provider
-	sessions        SessionStore
-	principals      PrincipalStore
-	pending         PendingSignInStore
-	redirectURI     string
-	sessionLifetime time.Duration
-	signInLifetime  time.Duration
-	newToken        func() (string, error)
-	now             func() time.Time
+	provider             Provider
+	sessions             SessionStore
+	principals           PrincipalStore
+	pending              PendingSignInStore
+	redirectURI          string
+	allowedReturnOrigins []string
+	sessionLifetime      time.Duration
+	signInLifetime       time.Duration
+	newToken             func() (string, error)
+	now                  func() time.Time
 }
 
 // Compile-time proof the service is usable through the transport's one question.
@@ -79,16 +83,25 @@ func NewService(dependencies Dependencies) (*Service, error) {
 	case dependencies.RedirectURI == "":
 		return nil, errors.New("the redirect URI is required")
 	}
+	allowedReturnOrigins := make([]string, 0, len(dependencies.AllowedReturnOrigins))
+	for _, configured := range dependencies.AllowedReturnOrigins {
+		origin, err := ParseBrowserOrigin(configured)
+		if err != nil {
+			return nil, err
+		}
+		allowedReturnOrigins = append(allowedReturnOrigins, origin)
+	}
 	service := &Service{
-		provider:        dependencies.Provider,
-		sessions:        dependencies.Sessions,
-		principals:      dependencies.Principals,
-		pending:         dependencies.PendingSignIns,
-		redirectURI:     dependencies.RedirectURI,
-		sessionLifetime: dependencies.SessionLifetime,
-		signInLifetime:  dependencies.SignInLifetime,
-		newToken:        dependencies.NewToken,
-		now:             dependencies.Now,
+		provider:             dependencies.Provider,
+		sessions:             dependencies.Sessions,
+		principals:           dependencies.Principals,
+		pending:              dependencies.PendingSignIns,
+		redirectURI:          dependencies.RedirectURI,
+		allowedReturnOrigins: allowedReturnOrigins,
+		sessionLifetime:      dependencies.SessionLifetime,
+		signInLifetime:       dependencies.SignInLifetime,
+		newToken:             dependencies.NewToken,
+		now:                  dependencies.Now,
 	}
 	if service.sessionLifetime <= 0 {
 		service.sessionLifetime = DefaultSessionLifetime
@@ -127,13 +140,17 @@ func (s *Service) BeginSignIn(ctx context.Context, returnTo string) (SignIn, err
 	if err != nil {
 		return SignIn{}, err
 	}
+	target, err := NewReturnTarget(returnTo, s.allowedReturnOrigins)
+	if err != nil {
+		target = DefaultReturnTarget()
+	}
 	now := s.now()
 	pending := PendingSignIn{
 		TokenHash:    HashToken(requestToken),
 		State:        state,
 		Nonce:        nonce,
 		CodeVerifier: verifier,
-		ReturnTo:     SafeReturnPath(returnTo),
+		ReturnTo:     target.String(),
 		StartedAt:    now,
 		ExpiresAt:    now.Add(s.signInLifetime),
 	}
@@ -187,7 +204,8 @@ type Grant struct {
 	Principal Principal
 	// ExpiresAt is when the session ends by itself.
 	ExpiresAt time.Time
-	// ReturnTo is the path inside this application to send the browser to.
+	// ReturnTo is the validated application path or allowlisted frontend URL to
+	// send the browser to.
 	ReturnTo string
 }
 
@@ -253,11 +271,15 @@ func (s *Service) CompleteSignIn(ctx context.Context, callback Callback) (Grant,
 	if err := s.sessions.CreateSession(ctx, session); err != nil {
 		return Grant{}, err
 	}
+	target, err := NewReturnTarget(pending.ReturnTo, s.allowedReturnOrigins)
+	if err != nil {
+		target = DefaultReturnTarget()
+	}
 	return Grant{
 		SessionToken: sessionToken,
 		Principal:    identity.Principal,
 		ExpiresAt:    session.ExpiresAt,
-		ReturnTo:     SafeReturnPath(pending.ReturnTo),
+		ReturnTo:     target.String(),
 	}, nil
 }
 
