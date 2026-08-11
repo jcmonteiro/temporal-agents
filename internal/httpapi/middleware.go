@@ -169,6 +169,7 @@ func (s *Server) cors(next http.Handler) http.Handler {
 			}
 			header := w.Header()
 			header.Set("Access-Control-Allow-Origin", origin)
+			header.Set("Access-Control-Allow-Credentials", "true")
 			// The answer depends on the request's origin, so a cache must not serve one
 			// origin's response to another.
 			header.Add("Vary", "Origin")

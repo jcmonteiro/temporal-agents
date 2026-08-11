@@ -507,6 +507,40 @@ func TestAnotherSitesPageCannotChangeAnything(t *testing.T) {
 	}
 }
 
+// TestOnlyAConfiguredSameSiteSiblingCanChangeAnything pins every part of the
+// exception: the request must name an Origin, that exact Origin must be configured,
+// and the browser must classify it as same-site rather than cross-site.
+func TestOnlyAConfiguredSameSiteSiblingCanChangeAnything(t *testing.T) {
+	const allowedOrigin = "http://127.0.0.1:3001"
+	server, _ := newAuthenticatedServer(t, &stubProvider{principal: theOperator},
+		func(options *Options) { options.AllowedOrigins = []string{allowedOrigin} })
+	session := signInThroughTheBrowser(t, server)
+
+	cases := map[string]struct {
+		origin string
+		site   string
+	}{
+		"same-site without Origin":  {site: "same-site"},
+		"unlisted same-site Origin": {origin: "http://127.0.0.1:3002", site: "same-site"},
+		"listed cross-site Origin":  {origin: allowedOrigin, site: "cross-site"},
+	}
+	for name, testCase := range cases {
+		t.Run(name, func(t *testing.T) {
+			mutation := newRequest(http.MethodDelete, BasePath+"/dismissals/run:run-1", nil)
+			mutation.AddCookie(session)
+			mutation.Header.Set("Origin", testCase.origin)
+			mutation.Header.Set("Sec-Fetch-Site", testCase.site)
+			response := httptest.NewRecorder()
+
+			server.ServeHTTP(response, mutation)
+
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", response.Code)
+			}
+		})
+	}
+}
+
 // TestReadingIsUnaffectedByTheCrossSiteRule pins the other half: the rule guards
 // changes, and does not turn an ordinary read into a browser-only endpoint.
 func TestReadingIsUnaffectedByTheCrossSiteRule(t *testing.T) {

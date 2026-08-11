@@ -22,6 +22,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
@@ -29,9 +30,19 @@ it("sends the browser's own credential, and never one of its own", async () => {
   await fetchJSON("/runs");
 
   expect(calls).toHaveLength(1);
-  expect(calls[0].init?.credentials).toBe("same-origin");
+  expect(calls[0].init?.credentials).toBe("include");
   const headers = (calls[0].init?.headers ?? {}) as Record<string, string>;
   expect(headers.Authorization).toBeUndefined();
+});
+
+it("calls a configured sibling API directly", async () => {
+  vi.stubEnv("VITE_AGENT_HUB_API_URL", "http://127.0.0.1:3000/api/v1");
+  vi.resetModules();
+  const { fetchJSON: fetchFromSibling } = await import("./http");
+
+  await fetchFromSibling("/runs");
+
+  expect(calls[0].url).toBe("http://127.0.0.1:3000/api/v1/runs");
 });
 
 it("tells every listener once when the hub refuses the credential", async () => {

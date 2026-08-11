@@ -645,9 +645,10 @@ func TestHostMustBeExplicitlyAllowed(t *testing.T) {
 	}
 }
 
-// TestCORSRejectsUnlistedOriginsAndAllowsExactMatches pins that a supplied Origin
-// is an access decision, not only a response-header decision.
-func TestCORSRejectsUnlistedOriginsAndAllowsExactMatches(t *testing.T) {
+// TestCORSRejectsUnlistedOriginsAndAllowsCredentialedExactMatches pins that a
+// supplied Origin is an access decision, not only a response-header decision. An
+// allowed browser must also be able to send its session cookie.
+func TestCORSRejectsUnlistedOriginsAndAllowsCredentialedExactMatches(t *testing.T) {
 	view := &viewStub{}
 	denied := newTestServer(t, view)
 	req := newRequest(http.MethodGet, BasePath+"/runs", nil)
@@ -680,6 +681,13 @@ func TestCORSRejectsUnlistedOriginsAndAllowsExactMatches(t *testing.T) {
 		}
 		if got := res.Header().Get("Access-Control-Allow-Origin"); got != want.allowOrigin {
 			t.Errorf("origin %s allowed as %q, want %q", origin, got, want.allowOrigin)
+		}
+		wantCredentials := ""
+		if want.allowOrigin != "" {
+			wantCredentials = "true"
+		}
+		if got := res.Header().Get("Access-Control-Allow-Credentials"); got != wantCredentials {
+			t.Errorf("origin %s allows credentials as %q, want %q", origin, got, wantCredentials)
 		}
 	}
 }

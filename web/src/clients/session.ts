@@ -1,3 +1,4 @@
+import { apiAddress } from "../config/api";
 import { err, ok, type Result } from "../utils/result";
 import { fetchJSON, send } from "./http";
 
@@ -41,5 +42,5 @@ export async function endSession(): Promise<Result<void, Error>> {
  * so this can never become an open redirect.
  */
 export function signInAddress(returnTo: string): string {
-  return `/api/v1/auth/sign-in?return=${encodeURIComponent(returnTo)}`;
+  return apiAddress(`/auth/sign-in?return=${encodeURIComponent(returnTo)}`);
 }

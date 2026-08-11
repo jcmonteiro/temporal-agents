@@ -140,8 +140,11 @@ The API is served under /api/v1. Its OpenAPI contract is available at
 The API can expose workflow goals and prompts, so it binds to 127.0.0.1:3000 by
 default. A non-loopback --addr requires TLS and a strong AGENT_HUB_AUTH_TOKEN.
 Requests must use a loopback Host, the concrete listener host, or a name listed with
---allow-host. No cross-origin browser access is allowed by default; list each trusted
-frontend origin with --allow-origin.
+--allow-host. No cross-origin browser access is allowed by default. A session-based
+frontend on another same-site origin must be listed with --allow-origin and must use
+fetch with credentials: 'include'. The API then answers with credentialed CORS. The
+bundled UI uses that fetch mode; set VITE_AGENT_HUB_API_URL to the versioned API
+endpoint when building it for another origin.
 
 Every route needs a credential, except signing in, the provider's callback, and the
 health probe. A person signs in with an identity provider: the browser is redirected

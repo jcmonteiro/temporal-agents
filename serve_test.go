@@ -195,6 +195,8 @@ func TestServeHelpExplainsTheSecurityBoundary(t *testing.T) {
 		"DATABASE_URL",
 		"TEMPORAL_ADDRESS",
 		"--allow-origin",
+		"credentials: 'include'",
+		"VITE_AGENT_HUB_API_URL",
 		"--allow-host",
 		"--tls-cert",
 		"--tls-key",

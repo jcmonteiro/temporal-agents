@@ -105,17 +105,31 @@ reachable from another host, `AGENT_HUB_AUTH_TOKEN` is required even though the
 process itself still listens on loopback. The proxy must keep the upstream connection
 on the same host and must preserve the client's `Authorization` header unchanged.
 
-The server explicitly allows its own configured origins for the bundled UI. Each
-additional browser origin must be listed separately:
+The server allows its own configured origins for the bundled UI. Each additional
+browser origin must be listed separately. For example, a UI on port 3001 that calls
+the API on port 3000 needs:
 
 ```sh
 temporal-agents serve --allow-origin http://127.0.0.1:3001
 ```
 
+For a session-authenticated browser client, the UI and API must be same-site. The
+client must send each request with Fetch `credentials: "include"`; the API answers an
+exact allowlisted origin with `Access-Control-Allow-Credentials: true`. Listing an
+origin does not allow cross-site mutations.
+
+The bundled UI uses `credentials: "include"`. Its API endpoint defaults to the
+same-origin `/api/v1` path. Set the versioned endpoint when building a bundle that
+calls a sibling origin directly:
+
+```sh
+VITE_AGENT_HUB_API_URL=http://127.0.0.1:3000/api/v1 pnpm --dir web build
+```
+
 `web/dist` is served as a single-page application for local convenience when it
 exists. Use `--web-dir=` for JSON only or `--web-dir <path>` for another bundle.
-Static hosting is independent of the API: the same bundle can be hosted elsewhere
-without changing any API URL or payload.
+Static hosting is independent of the API payload, but a separately hosted bundle
+must be built with `VITE_AGENT_HUB_API_URL` set to the API it calls.
 
 ## Discover the contract
 
@@ -486,7 +500,9 @@ fields and multiple JSON documents.
 - Every request Host must match the loopback names, the concrete listener host, or an
   exact `--allow-host` entry.
 - A supplied browser Origin is rejected unless it is one of the server's own origins
-  or an exact `--allow-origin` entry. Wildcards are not accepted.
+  or an exact `--allow-origin` entry. Wildcards are not accepted. Allowed origins
+  receive credentialed CORS; session-based clients must use Fetch
+  `credentials: "include"`.
 - Requests have body, rate, and time limits. Responses use restrictive browser
   security headers.
 - Postgres remains bound to loopback in the local compose stack.
