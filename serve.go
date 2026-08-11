@@ -77,7 +77,7 @@ type serveOptions struct {
 	// allowedHosts are HTTP Host names accepted in addition to loopback names and
 	// the concrete listener host.
 	allowedHosts []string
-	// allowedOrigins are the browser origins explicitly allowed to read the API.
+	// allowedOrigins are the browser origins explicitly allowed to call the API.
 	allowedOrigins []string
 }
 

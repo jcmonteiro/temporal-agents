@@ -470,8 +470,10 @@ fields and multiple JSON documents.
 
 - There is no unauthenticated mode that can be left on unnoticed: a server that
   neither authenticates nor was explicitly asked not to refuses to start.
-- A change (`POST`, `DELETE`) is refused when the browser reports it as cross-site.
-  Loopback binding is no defence: any page can send a request to a local port.
+- A change (`POST`, `PUT`, `PATCH`, `DELETE`) is refused when the browser reports
+  an untrusted origin. A same-site UI on another port is trusted only when its exact
+  origin is configured; a cross-site request remains blocked. Loopback binding is no
+  defence: any page can send a request to a local port.
 - Signing in is server-side. No provider token, refresh token or identity ever reaches
   the browser, and the session cookie is script-inaccessible and same-site.
 - A callback is accepted once, only when it is bound to a sign-in this server started

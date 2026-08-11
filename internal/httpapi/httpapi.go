@@ -170,9 +170,8 @@ type Options struct {
 	// loopback names localhost, 127.0.0.1, and ::1 are accepted by default. Every
 	// other name must be explicit to prevent DNS rebinding.
 	AllowedHosts []string
-	// AllowedOrigins lists the browser origins allowed to read the API
-	// cross-origin. It is empty by default. A request that supplies any other Origin
-	// is rejected.
+	// AllowedOrigins lists the browser origins allowed to call the API cross-origin.
+	// It is empty by default. A request that supplies any other Origin is rejected.
 	AllowedOrigins []string
 	// AuthToken, when set, requires an Authorization: Bearer header with this value.
 	// The composition root requires it whenever the listener is not loopback. It is a
