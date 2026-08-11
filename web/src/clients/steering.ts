@@ -26,7 +26,7 @@ export function questionSteeringSession(
 
 export function decideSteeringSession(
   id: string,
-  decision: "guide" | "skip" | "stop",
+  decision: "guide" | "skip" | "stop" | "continue" | "accept",
   guidance?: string,
 ): Promise<Result<SteeringSessionDTO, Error>> {
   return postJSON<SteeringSessionDTO>(

@@ -224,7 +224,11 @@ func (s *Service) Decide(ctx context.Context, id string, decision Decision) (Ses
 	if strings.TrimSpace(id) == "" {
 		return Session{}, fmt.Errorf("%w: a decision names the session it answers", ErrInvalidDecision)
 	}
-	if err := decision.Validate(); err != nil {
+	session, err := s.Sessions.Session(ctx, id)
+	if err != nil {
+		return Session{}, unavailable("read the steering session", err)
+	}
+	if err := session.Round.ValidateDecision(decision); err != nil {
 		return Session{}, err
 	}
 	recorded, err := s.Sessions.RecordDecision(ctx, id, decision, s.now())

@@ -8,7 +8,7 @@
 | 4 ✅ | [Live streams](./04-live-streams.md) | the conversation streams into the browser and survives a reload; waiting work announces itself without a refresh |
 | 5 ✅ | [The steering surface](./05-steering-surface.md) | one shared modal, reachable from the overview and from a run page, guides, skips, or stops a loop |
 | 6 ✅ | [Notifications and inbox](./06-notifications-inbox.md) | a waiting decision notifies through existing channels and the hub, is reminded daily, and is found waiting hours later |
-| 7 | [Limit checkpoint](./07-limit-checkpoint.md) | reaching the pass limit asks the operator to continue or accept, and records which happened |
+| 7 ✅ | [Limit checkpoint](./07-limit-checkpoint.md) | reaching the pass limit asks the operator to continue or accept, and records which happened |
 
 Slice 1 is the durable spine (IB §1, §2). Slice 2 makes it reachable. Slices 3–5 are
 the operator's experience (IB §3). Slice 6 closes the "nobody was watching" gap

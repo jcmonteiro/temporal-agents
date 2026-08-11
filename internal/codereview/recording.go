@@ -76,6 +76,8 @@ type ReviewState struct {
 	ParentWorkflowID string
 	// Pass is which pass of the review loop this row is.
 	Pass int
+	// Resets is how often an operator renewed the pass budget.
+	Resets int
 	// StartedAt and EndedAt come from the workflow's deterministic clock.
 	StartedAt time.Time
 	EndedAt   time.Time
@@ -182,7 +184,7 @@ func (a *Activities) PersistReviewWorkflowState(ctx context.Context, in ReviewSt
 		return execstore.ErrNotConfigured
 	}
 	detail := execstore.Detail{
-		Pass: in.Pass, Converged: in.Converged, Ending: string(in.Ending), Error: in.Error,
+		Pass: in.Pass, Resets: in.Resets, Converged: in.Converged, Ending: string(in.Ending), Error: in.Error,
 		WaitingSince: waitingSince(in.WaitingSince), WaitingSession: in.WaitingSession,
 		Directory: in.Place.Directory, Repository: in.Place.Repository,
 		Instructions: instructionUses(in.Instructions),
@@ -312,6 +314,7 @@ func startReviewState(ctx workflow.Context, in ReviewInput) (ReviewState, error)
 		RunID:            id.RunID,
 		ParentWorkflowID: id.ParentWorkflowID,
 		Pass:             in.Pass,
+		Resets:           in.Resets,
 		StartedAt:        workflow.Now(ctx),
 		Status:           execstore.StatusRunning,
 		Place:            wfplace.Probe(ctx, in.WorkDir),

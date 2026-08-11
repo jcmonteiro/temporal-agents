@@ -243,7 +243,12 @@ func executionNote(e execstore.Execution) string {
 	if e.Detail.Pass > 0 {
 		parts = append(parts, fmt.Sprintf("pass %d", e.Detail.Pass))
 	}
-	if e.Detail.Converged != nil {
+	if e.Detail.Resets > 0 {
+		parts = append(parts, fmt.Sprintf("budget reset %d time(s)", e.Detail.Resets))
+	}
+	if e.Detail.Ending != "" {
+		parts = append(parts, "ended: "+e.Detail.Ending)
+	} else if e.Detail.Converged != nil {
 		parts = append(parts, convergedLabel(*e.Detail.Converged))
 	}
 	if e.Detail.Addressed != nil {

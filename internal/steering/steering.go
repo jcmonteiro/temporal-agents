@@ -40,10 +40,16 @@ const (
 	ChoiceSkip Choice = "skip"
 	// ChoiceStop ends the loop deliberately, leaving the work needing a human.
 	ChoiceStop Choice = "stop"
+	// ChoiceContinue resets a pass budget at a human checkpoint.
+	ChoiceContinue Choice = "continue"
+	// ChoiceAccept finishes a pass-capped loop as accepted by an operator.
+	ChoiceAccept Choice = "accept"
 )
 
 // Choices lists every decision, in the order an interface offers them.
-func Choices() []Choice { return []Choice{ChoiceGuide, ChoiceSkip, ChoiceStop} }
+func Choices() []Choice {
+	return []Choice{ChoiceGuide, ChoiceSkip, ChoiceStop, ChoiceContinue, ChoiceAccept}
+}
 
 // ValidChoice reports whether choice is one of the three, so a decision arriving
 // from anywhere is refused by name rather than silently treated as one of them.

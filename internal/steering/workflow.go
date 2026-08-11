@@ -33,6 +33,8 @@ const (
 	// RoundRemoteComments is the pause after the pull request's unresolved comments
 	// have been fetched and before the agent addresses them.
 	RoundRemoteComments Round = "remote-comments"
+	// RoundPassLimit is the human checkpoint reached after the autonomous pass budget.
+	RoundPassLimit Round = "pass-limit"
 )
 
 // SessionInput is what the pausing loop tells the session about the round it is
@@ -62,8 +64,36 @@ type SessionInput struct {
 // so nothing may make it depend on anything that changes while a human is thinking.
 func SessionID(loopRunID string) string { return wfid.SteeringWorkflowID(loopRunID) }
 
+// SessionIDFor keeps distinct checkpoints in one workflow run from reusing a
+// decided session. Each identity remains stable for that checkpoint's whole life.
+func SessionIDFor(loopRunID string, round Round) string {
+	id := SessionID(loopRunID)
+	if round == RoundPassLimit {
+		return id + "-pass-limit"
+	}
+	return id
+}
+
 // SessionState is what a reader of the waiting session is told: whether it is still
 // waiting, and the decision it recorded once it is not.
+// ValidateDecision checks both the decision's shape and the vocabulary of this
+// checkpoint mode.
+func (r Round) ValidateDecision(decision Decision) error {
+	if err := decision.Validate(); err != nil {
+		return err
+	}
+	if r == RoundPassLimit {
+		if decision.Choice == ChoiceContinue || decision.Choice == ChoiceAccept || decision.Choice == ChoiceStop {
+			return nil
+		}
+		return fmt.Errorf("%w: %s is not a pass-limit decision", ErrInvalidDecision, decision.Choice)
+	}
+	if decision.Choice == ChoiceGuide || decision.Choice == ChoiceSkip || decision.Choice == ChoiceStop {
+		return nil
+	}
+	return fmt.Errorf("%w: %s is not a review-round decision", ErrInvalidDecision, decision.Choice)
+}
+
 type SessionState struct {
 	// Waiting reports whether the session is still waiting for a decision.
 	Waiting bool
@@ -130,7 +160,7 @@ func SessionWorkflow(ctx workflow.Context, in SessionInput) (decision Decision, 
 		if !sent.Made() {
 			continue
 		}
-		if verr := sent.Validate(); verr != nil {
+		if verr := in.Round.ValidateDecision(sent); verr != nil {
 			workflow.GetLogger(ctx).Warn("refused a steering decision", "round", in.Round, "error", verr)
 			continue
 		}
@@ -197,7 +227,7 @@ type Pause struct {
 // takes its waiting session with it. It is given no timeout of any kind, at any
 // level, because the wait is unbounded.
 func Ask(ctx workflow.Context, in Pause) (Decision, error) {
-	id := SessionID(workflow.GetInfo(ctx).WorkflowExecution.RunID)
+	id := SessionIDFor(workflow.GetInfo(ctx).WorkflowExecution.RunID, in.Round)
 	if err := openSession(ctx, id, in); err != nil {
 		return Decision{}, err
 	}

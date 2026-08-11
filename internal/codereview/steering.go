@@ -46,7 +46,7 @@ func pause(
 	recipient string,
 	waiting func(since time.Time, session string),
 ) (steering.Decision, error) {
-	session := steering.SessionID(workflow.GetInfo(ctx).WorkflowExecution.RunID)
+	session := steering.SessionIDFor(workflow.GetInfo(ctx).WorkflowExecution.RunID, round)
 	waiting(workflow.Now(ctx), session)
 	decision, err := steering.Ask(ctx, steering.Pause{
 		Recipient: recipient, Round: round, Place: where, Material: material,

@@ -97,6 +97,20 @@ it("closes gracefully when another operator decides the round", async () => {
   expect(screen.getByRole("status").textContent).toContain("decided elsewhere");
 });
 
+it("offers continue, accept, and stop at the pass limit", async () => {
+  api.steeringSessions["steering-review-1"] = aSteeringSession({
+    round: "pass-limit",
+    material: "Budget exhausted. Accumulated token cost: 12000.",
+  });
+  const dialog = await openModal();
+
+  expect(within(dialog).getByText(/12000/)).toBeTruthy();
+  expect(within(dialog).getByRole("button", { name: "Continue with a fresh pass budget" })).toBeTruthy();
+  expect(within(dialog).getByRole("button", { name: "Accept the work as finished" })).toBeTruthy();
+  expect(within(dialog).getByRole("button", { name: "Stop the loop" })).toBeTruthy();
+  expect(within(dialog).queryByRole("button", { name: "Build with guidance" })).toBeNull();
+});
+
 it("renders questioning turns in durable sequence and finishes into guidance", async () => {
   const dialog = await openModal();
   const answer = within(dialog).getByLabelText("Answer the questioning agent");

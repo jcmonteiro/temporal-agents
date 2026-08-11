@@ -10,16 +10,16 @@ History states which happened. With steering off, the limit behaves exactly as t
 
 ## Tasks
 
-- [ ] Turn the pass limit into a decision point when steering is on, reusing the same
+- [x] Turn the pass limit into a decision point when steering is on, reusing the same
       waiting unit and the same surface in a decision mode.
-- [ ] Offer continue (counter reset, accumulated cost preserved and displayed), accept
+- [x] Offer continue (counter reset, accumulated cost preserved and displayed), accept
       (loop finished by a human), and stop.
-- [ ] Keep questioning available in this mode, and keep guidance optional here because
+- [x] Keep questioning available in this mode, and keep guidance optional here because
       the decision is not about the next implementation pass.
-- [ ] Record the named ending, and make the reset count and cumulative cost visible both
+- [x] Record the named ending, and make the reset count and cumulative cost visible both
       in the surface and in history.
-- [ ] Keep steering-off behaviour identical to today's limit behaviour.
-- [ ] Tests: workflow tests for continue (counter reset, work proceeds), accept (ends as
+- [x] Keep steering-off behaviour identical to today's limit behaviour.
+- [x] Tests: workflow tests for continue (counter reset, work proceeds), accept (ends as
       accepted), and stop; cost accumulates across resets without double counting;
       steering-off path unchanged; history reports the ending.
 

@@ -3197,7 +3197,8 @@
             "type": "string",
             "enum": [
               "local-review",
-              "remote-comments"
+              "remote-comments",
+              "pass-limit"
             ]
           },
           "state": {
@@ -3226,7 +3227,9 @@
             "enum": [
               "guide",
               "skip",
-              "stop"
+              "stop",
+              "continue",
+              "accept"
             ]
           },
           "decidedAt": {
@@ -3297,7 +3300,9 @@
             "enum": [
               "guide",
               "skip",
-              "stop"
+              "stop",
+              "continue",
+              "accept"
             ]
           },
           "guidance": {

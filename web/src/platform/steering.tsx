@@ -162,7 +162,7 @@ function SteeringModal({
     setBusy(false);
   };
 
-  const decide = async (choice: "guide" | "skip" | "stop"): Promise<void> => {
+  const decide = async (choice: "guide" | "skip" | "stop" | "continue" | "accept"): Promise<void> => {
     if (submitting.current || (choice === "guide" && guidance.trim() === "")) return;
     submitting.current = true;
     setBusy(true);
@@ -194,7 +194,7 @@ function SteeringModal({
       >
         <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
           <div>
-            <h2 id="steering-title" style={{ margin: 0 }}>Guide this review round</h2>
+            <h2 id="steering-title" style={{ margin: 0 }}>{session?.round === "pass-limit" ? "Review pass limit reached" : "Guide this review round"}</h2>
             {session?.waitingSince && <small>Waiting since {session.waitingSince}</small>}
           </div>
           <button type="button" aria-label="Close steering" onClick={onClose}>×</button>
@@ -214,7 +214,7 @@ function SteeringModal({
               </section>
             )}
             <p style={{ margin: 0 }}>{session.tokens ?? 0} questioning tokens · Contributors: {(session.contributors ?? []).join(", ") || "none yet"}</p>
-            <label>
+            {session.round !== "pass-limit" && <label>
               Guidance for the implementing agent
               <textarea
                 ref={guidanceRef}
@@ -224,8 +224,8 @@ function SteeringModal({
                 rows={6}
                 style={{ display: "block", width: "100%" }}
               />
-            </label>
-            <small>{guidance.length} / {GUIDANCE_LIMIT} bytes. Build needs non-empty guidance; use proceed without guidance otherwise.</small>
+            </label>}
+            {session.round !== "pass-limit" && <small>{guidance.length} / {GUIDANCE_LIMIT} bytes. Build needs non-empty guidance; use proceed without guidance otherwise.</small>}
             <fieldset disabled={busy}>
               <legend>Optional questioning · no cost until started</legend>
               <input aria-label="Answer the questioning agent" value={answer} onChange={(event) => setAnswer(event.target.value)} />
@@ -233,9 +233,19 @@ function SteeringModal({
               <button type="button" onClick={() => void question(true)}>Finish into guidance</button>
             </fieldset>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button type="button" disabled={busy || guidance.trim() === ""} title={guidance.trim() === "" ? "Enter guidance before building" : undefined} onClick={() => void decide("guide")}>Build with guidance</button>
-              <button type="button" disabled={busy} onClick={() => void decide("skip")}>Proceed without guidance</button>
-              <button type="button" disabled={busy} onClick={() => void decide("stop")}>Stop the loop</button>
+              {session.round === "pass-limit" ? (
+                <>
+                  <button type="button" disabled={busy} onClick={() => void decide("continue")}>Continue with a fresh pass budget</button>
+                  <button type="button" disabled={busy} onClick={() => void decide("accept")}>Accept the work as finished</button>
+                  <button type="button" disabled={busy} onClick={() => void decide("stop")}>Stop the loop</button>
+                </>
+              ) : (
+                <>
+                  <button type="button" disabled={busy || guidance.trim() === ""} title={guidance.trim() === "" ? "Enter guidance before building" : undefined} onClick={() => void decide("guide")}>Build with guidance</button>
+                  <button type="button" disabled={busy} onClick={() => void decide("skip")}>Proceed without guidance</button>
+                  <button type="button" disabled={busy} onClick={() => void decide("stop")}>Stop the loop</button>
+                </>
+              )}
             </div>
           </>
         )}

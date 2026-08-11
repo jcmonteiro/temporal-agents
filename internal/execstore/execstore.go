@@ -218,6 +218,8 @@ type Detail struct {
 	// Pass is which pass of a looping workflow this row is, since every pass
 	// continues as new and is therefore a row of its own.
 	Pass int `json:"pass,omitempty"`
+	// Resets is how often an operator renewed this loop's autonomous pass budget.
+	Resets int `json:"resets,omitempty"`
 	// Nodes is a fleet parent's per-node breakdown. It is the only home for a
 	// skipped node's outcome: a skipped node starts no child workflow, so it has
 	// no run ID and therefore no row of its own.

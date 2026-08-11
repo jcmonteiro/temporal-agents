@@ -307,6 +307,16 @@ func TestGroupThousands(t *testing.T) {
 	require.Equal(t, "-1,000", groupThousands(-1000))
 }
 
+func TestHistoryNamesTheHumanEndingAndPassBudgetResets(t *testing.T) {
+	rows := historyRows([]execstore.Execution{{
+		WorkflowID: "review-1", Kind: execstore.KindReview,
+		Detail: execstore.Detail{Pass: 4, Resets: 2, Ending: "operator-accepted"},
+	}})
+
+	require.Contains(t, rows[0].Note, "budget reset 2 time(s)")
+	require.Contains(t, rows[0].Note, "ended: operator-accepted")
+}
+
 func TestHistoryRows_NoteShowsWhatEachKindRecorded(t *testing.T) {
 	// A recorded field nothing prints is weight, not memory: the tri-states, the pass
 	// number and the plan correlation all have to reach the operator's row.

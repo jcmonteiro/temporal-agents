@@ -1106,13 +1106,44 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome,
 	// pass cap so the loop cannot run forever.
 	nextPass := in.Pass + 1
 	if nextPass >= MaxReviewPasses {
-		// The loop stopped at the pass cap with feedback still outstanding, which is
-		// explicitly not convergence.
+		if steered(in.Settings) {
+			material := fmt.Sprintf("The autonomous review budget is exhausted after %d passes and %d reset(s). Accumulated token cost: %d.\n\n%s",
+				MaxReviewPasses, in.Resets, total, reviewOutput)
+			decision, derr := pause(ctx, steering.RoundPassLimit, rec.Place, material, in.Initiator,
+				func(since time.Time, session string) {
+					rec.WaitingSince, rec.WaitingSession = since, session
+					recordReviewWaiting(ctx, rec)
+				})
+			if derr != nil {
+				return ReviewOutcome{}, derr
+			}
+			switch decision.Choice {
+			case steering.ChoiceContinue:
+				next := in
+				next.Payload = reviewOutput
+				next.Pass = 0
+				next.Resets++
+				next.TokensSoFar = total
+				return ReviewOutcome{}, workflow.NewContinueAsNewError(ctx, ReviewWorkflow, next)
+			case steering.ChoiceAccept:
+				rec.Converged = boolPtr(false)
+				rec.Ending = EndingOperatorAccepted
+				summary := withTokenTotal(fmt.Sprintf("Review accepted by the operator after %d budget reset(s).", in.Resets), total)
+				if err := notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review accepted", Body: summary}, ""); err != nil {
+					return ReviewOutcome{}, err
+				}
+				return EndedBy(EndingOperatorAccepted, summary), nil
+			default:
+				rec.Converged = boolPtr(false)
+				rec.Ending = EndingOperatorStopped
+				summary := withTokenTotal("Review stopped by the operator at the pass limit.", total)
+				return EndedBy(EndingOperatorStopped, summary), nil
+			}
+		}
+		// Steering off preserves the original bounded autonomous behavior.
 		rec.Converged = boolPtr(false)
 		rec.Ending = EndingPassCap
 		summary := withTokenTotal(fmt.Sprintf("Review stopped after %d pass(es).", MaxReviewPasses), total)
-		// No carried summary here: this terminal pass ran the review agent, so
-		// agentRan is true and summarizeForWebhook summarizes this run directly.
 		if err := notifyComplete(ctx, in.Summary, agentRan, in.WorkDir, notification.Notification{Title: "Local review chain complete", Body: summary}, ""); err != nil {
 			return ReviewOutcome{}, err
 		}

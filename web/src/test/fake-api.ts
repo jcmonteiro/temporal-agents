@@ -187,7 +187,7 @@ export class FakeApi {
     const request = JSON.parse(String(body ?? "{}")) as {
       text?: string;
       finish?: boolean;
-      decision?: "guide" | "skip" | "stop";
+      decision?: "guide" | "skip" | "stop" | "continue" | "accept";
       guidance?: string;
     };
     if (method === "POST" && action === "question") {

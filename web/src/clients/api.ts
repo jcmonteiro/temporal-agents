@@ -154,13 +154,13 @@ export interface SteeringMessageDTO {
 export interface SteeringSessionDTO {
   id: string;
   itemId: string;
-  round: "local-review" | "remote-comments";
+  round: "local-review" | "remote-comments" | "pass-limit";
   state: "waiting" | "decided" | "abandoned";
   waitingSince: string | null;
   locationId: string;
   material?: string;
   guidance?: string;
-  decision?: "guide" | "skip" | "stop";
+  decision?: "guide" | "skip" | "stop" | "continue" | "accept";
   decidedAt?: string | null;
   decidedBy?: string;
   tokens?: number;

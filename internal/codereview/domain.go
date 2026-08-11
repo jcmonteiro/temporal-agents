@@ -273,6 +273,8 @@ type ReviewInput struct {
 	// with a payload it first implements that feedback—checking HEAD before and
 	// after—then reviews again.
 	Payload string
+	// Resets counts how many times an operator renewed the autonomous pass budget.
+	Resets int
 	// Pass counts how many implement-then-review passes have run so far. The
 	// first (review-only) run is pass 0; each continue-as-new increments it. The
 	// loop stops once it reaches MaxReviewPasses so it cannot run forever.

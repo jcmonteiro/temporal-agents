@@ -7,7 +7,9 @@ import (
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/workflow"
 
 	"temporal-agents/internal/execstore"
 	"temporal-agents/internal/execstore/execstoretest"
@@ -69,9 +71,13 @@ func newSteeredEnvReadableAt(
 // decide sends one decision to the session the loop under test is waiting in,
 // after the loop has had time to reach its pause point.
 func decide(env *testsuite.TestWorkflowEnvironment, after time.Duration, decisions ...steering.Decision) {
+	decideRound(env, after, steering.RoundLocalReview, decisions...)
+}
+
+func decideRound(env *testsuite.TestWorkflowEnvironment, after time.Duration, round steering.Round, decisions ...steering.Decision) {
 	env.RegisterDelayedCallback(func() {
 		for _, decision := range decisions {
-			_ = env.SignalWorkflowByID(steering.SessionID(testRunID), steering.DecisionSignal, decision)
+			_ = env.SignalWorkflowByID(steering.SessionIDFor(testRunID, round), steering.DecisionSignal, decision)
 		}
 	}, after)
 }
@@ -117,6 +123,48 @@ func TestAnOperatorCanLetASteeredRoundProceedWithoutGuidance(t *testing.T) {
 
 // Stopping ends the loop deliberately: nothing is implemented, and the ending says
 // a human stopped it rather than that the branch converged.
+func TestAnOperatorCanResetThePassBudgetWithoutLosingCost(t *testing.T) {
+	env := newSteeredEnv(t, execstoretest.New(), true)
+	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).Return(Checkpoint{HeadSHA: "head"}, nil)
+	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "implemented", Tokens: 20}, nil)
+	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha"}, nil)
+	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "still more", Tokens: 30}, nil)
+	decide(env, time.Hour, steering.Decision{Choice: steering.ChoiceSkip, Principal: "ada"})
+	decideRound(env, 2*time.Hour, steering.RoundPassLimit,
+		steering.Decision{Choice: steering.ChoiceContinue, Principal: "ada"})
+
+	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo", Payload: "rename foo", Pass: MaxReviewPasses - 1, TokensSoFar: 100, Resets: 2})
+
+	var continued *workflow.ContinueAsNewError
+	require.ErrorAs(t, env.GetWorkflowError(), &continued)
+	var next ReviewInput
+	require.NoError(t, converter.GetDefaultDataConverter().FromPayloads(continued.Input, &next))
+	require.Equal(t, 0, next.Pass)
+	require.Equal(t, 3, next.Resets)
+	require.Equal(t, 150, next.TokensSoFar)
+	require.Equal(t, "still more", next.Payload)
+}
+
+func TestAnOperatorCanAcceptWorkAtThePassLimit(t *testing.T) {
+	store := execstoretest.New()
+	env := newSteeredEnv(t, store, true)
+	env.OnActivity(a.MarkHeadAndStash, mock.Anything, mock.Anything).Return(Checkpoint{HeadSHA: "head"}, nil)
+	env.OnActivity(a.RunImplementAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "implemented", Tokens: 20}, nil)
+	env.OnActivity(a.EnsureHeadAdvanced, mock.Anything, mock.Anything).Return([]string{"sha"}, nil)
+	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "still more", Tokens: 30}, nil)
+	decide(env, time.Hour, steering.Decision{Choice: steering.ChoiceSkip, Principal: "ada"})
+	decideRound(env, 2*time.Hour, steering.RoundPassLimit,
+		steering.Decision{Choice: steering.ChoiceAccept, Principal: "ada"})
+
+	env.ExecuteWorkflow(ReviewWorkflow, ReviewInput{WorkDir: "/repo", Payload: "rename foo", Pass: MaxReviewPasses - 1, TokensSoFar: 100})
+
+	require.NoError(t, env.GetWorkflowError())
+	var outcome ReviewOutcome
+	require.NoError(t, env.GetWorkflowResult(&outcome))
+	require.Equal(t, EndingOperatorAccepted, outcome.Ending)
+	require.Contains(t, outcome.Summary, "150", "the checkpoint keeps accumulated cost visible")
+}
+
 func TestAnOperatorCanStopASteeredReviewLoop(t *testing.T) {
 	store := execstoretest.New()
 	env := newSteeredEnv(t, store, true)
