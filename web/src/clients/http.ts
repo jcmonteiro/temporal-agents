@@ -85,7 +85,7 @@ export function onUnauthenticated(listener: Listener): () => void {
 }
 
 /** Tells every subscriber that the session is gone. */
-function announceUnauthenticated(): void {
+export function announceUnauthenticated(): void {
   for (const listener of [...listeners]) listener();
 }
 

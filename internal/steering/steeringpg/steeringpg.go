@@ -109,9 +109,14 @@ const sessionColumns = `id, item_id, round, material, directory, repository, gui
 // session is already there: the activity that calls it is replayed, and a replay
 // must not reopen a session that has since been decided.
 const openSessionSQL = `
-INSERT INTO steering_sessions (id, item_id, round, material, directory, repository, opened_at, state)
-VALUES ($1, $2, $3, $4, $5, $6, $7, 'waiting')
-ON CONFLICT (id) DO NOTHING`
+WITH opened AS (
+    INSERT INTO steering_sessions (id, item_id, round, material, directory, repository, opened_at, state)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, 'waiting')
+    ON CONFLICT (id) DO NOTHING
+    RETURNING id, item_id, opened_at
+)
+INSERT INTO steering_events (event_type, session_id, item_id, created_at)
+SELECT 'session-waiting', id, item_id, opened_at FROM opened`
 
 // OpenSession implements steering.SessionRecorder.
 func (s *Store) OpenSession(ctx context.Context, session steering.Session) (steering.Session, error) {
@@ -138,13 +143,18 @@ func (s *Store) OpenSession(ctx context.Context, session steering.Session) (stee
 // settlement carrying no decision is a session whose loop is gone, which is recorded
 // as abandoned rather than left waiting for an answer nobody can act on.
 const closeSessionSQL = `
-UPDATE steering_sessions
-SET state = CASE WHEN choice <> '' OR $2 <> '' THEN 'decided' ELSE 'abandoned' END,
-    choice = CASE WHEN choice = '' THEN $2 ELSE choice END,
-    guidance = CASE WHEN choice = '' AND $3 <> '' THEN $3 ELSE guidance END,
-    principal = CASE WHEN choice = '' THEN $4 ELSE principal END,
-    decided_at = CASE WHEN choice <> '' OR $2 <> '' THEN COALESCE(decided_at, $5) ELSE decided_at END
-WHERE id = $1`
+WITH settled AS (
+    UPDATE steering_sessions
+    SET state = CASE WHEN choice <> '' OR $2 <> '' THEN 'decided' ELSE 'abandoned' END,
+        choice = CASE WHEN choice = '' THEN $2 ELSE choice END,
+        guidance = CASE WHEN choice = '' AND $3 <> '' THEN $3 ELSE guidance END,
+        principal = CASE WHEN choice = '' THEN $4 ELSE principal END,
+        decided_at = CASE WHEN choice <> '' OR $2 <> '' THEN COALESCE(decided_at, $5) ELSE decided_at END
+    WHERE id = $1 AND state = 'waiting'
+    RETURNING id, item_id
+)
+INSERT INTO steering_events (event_type, session_id, item_id, created_at)
+SELECT 'session-decided', id, item_id, $5 FROM settled`
 
 // CloseSession implements steering.SessionRecorder.
 func (s *Store) CloseSession(ctx context.Context, id string, decision steering.Decision, at time.Time) error {
@@ -154,7 +164,9 @@ func (s *Store) CloseSession(ctx context.Context, id string, decision steering.D
 		return fmt.Errorf("settle the steering session: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("%w: %s", steering.ErrNoSuchSession, id)
+		if _, readErr := s.Session(ctx, id); readErr != nil {
+			return readErr
+		}
 	}
 	return nil
 }
@@ -270,6 +282,24 @@ func (s *Store) AppendMessage(ctx context.Context, message steering.Message) (st
 	return appended, nil
 }
 
+// Events implements steering.SessionStore with a global resume position.
+func (s *Store) Events(ctx context.Context, afterSequence int64, limit int) ([]steering.Event, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx, `
+SELECT sequence, event_type, session_id, item_id, created_at
+FROM steering_events WHERE sequence > $1 ORDER BY sequence LIMIT $2`, afterSequence, limit)
+	if err != nil {
+		return nil, fmt.Errorf("read steering hub events: %w", err)
+	}
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (steering.Event, error) {
+		var event steering.Event
+		err := row.Scan(&event.Sequence, &event.Type, &event.SessionID, &event.ItemID, &event.At)
+		return event, err
+	})
+}
+
 // setGuidanceSQL replaces the draft only while the session still waits. Once a
 // decision wins, its artifact is immutable with the decision.
 const setGuidanceSQL = `
@@ -306,6 +336,10 @@ WITH decided AS (
         principal = $4, decided_at = $5
     WHERE id = $1 AND choice = ''
     RETURNING ` + sessionColumns + `
+), announced AS (
+    INSERT INTO steering_events (event_type, session_id, item_id, created_at)
+    SELECT 'session-decided', id, item_id, $5 FROM decided
+    RETURNING sequence
 )
 SELECT ` + sessionColumns + ` FROM decided
 UNION ALL

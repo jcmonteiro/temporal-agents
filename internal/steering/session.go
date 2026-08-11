@@ -128,6 +128,16 @@ type Message struct {
 	At time.Time
 }
 
+// Event is a small durable notification that tells a hub reader to refetch its
+// source of truth. It never carries session material or list data.
+type Event struct {
+	Sequence  int64
+	Type      string
+	SessionID string
+	ItemID    string
+	At        time.Time
+}
+
 // Conversation is one session with everything an operator needs to decide it: what
 // the decision is about, the guidance so far, the turns that produced it, what it
 // has cost, and who has taken part.

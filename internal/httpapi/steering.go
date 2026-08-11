@@ -34,6 +34,10 @@ type SteeringView interface {
 	Waiting(ctx context.Context) ([]steering.Session, error)
 	// Conversation returns one session with its material, guidance, turns and cost.
 	Conversation(ctx context.Context, id string) (steering.Conversation, error)
+	// ConversationMessages returns turns after a per-session sequence.
+	ConversationMessages(ctx context.Context, id string, after int64) ([]steering.Message, error)
+	// Events returns small hub notifications after a global sequence.
+	Events(ctx context.Context, after int64, limit int) ([]steering.Event, error)
 	// Question runs one optional read-only agent exchange.
 	Question(ctx context.Context, id string, request steering.QuestionRequest) (steering.Conversation, error)
 	// Decide records a decision and resumes the round it was waiting on. A repeat

@@ -97,6 +97,13 @@ func (s *Server) recoverPanics(next http.Handler) http.Handler {
 // running after the answer is gone.
 func (s *Server) withTimeout(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Event streams are bounded by authentication, concurrency, and the caller's
+		// connection lifetime. Applying the ordinary request budget would cut every
+		// healthy stream off after 30 seconds.
+		if strings.HasSuffix(r.URL.Path, "/events") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), s.timeout)
 		defer cancel()
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -225,6 +232,10 @@ type statusRecorder struct {
 	written     int
 	wroteHeader bool
 }
+
+// Unwrap lets ResponseController reach optional interfaces such as Flusher. Without
+// it, access logging would turn every SSE response into an unflushable buffer.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 func (s *statusRecorder) WriteHeader(status int) {
 	if s.wroteHeader {

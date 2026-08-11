@@ -24,6 +24,7 @@ type Store struct {
 	mu       sync.Mutex
 	sessions map[string]steering.Session
 	messages map[string][]steering.Message
+	events   []steering.Event
 	// Failure, when set, is returned by every operation, so a test can drive the
 	// "the store cannot be reached" path that must never be reported as success.
 	Failure error
@@ -77,6 +78,7 @@ func (s *Store) OpenSession(_ context.Context, session steering.Session) (steeri
 	}
 	session.State = steering.StateWaiting
 	s.sessions[session.ID] = session
+	s.appendEvent("session-waiting", session, session.OpenedAt)
 	return session, nil
 }
 
@@ -91,6 +93,7 @@ func (s *Store) CloseSession(_ context.Context, id string, decision steering.Dec
 	if !ok {
 		return steering.ErrNoSuchSession
 	}
+	wasWaiting := session.Waiting()
 	session.State = steering.StateDecided
 	if !session.Decision.Made() {
 		if !decision.Made() {
@@ -102,6 +105,9 @@ func (s *Store) CloseSession(_ context.Context, id string, decision steering.Dec
 		}
 	}
 	s.sessions[id] = session
+	if wasWaiting {
+		s.appendEvent("session-decided", session, at)
+	}
 	return nil
 }
 
@@ -173,6 +179,25 @@ func (s *Store) AppendMessage(_ context.Context, message steering.Message) (stee
 	return message, nil
 }
 
+// Events implements steering.SessionStore.
+func (s *Store) Events(_ context.Context, afterSequence int64, limit int) ([]steering.Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Failure != nil {
+		return nil, s.Failure
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	out := make([]steering.Event, 0, limit)
+	for _, event := range s.events {
+		if event.Sequence > afterSequence && len(out) < limit {
+			out = append(out, event)
+		}
+	}
+	return out, nil
+}
+
 // SetGuidance implements steering.SessionStore for the editable draft.
 func (s *Store) SetGuidance(_ context.Context, id, guidance string) error {
 	if err := (steering.Decision{Choice: steering.ChoiceGuide, Guidance: guidance}).Validate(); err != nil {
@@ -216,7 +241,15 @@ func (s *Store) RecordDecision(_ context.Context, id string, decision steering.D
 		session.Guidance = decision.Guidance
 	}
 	s.sessions[id] = session
+	s.appendEvent("session-decided", session, at)
 	return session, nil
+}
+
+func (s *Store) appendEvent(kind string, session steering.Session, at time.Time) {
+	s.events = append(s.events, steering.Event{
+		Sequence: int64(len(s.events)) + 1,
+		Type:     kind, SessionID: session.ID, ItemID: session.ItemID, At: at,
+	})
 }
 
 // SignalDecision implements steering.DecisionSignaller by journalling the delivery.

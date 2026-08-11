@@ -36,6 +36,8 @@ type SessionStore interface {
 	// AppendMessage appends one turn and returns it with the sequence it was given.
 	// Sequences are per session, dense and monotonic.
 	AppendMessage(ctx context.Context, message Message) (Message, error)
+	// Events returns small hub notifications after a global sequence.
+	Events(ctx context.Context, afterSequence int64, limit int) ([]Event, error)
 	// SetGuidance replaces the editable guidance draft while the session waits.
 	SetGuidance(ctx context.Context, id, guidance string) error
 	// RecordDecision records a decision against a waiting session and returns the
@@ -145,6 +147,24 @@ func (s *Service) Waiting(ctx context.Context) ([]Session, error) {
 }
 
 // Conversation returns one session with everything needed to decide it.
+// ConversationMessages returns turns after a sequence for a resumable stream.
+func (s *Service) ConversationMessages(ctx context.Context, id string, after int64) ([]Message, error) {
+	messages, err := s.Sessions.Messages(ctx, id, after)
+	if err != nil {
+		return nil, unavailable("read the steering conversation", err)
+	}
+	return messages, nil
+}
+
+// Events returns small hub notifications after a sequence.
+func (s *Service) Events(ctx context.Context, after int64, limit int) ([]Event, error) {
+	events, err := s.Sessions.Events(ctx, after, limit)
+	if err != nil {
+		return nil, unavailable("read hub events", err)
+	}
+	return events, nil
+}
+
 func (s *Service) Conversation(ctx context.Context, id string) (Conversation, error) {
 	session, err := s.Sessions.Session(ctx, id)
 	if err != nil {

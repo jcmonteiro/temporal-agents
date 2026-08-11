@@ -65,6 +65,23 @@ func TestAWaitingRoundSurvivesAndSaysWhatItIsAbout(t *testing.T) {
 	require.True(t, waiting[0].Waiting())
 }
 
+func TestHubEventsResumeAfterAGlobalSequence(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	opened := time.Now()
+	_, err := store.OpenSession(ctx, waitingRound("steering-1", opened))
+	require.NoError(t, err)
+	_, err = store.OpenSession(ctx, waitingRound("steering-2", opened.Add(time.Second)))
+	require.NoError(t, err)
+
+	first, err := store.Events(ctx, 0, 100)
+	require.NoError(t, err)
+	require.Len(t, first, 2)
+	resumed, err := store.Events(ctx, first[0].Sequence, 100)
+	require.NoError(t, err)
+	require.Equal(t, []int64{first[1].Sequence}, []int64{resumed[0].Sequence})
+}
+
 // The activity that opens a session is replayed. A replay must find the session it
 // already opened rather than reopen one that has since been decided.
 func TestOpeningASessionTwiceKeepsTheOneThatIsAlreadyThere(t *testing.T) {

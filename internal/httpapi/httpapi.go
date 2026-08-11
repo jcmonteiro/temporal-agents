@@ -206,6 +206,9 @@ type Options struct {
 	// deployment that does not publish steering, which then serves no steering
 	// resources.
 	Steering SteeringView
+	// StreamPollInterval controls how often long-lived event streams check their
+	// durable source. Zero selects one second.
+	StreamPollInterval time.Duration
 	// HealthChecks are the dependencies the health resource probes.
 	HealthChecks []HealthCheck
 	// DeprecatedSince and SunsetAt announce the API's lifecycle when an operator sets
@@ -237,6 +240,8 @@ type Server struct {
 	places          PlaceView
 	settings        SettingsView
 	steering        SteeringView
+	streamPoll      time.Duration
+	streams         *streamLimiter
 	healthChecks    []HealthCheck
 	deprecatedSince time.Time
 	sunsetAt        time.Time
@@ -276,6 +281,8 @@ func New(view WorkView, options Options) (*Server, error) {
 		places:          options.Places,
 		settings:        options.Settings,
 		steering:        options.Steering,
+		streamPoll:      options.StreamPollInterval,
+		streams:         newStreamLimiter(4, 2),
 		healthChecks:    options.HealthChecks,
 		deprecatedSince: options.DeprecatedSince,
 		sunsetAt:        options.SunsetAt,
@@ -294,6 +301,9 @@ func New(view WorkView, options Options) (*Server, error) {
 	}
 	if s.now == nil {
 		s.now = time.Now
+	}
+	if s.streamPoll <= 0 {
+		s.streamPoll = time.Second
 	}
 	perSecond, burst := options.RequestsPerSecond, options.Burst
 	if perSecond == 0 {
@@ -400,6 +410,14 @@ func (s *Server) resources() []resource {
 			resource{
 				pattern: s.basePath + "/steering/sessions/{id}",
 				methods: map[string]http.HandlerFunc{http.MethodGet: s.handleSteeringSession},
+			},
+			resource{
+				pattern: s.basePath + "/steering/sessions/{id}/events",
+				methods: map[string]http.HandlerFunc{http.MethodGet: s.handleConversationEvents},
+			},
+			resource{
+				pattern: s.basePath + "/events",
+				methods: map[string]http.HandlerFunc{http.MethodGet: s.handleHubEvents},
 			},
 			resource{
 				pattern: s.basePath + "/steering/sessions/{id}/question",
