@@ -196,7 +196,8 @@ func newTestServer(t *testing.T, view WorkView, mutate ...func(*Options)) *Serve
 		Places: &placesStub{},
 		// A production hub publishes the rounds that wait for an operator. Keep that
 		// optional route in the default contract server, with an empty real service.
-		Steering: defaultSteeringView(t),
+		Steering:      defaultSteeringView(t),
+		Notifications: defaultNotifications(),
 	}
 	for _, change := range mutate {
 		change(&options)

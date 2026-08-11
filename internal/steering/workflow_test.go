@@ -1,6 +1,8 @@
 package steering
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -9,6 +11,7 @@ import (
 
 	"temporal-agents/internal/execstore"
 	"temporal-agents/internal/execstore/execstoretest"
+	"temporal-agents/internal/notification"
 	"temporal-agents/internal/place"
 )
 
@@ -27,6 +30,37 @@ func newSessionEnv(t *testing.T, store *execstoretest.Store) *testsuite.TestWork
 
 // The three decisions are the session's whole vocabulary, and each is returned to
 // the loop verbatim: the loop decides what to do about it, the session does not.
+type notificationCapture struct {
+	mu    sync.Mutex
+	items []notification.Notification
+}
+
+func (c *notificationCapture) Notify(_ context.Context, item notification.Notification) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items = append(c.items, item)
+	return nil
+}
+
+func TestRemindersRepeatDailyWithoutACapAndStopOnDecision(t *testing.T) {
+	env := newSessionEnv(t, execstoretest.New())
+	capture := &notificationCapture{}
+	env.RegisterActivity(&notification.Activity{Notifier: capture})
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(DecisionSignal, Decision{Choice: ChoiceSkip})
+	}, 3*24*time.Hour+time.Hour)
+
+	env.ExecuteWorkflow(SessionWorkflow, SessionInput{ItemID: "review-1", Recipient: "ada", Round: RoundLocalReview})
+
+	require.NoError(t, env.GetWorkflowError())
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	require.Len(t, capture.items, 4, "the first notice plus one reminder per full day")
+	for _, item := range capture.items {
+		require.Equal(t, "ada", item.Recipient)
+	}
+}
+
 func TestASessionReturnsTheDecisionThatWasSent(t *testing.T) {
 	cases := []struct {
 		name string

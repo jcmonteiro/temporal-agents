@@ -12,6 +12,7 @@ import (
 	"temporal-agents/internal/agenthub/hubpg"
 	"temporal-agents/internal/execstore/execpg"
 	"temporal-agents/internal/identity/identitypg"
+	"temporal-agents/internal/notification/notificationpg"
 	"temporal-agents/internal/schema"
 	"temporal-agents/internal/scoped/scopedpg"
 	"temporal-agents/internal/steering/steeringpg"
@@ -105,6 +106,13 @@ var scopedConfigSchema = schemaContext{
 	},
 }
 
+var notificationSchema = schemaContext{
+	name: "notifications",
+	open: func(ctx context.Context, dsn string) (contextSchema, error) {
+		return notificationpg.Open(ctx, dsn)
+	},
+}
+
 // steeringSchema is the schema behind the human-in-the-loop pause: the rounds that
 // stopped for an operator, what each decision is about, the conversations that
 // produce the guidance, and the decisions themselves. Both processes need it — the
@@ -121,19 +129,19 @@ var steeringSchema = schemaContext{
 // order `migrate` reports them. Adding a context means adding it here and nowhere
 // else.
 func allSchemaContexts() []schemaContext {
-	return []schemaContext{executionStoreSchema, agentHubSchema, identitySchema, scopedConfigSchema, steeringSchema}
+	return []schemaContext{executionStoreSchema, agentHubSchema, identitySchema, scopedConfigSchema, steeringSchema, notificationSchema}
 }
 
 // workerSchemaContexts are the schemas the worker writes through. It never touches
 // the hub's own state, so it must not be stopped by its version: a context a process
 // does not use is not that process's dependency.
 func workerSchemaContexts() []schemaContext {
-	return []schemaContext{executionStoreSchema, scopedConfigSchema, steeringSchema}
+	return []schemaContext{executionStoreSchema, scopedConfigSchema, steeringSchema, notificationSchema}
 }
 
 // serveSchemaContexts are the schemas the API server reads and writes through.
 func serveSchemaContexts() []schemaContext {
-	return []schemaContext{executionStoreSchema, agentHubSchema, identitySchema, scopedConfigSchema, steeringSchema}
+	return []schemaContext{executionStoreSchema, agentHubSchema, identitySchema, scopedConfigSchema, steeringSchema, notificationSchema}
 }
 
 // migrateHelp writes the command's usage.

@@ -5,6 +5,7 @@ import type {
   FleetNode,
   LocatedCollection,
   LocationResource,
+  NotificationDTO,
   PlaceDTO,
   RunDTO,
   ScheduleDTO,
@@ -75,6 +76,7 @@ export class FakeApi {
   steeringSessions: Record<string, SteeringSessionDTO> = {};
   /** How many decision writes arrived, for burst-idempotency tests. */
   steeringDecisions = 0;
+  notifications: NotificationDTO[] = [];
 
   private original: typeof globalThis.fetch | undefined;
 
@@ -93,6 +95,18 @@ export class FakeApi {
       }
       if (this.signInConfigured && this.principal === null) {
         return Promise.resolve(this.unauthenticated());
+      }
+      if (path === "/api/v1/notifications" && method === "GET") {
+        return Promise.resolve(this.json({ items: this.notifications, count: this.notifications.length, limit: 100, unread: this.notifications.filter((item) => !item.read).length }));
+      }
+      if (path.startsWith("/api/v1/notifications/") && path.endsWith("/read") && method === "POST") {
+        const id = decodeURIComponent(path.slice("/api/v1/notifications/".length, -"/read".length));
+        this.notifications = this.notifications.map((item) => item.id === id ? { ...item, read: true } : item);
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      if (path === "/api/v1/notifications/read" && method === "DELETE") {
+        this.notifications = this.notifications.map((item) => ({ ...item, read: false }));
+        return Promise.resolve(new Response(null, { status: 204 }));
       }
       if (path === "/api/v1/steering/sessions") {
         return Promise.resolve(this.json({

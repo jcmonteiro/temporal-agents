@@ -1,5 +1,7 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSession } from "../platform/session";
+import type { NotificationDTO } from "../clients/api";
+import { clearNotificationReadState, loadNotifications, markNotificationRead } from "../clients/notifications";
 
 export function TopBar(): ReactNode {
   return (
@@ -69,25 +71,77 @@ export function TopBar(): ReactNode {
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
-        <button
-          aria-label="Notifications"
-          style={{
-            width: 32,
-            height: 32,
-            display: "grid",
-            placeItems: "center",
-            borderRadius: 8,
-            color: "var(--color-text-muted)",
-          }}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2H4.5z" />
-            <path d="M10 20a2 2 0 0 0 4 0" />
-          </svg>
-        </button>
+        <Inbox />
         <SignedIn />
       </div>
     </header>
+  );
+}
+
+function Inbox(): ReactNode {
+  const { state } = useSession();
+  const [items, setItems] = useState<NotificationDTO[]>([]);
+  const [unread, setUnread] = useState(0);
+  const [open, setOpen] = useState(false);
+  const [nativeEnabled, setNativeEnabled] = useState(false);
+  const seen = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (state.status !== "signed-in") return;
+    let cancelled = false;
+    const refresh = async (): Promise<void> => {
+      const result = await loadNotifications();
+      if (cancelled || !result.ok) return;
+      setItems(result.value.items);
+      setUnread(result.value.unread);
+      if (nativeEnabled && typeof Notification !== "undefined" && Notification.permission === "granted") {
+        for (const item of result.value.items) {
+          if (!item.read && !seen.current.has(item.id)) new Notification(item.title, { body: item.body });
+          seen.current.add(item.id);
+        }
+      }
+    };
+    void refresh();
+    const timer = setInterval(() => void refresh(), 5_000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [state.status, nativeEnabled]);
+
+  const read = async (item: NotificationDTO): Promise<void> => {
+    await markNotificationRead(item.id);
+    setItems((current) => current.map((candidate) => candidate.id === item.id ? { ...candidate, read: true } : candidate));
+    setUnread((count) => Math.max(0, count - (item.read ? 0 : 1)));
+  };
+  const enableNative = async (): Promise<void> => {
+    if (typeof Notification === "undefined") return;
+    const permission = await Notification.requestPermission();
+    setNativeEnabled(permission === "granted");
+  };
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button aria-label={`Notifications, ${unread} unread`} onClick={() => setOpen((value) => !value)} style={{ width: 32, height: 32, position: "relative" }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2H4.5z" /><path d="M10 20a2 2 0 0 0 4 0" />
+        </svg>
+        {unread > 0 && <span aria-hidden="true" style={{ position: "absolute", top: -4, right: -4 }}>{unread}</span>}
+      </button>
+      {open && (
+        <section aria-label="Notification inbox" style={{ position: "absolute", right: 0, top: 38, zIndex: 90, width: 360, maxHeight: 480, overflowY: "auto", background: "var(--color-surface)", border: "1px solid var(--color-border)", padding: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <strong>Notifications</strong>
+            <button type="button" onClick={() => void enableNative()}>Enable native notifications</button>
+          </div>
+          {items.length === 0 ? <p>No notifications.</p> : items.map((item) => (
+            <article key={item.id} style={{ opacity: item.read ? .65 : 1, borderTop: "1px solid var(--color-border)", padding: "10px 0" }}>
+              <a href={item.url} onClick={() => void read(item)}><strong>{item.title}</strong></a>
+              <p style={{ margin: "4px 0" }}>{item.body}</p>
+              <small>{item.createdAt ?? "Time unknown"}</small>
+            </article>
+          ))}
+          <button type="button" onClick={() => void clearNotificationReadState().then(() => { setItems((current) => current.map((item) => ({ ...item, read: false }))); setUnread(items.length); })}>Clear read state</button>
+        </section>
+      )}
+    </div>
   );
 }
 

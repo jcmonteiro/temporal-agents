@@ -206,6 +206,8 @@ type Options struct {
 	// deployment that does not publish steering, which then serves no steering
 	// resources.
 	Steering SteeringView
+	// Notifications is the signed-in principal's durable inbox.
+	Notifications NotificationsView
 	// StreamPollInterval controls how often long-lived event streams check their
 	// durable source. Zero selects one second.
 	StreamPollInterval time.Duration
@@ -240,6 +242,7 @@ type Server struct {
 	places          PlaceView
 	settings        SettingsView
 	steering        SteeringView
+	notifications   NotificationsView
 	streamPoll      time.Duration
 	streams         *streamLimiter
 	healthChecks    []HealthCheck
@@ -281,6 +284,7 @@ func New(view WorkView, options Options) (*Server, error) {
 		places:          options.Places,
 		settings:        options.Settings,
 		steering:        options.Steering,
+		notifications:   options.Notifications,
 		streamPoll:      options.StreamPollInterval,
 		streams:         newStreamLimiter(4, 2),
 		healthChecks:    options.HealthChecks,
@@ -400,6 +404,13 @@ func (s *Server) resources() []resource {
 			pattern: s.basePath + "/settings",
 			methods: map[string]http.HandlerFunc{http.MethodGet: s.handleSettings},
 		})
+	}
+	if s.notifications != nil {
+		list = append(list,
+			resource{pattern: s.basePath + "/notifications", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleNotifications}},
+			resource{pattern: s.basePath + "/notifications/read", methods: map[string]http.HandlerFunc{http.MethodDelete: s.handleNotificationClearRead}},
+			resource{pattern: s.basePath + "/notifications/{id}/read", methods: map[string]http.HandlerFunc{http.MethodPost: s.handleNotificationRead}},
+		)
 	}
 	if s.steering != nil {
 		list = append(list,

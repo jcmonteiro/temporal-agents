@@ -10,10 +10,22 @@ package notification
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // Notification is a completion message handed to a Notifier.
 type Notification struct {
+	// ID makes a retried delivery one durable inbox item. Empty means the message is
+	// only for host channels.
+	ID string
+	// Kind lets an inbox group actionable steering notices from ordinary completions.
+	Kind string
+	// Recipient is one principal, or empty for every principal.
+	Recipient string
+	// SessionID links an actionable notice to its steering surface.
+	SessionID string
+	// CreatedAt is the workflow's deterministic time.
+	CreatedAt time.Time
 	// Title is the short headline (e.g. the notification's bold first line).
 	Title string
 	// Body is the human-readable detail, typically the workflow's summary.

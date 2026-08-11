@@ -46,6 +46,8 @@ const (
 
 // PilotInput is the workflow input.
 type PilotInput struct {
+	// Initiator is the principal who started work from the hub, empty for CLI or schedules.
+	Initiator string
 	// WorkDir is the repository directory the CLI was invoked from.
 	WorkDir string
 	// PromptMode controls how PromptText is combined with the default prompt.
@@ -262,6 +264,8 @@ const MaxReviewPasses = 5
 
 // ReviewInput is the input to ReviewWorkflow.
 type ReviewInput struct {
+	// Initiator is the principal who started work from the hub, empty for CLI or schedules.
+	Initiator string
 	// WorkDir is the repository directory the CLI was invoked from.
 	WorkDir string
 	// Payload is the previous pass's raw review output, carried over verbatim.
@@ -362,6 +366,8 @@ const SummarizePrompt = "Summarize the work performed in this session in a few s
 
 // DevelopInput is the input to DevelopWorkflow.
 type DevelopInput struct {
+	// Initiator is the principal who started work from the hub, empty for CLI or schedules.
+	Initiator string
 	// WorkDir is the repository directory the CLI was invoked from.
 	WorkDir string
 	// Branch is the new branch to create and develop on. When empty, the workflow

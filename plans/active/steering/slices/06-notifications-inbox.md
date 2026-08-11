@@ -12,18 +12,18 @@ not clear it for another principal.
 
 ## Tasks
 
-- [ ] Persist notifications (own migrations) with addressing: directed to the initiating
+- [x] Persist notifications (own migrations) with addressing: directed to the initiating
       principal when known, broadcast when not, and **read state per principal**.
-- [ ] Emit a notification when a session starts waiting, through the existing
+- [x] Emit a notification when a session starts waiting, through the existing
       notification port so the current channels are reached unchanged.
-- [ ] Add the daily reminder with **no cap**, driven by the waiting unit's own timer,
+- [x] Add the daily reminder with **no cap**, driven by the waiting unit's own timer,
       which never ends the wait; stop reminding when the decision is made.
-- [ ] Add the inbox surface on the existing bell: newest first, paginated, unread count,
+- [x] Add the inbox surface on the existing bell: newest first, paginated, unread count,
       mark read, clear read, and a link to the deciding surface.
-- [ ] Add native browser notifications gated behind an explicit operator action to
+- [x] Add native browser notifications gated behind an explicit operator action to
       enable them; never request permission on load.
-- [ ] Keep host channels global and unchanged.
-- [ ] Tests: addressing matrix (initiator known, unknown, scheduled work); read state is
+- [x] Keep host channels global and unchanged.
+- [x] Tests: addressing matrix (initiator known, unknown, scheduled work); read state is
       per principal; reminders repeat daily and stop on decision; the bell count matches
       unread; permission is never requested without a gesture.
 

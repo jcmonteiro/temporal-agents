@@ -110,6 +110,8 @@ type StartSpec struct {
 	Directory string
 	// Prompt is what the agent is told to do, empty for a review.
 	Prompt string
+	// StartedBy is the initiating principal, used only to address human checkpoints.
+	StartedBy string
 }
 
 // StartedWork is one started run, as the core reports it.
@@ -271,6 +273,7 @@ func (s *Service) StartWork(ctx context.Context, request StartRequest) (StartedW
 		Kind:       request.Kind,
 		Directory:  directory,
 		Prompt:     request.Prompt,
+		StartedBy:  request.StartedBy,
 	}
 	if err := s.deps.Launcher.Start(ctx, spec); err != nil {
 		return StartedWork{}, unavailable("start the work", err)

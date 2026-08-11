@@ -43,11 +43,14 @@ func pause(
 	round steering.Round,
 	where place.Facts,
 	material string,
+	recipient string,
 	waiting func(since time.Time, session string),
 ) (steering.Decision, error) {
 	session := steering.SessionID(workflow.GetInfo(ctx).WorkflowExecution.RunID)
 	waiting(workflow.Now(ctx), session)
-	decision, err := steering.Ask(ctx, steering.Pause{Round: round, Place: where, Material: material})
+	decision, err := steering.Ask(ctx, steering.Pause{
+		Recipient: recipient, Round: round, Place: where, Material: material,
+	})
 	// The run stops reporting that it needs input as soon as it stops needing it,
 	// including when the session failed: a run nobody can answer must not keep asking.
 	waiting(time.Time{}, "")

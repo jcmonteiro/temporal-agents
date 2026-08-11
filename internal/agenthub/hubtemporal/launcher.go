@@ -81,12 +81,14 @@ func submission(spec agenthub.StartSpec) (any, any, error) {
 	switch spec.Kind {
 	case agenthub.StartDevelop:
 		return codereview.DevelopWorkflow, codereview.DevelopInput{
-			WorkDir: spec.Directory,
-			Prompt:  spec.Prompt,
+			Initiator: spec.StartedBy,
+			WorkDir:   spec.Directory,
+			Prompt:    spec.Prompt,
 		}, nil
 	case agenthub.StartReview:
 		return codereview.ReviewWorkflow, codereview.ReviewInput{
-			WorkDir: spec.Directory,
+			Initiator: spec.StartedBy,
+			WorkDir:   spec.Directory,
 		}, nil
 	default:
 		return nil, nil, fmt.Errorf("%q is not something this hub can start", spec.Kind)

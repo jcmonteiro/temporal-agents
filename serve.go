@@ -24,6 +24,8 @@ import (
 	"temporal-agents/internal/agenthub/hubtemporal"
 	"temporal-agents/internal/gitcli"
 	"temporal-agents/internal/httpapi"
+	"temporal-agents/internal/notification"
+	"temporal-agents/internal/notification/notificationpg"
 	"temporal-agents/internal/scoped/scopedpg"
 	"temporal-agents/internal/setting"
 	"temporal-agents/internal/steering"
@@ -384,6 +386,12 @@ func runAPIServer(options serveOptions) error {
 		return fmt.Errorf("could not reach the steering store: %w", err)
 	}
 	defer steeringStore.Close()
+	notificationStore, err := notificationpg.Open(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("could not reach the notification store: %w", err)
+	}
+	defer notificationStore.Close()
+	inbox := &notification.Inbox{Store: notificationStore}
 
 	// Signing in is opened before anything is served, so a hub configured with a
 	// provider it cannot reach stops here with a message instead of failing at an
@@ -464,6 +472,7 @@ func runAPIServer(options serveOptions) error {
 		Places:               service,
 		Settings:             settings,
 		Steering:             steeringService,
+		Notifications:        inbox,
 		HealthChecks: append([]httpapi.HealthCheck{
 			{
 				Name: "temporal",
@@ -496,6 +505,13 @@ func runAPIServer(options serveOptions) error {
 				Name: "scoped-config",
 				Check: func(ctx context.Context) error {
 					_, err := settings.Settings(ctx)
+					return err
+				},
+			},
+			{
+				Name: "notification-store",
+				Check: func(ctx context.Context) error {
+					_, err := inbox.Unread(ctx, "health-check")
 					return err
 				},
 			},

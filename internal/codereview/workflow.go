@@ -365,7 +365,7 @@ func runPilotOnce(ctx workflow.Context, in PilotInput, rec *PilotState, agentRan
 	var guidance string
 	if steered(in.Settings) {
 		decision, err := pause(ctx, steering.RoundRemoteComments, rec.Place,
-			formatComments(pr.Body, loaded.Threads),
+			formatComments(pr.Body, loaded.Threads), in.Initiator,
 			func(since time.Time, session string) {
 				rec.WaitingSince, rec.WaitingSession = since, session
 				recordPilotWaiting(ctx, *rec)
@@ -682,7 +682,7 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 	// independent summary agent runs (this develop completion plus the review
 	// completion), each a full, billable Pi run.
 	child := workflow.ExecuteChildWorkflow(childCtx, ReviewWorkflow,
-		ReviewInput{WorkDir: in.WorkDir, TokensSoFar: agentResult.Tokens, Summary: in.Summary})
+		ReviewInput{Initiator: in.Initiator, WorkDir: in.WorkDir, TokensSoFar: agentResult.Tokens, Summary: in.Summary})
 	if err := child.GetChildWorkflowExecution().Get(ctx, nil); err != nil {
 		return "", fmt.Errorf("start review workflow: %w", err)
 	}
@@ -757,7 +757,7 @@ func developAndAwaitReview(ctx workflow.Context, in DevelopInput, commits []stri
 	reviewCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: reviewID})
 	var outcome ReviewOutcome
 	if err := workflow.ExecuteChildWorkflow(reviewCtx, ReviewWorkflow,
-		ReviewInput{WorkDir: in.WorkDir, TokensSoFar: tokens, Summary: in.Summary}).Get(ctx, &outcome); err != nil {
+		ReviewInput{Initiator: in.Initiator, WorkDir: in.WorkDir, TokensSoFar: tokens, Summary: in.Summary}).Get(ctx, &outcome); err != nil {
 		return "", fmt.Errorf("review workflow: %w", err)
 	}
 	// The review loop can end two ways: it converged (the review agent found
@@ -842,7 +842,7 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 	// pilot loop that iterates N times bills N pilot summaries, not one.
 	reviewCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "review-" + id})
 	if err := workflow.ExecuteChildWorkflow(reviewCtx, ReviewWorkflow,
-		ReviewInput{WorkDir: in.WorkDir, TokensSoFar: tokens, Summary: in.Summary}).Get(ctx, nil); err != nil {
+		ReviewInput{Initiator: in.Initiator, WorkDir: in.WorkDir, TokensSoFar: tokens, Summary: in.Summary}).Get(ctx, nil); err != nil {
 		return "", prURL, fmt.Errorf("review workflow: %w", err)
 	}
 
@@ -880,7 +880,7 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 	// converges.
 	pilotCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "pilot-" + id})
 	if err := workflow.ExecuteChildWorkflow(pilotCtx, PilotWorkflow,
-		PilotInput{WorkDir: in.WorkDir, Chain: true, Summary: in.Summary}).Get(ctx, nil); err != nil {
+		PilotInput{Initiator: in.Initiator, WorkDir: in.WorkDir, Chain: true, Summary: in.Summary}).Get(ctx, nil); err != nil {
 		return "", prURL, fmt.Errorf("pilot workflow: %w", err)
 	}
 
@@ -1012,7 +1012,7 @@ func ReviewWorkflow(ctx workflow.Context, in ReviewInput) (result ReviewOutcome,
 		// them.
 		var guidance string
 		if steered(in.Settings) {
-			decision, derr := pause(ctx, steering.RoundLocalReview, rec.Place, in.Payload,
+			decision, derr := pause(ctx, steering.RoundLocalReview, rec.Place, in.Payload, in.Initiator,
 				func(since time.Time, session string) {
 					rec.WaitingSince, rec.WaitingSession = since, session
 					recordReviewWaiting(ctx, rec)

@@ -26,6 +26,7 @@ import (
 	"temporal-agents/internal/gitcli"
 	"temporal-agents/internal/instruction"
 	"temporal-agents/internal/notification"
+	"temporal-agents/internal/notification/notificationpg"
 	"temporal-agents/internal/notify"
 	"temporal-agents/internal/piagent"
 	"temporal-agents/internal/place"
@@ -505,6 +506,15 @@ func runWorker(opts notifyOptions) {
 	// a human must leave something a human can find.
 	sessions := openSteeringStore(context.Background())
 	defer sessions.Close()
+	dsn, err := databaseURL()
+	if err != nil {
+		fatalf("%v", err)
+	}
+	inbox, err := notificationpg.Open(context.Background(), dsn)
+	if err != nil {
+		fatalf("could not reach the notification store: %v", err)
+	}
+	defer inbox.Close()
 
 	// Flush heartbeats promptly so `watch` sees near-real-time Pi progress
 	// instead of the SDK's default ~30s throttle.
@@ -563,8 +573,9 @@ func runWorker(opts notifyOptions) {
 		Plans: store,
 	})
 
-	// A single notification activity, shared by every workflow that notifies.
-	w.RegisterActivity(&notification.Activity{Notifier: buildNotifier(opts)})
+	// Host channels stay global. The inbox adapter adds durable, addressed delivery
+	// without changing how desktop and webhook notifications are sent.
+	w.RegisterActivity(&notification.Activity{Notifier: notify.Multi{buildNotifier(opts), inbox}})
 
 	// A single instruction resolution, shared by every workflow that runs an agent.
 	// It resolves once per unit of work, at its start, and the resolved text travels

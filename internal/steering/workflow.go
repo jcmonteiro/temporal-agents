@@ -2,11 +2,14 @@ package steering
 
 import (
 	"fmt"
+	"time"
 
 	"go.temporal.io/sdk/workflow"
 
+	"temporal-agents/internal/notification"
 	"temporal-agents/internal/place"
 	"temporal-agents/internal/wfid"
+	"temporal-agents/internal/wfnotify"
 	"temporal-agents/internal/wfrecord"
 )
 
@@ -39,6 +42,10 @@ const (
 // durable where it was produced, and orchestration history is for decisions — not
 // for a copy of what the decision was about.
 type SessionInput struct {
+	// ItemID is the run that waits and the inbox link returns to.
+	ItemID string
+	// Recipient is the initiating principal, or empty for a broadcast notice.
+	Recipient string
 	// Round is which pause point this session is.
 	Round Round
 	// Place is where the paused work runs, so the session's own execution row lands
@@ -106,14 +113,24 @@ func SessionWorkflow(ctx workflow.Context, in SessionInput) (decision Decision, 
 	}
 
 	decisions := workflow.GetSignalChannel(ctx, DecisionSignal)
+	reminder := 0
+	notifyWaiting(ctx, in, reminder)
 	for !decision.Made() {
+		timer := workflow.NewTimer(ctx, 24*time.Hour)
 		var sent Decision
-		decisions.Receive(ctx, &sent)
+		selector := workflow.NewSelector(ctx)
+		selector.AddReceive(decisions, func(channel workflow.ReceiveChannel, _ bool) {
+			channel.Receive(ctx, &sent)
+		})
+		selector.AddFuture(timer, func(workflow.Future) {
+			reminder++
+			notifyWaiting(ctx, in, reminder)
+		})
+		selector.Select(ctx)
+		if !sent.Made() {
+			continue
+		}
 		if verr := sent.Validate(); verr != nil {
-			// A decision that cannot be acted on leaves the session waiting rather than
-			// failing it: the operator is still there, and a failed session would take the
-			// loop down with it. The surface that sent it refuses it in the first place;
-			// this is the last line of that same rule.
 			workflow.GetLogger(ctx).Warn("refused a steering decision", "round", in.Round, "error", verr)
 			continue
 		}
@@ -137,6 +154,21 @@ func SessionWorkflow(ctx workflow.Context, in SessionInput) (decision Decision, 
 	return decision, nil
 }
 
+func notifyWaiting(ctx workflow.Context, in SessionInput, reminder int) {
+	id := workflow.GetInfo(ctx).WorkflowExecution.ID
+	title := "Review guidance is waiting"
+	body := "A review round is waiting for an operator decision."
+	if reminder > 0 {
+		title = "Review guidance is still waiting"
+		body = fmt.Sprintf("Reminder %d: a review round is still waiting for an operator decision.", reminder)
+	}
+	wfnotify.NotifyBestEffort(ctx, notification.Notification{
+		ID: fmt.Sprintf("%s:waiting:%d", id, reminder), Kind: "steering",
+		Recipient: in.Recipient, SessionID: id, CreatedAt: workflow.Now(ctx),
+		Title: title, Body: body, URL: "/#/runs/" + in.ItemID,
+	})
+}
+
 // Pause is what the pausing loop knows at the pause point: which round is stopping,
 // where it runs, and the material the operator has to read to decide.
 //
@@ -145,6 +177,8 @@ func SessionWorkflow(ctx workflow.Context, in SessionInput) (decision Decision, 
 // only an identity, so the review's findings never become part of a history that is
 // replayed every time the session is loaded.
 type Pause struct {
+	// Recipient is the initiating principal, empty for CLI and scheduled work.
+	Recipient string
 	// Round is which pause point this is.
 	Round Round
 	// Place is where the paused work runs.
@@ -169,7 +203,12 @@ func Ask(ctx workflow.Context, in Pause) (Decision, error) {
 	}
 	opts := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: id})
 	var decision Decision
-	input := SessionInput{Round: in.Round, Place: in.Place}
+	input := SessionInput{
+		ItemID:    workflow.GetInfo(ctx).WorkflowExecution.ID,
+		Recipient: in.Recipient,
+		Round:     in.Round,
+		Place:     in.Place,
+	}
 	if err := workflow.ExecuteChildWorkflow(opts, SessionWorkflow, input).Get(opts, &decision); err != nil {
 		return Decision{}, fmt.Errorf("wait for the operator's decision on the %s round: %w", in.Round, err)
 	}
