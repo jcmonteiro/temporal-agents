@@ -202,6 +202,10 @@ type Options struct {
 	// resource, exactly as a deployment with no identity provider serves no sign-in
 	// routes.
 	Settings SettingsView
+	// Steering is the surface for rounds that wait for an operator. It is nil for a
+	// deployment that does not publish steering, which then serves no steering
+	// resources.
+	Steering SteeringView
 	// HealthChecks are the dependencies the health resource probes.
 	HealthChecks []HealthCheck
 	// DeprecatedSince and SunsetAt announce the API's lifecycle when an operator sets
@@ -232,6 +236,7 @@ type Server struct {
 	start           WorkStarter
 	places          PlaceView
 	settings        SettingsView
+	steering        SteeringView
 	healthChecks    []HealthCheck
 	deprecatedSince time.Time
 	sunsetAt        time.Time
@@ -270,6 +275,7 @@ func New(view WorkView, options Options) (*Server, error) {
 		start:           options.Start,
 		places:          options.Places,
 		settings:        options.Settings,
+		steering:        options.Steering,
 		healthChecks:    options.HealthChecks,
 		deprecatedSince: options.DeprecatedSince,
 		sunsetAt:        options.SunsetAt,
@@ -384,6 +390,22 @@ func (s *Server) resources() []resource {
 			pattern: s.basePath + "/settings",
 			methods: map[string]http.HandlerFunc{http.MethodGet: s.handleSettings},
 		})
+	}
+	if s.steering != nil {
+		list = append(list,
+			resource{
+				pattern: s.basePath + "/steering/sessions",
+				methods: map[string]http.HandlerFunc{http.MethodGet: s.handleSteeringSessions},
+			},
+			resource{
+				pattern: s.basePath + "/steering/sessions/{id}",
+				methods: map[string]http.HandlerFunc{http.MethodGet: s.handleSteeringSession},
+			},
+			resource{
+				pattern: s.basePath + "/steering/sessions/{id}/decision",
+				methods: map[string]http.HandlerFunc{http.MethodPost: s.handleSteeringDecision},
+			},
+		)
 	}
 	return append(list, s.authRoutes()...)
 }

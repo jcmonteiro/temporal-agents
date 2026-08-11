@@ -26,6 +26,9 @@ import (
 	"temporal-agents/internal/httpapi"
 	"temporal-agents/internal/scoped/scopedpg"
 	"temporal-agents/internal/setting"
+	"temporal-agents/internal/steering"
+	"temporal-agents/internal/steering/steeringpg"
+	"temporal-agents/internal/steering/steeringtemporal"
 )
 
 // The serve command is the composition root for the Agent Hub API. The core and
@@ -374,6 +377,14 @@ func runAPIServer(options serveOptions) error {
 	defer config.Close()
 	settings := &setting.Resolver{Store: config}
 
+	// A waiting round and its conversation belong to the steering context. The API
+	// reads and decides through that context's store, not through execution records.
+	steeringStore, err := steeringpg.Open(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("could not reach the steering store: %w", err)
+	}
+	defer steeringStore.Close()
+
 	// Signing in is opened before anything is served, so a hub configured with a
 	// provider it cannot reach stops here with a message instead of failing at an
 	// operator's first click.
@@ -393,6 +404,14 @@ func runAPIServer(options serveOptions) error {
 		return err
 	}
 	schedules, err := hubtemporal.NewSchedules(orchestrator.WorkflowService(), client.DefaultNamespace)
+	if err != nil {
+		return err
+	}
+	steeringSignals, err := steeringtemporal.New(orchestrator)
+	if err != nil {
+		return err
+	}
+	steeringService, err := steering.NewService(steeringStore, steeringSignals)
 	if err != nil {
 		return err
 	}
@@ -439,6 +458,7 @@ func runAPIServer(options serveOptions) error {
 		Start:                service,
 		Places:               service,
 		Settings:             settings,
+		Steering:             steeringService,
 		HealthChecks: append([]httpapi.HealthCheck{
 			{
 				Name: "temporal",
@@ -471,6 +491,13 @@ func runAPIServer(options serveOptions) error {
 				Name: "scoped-config",
 				Check: func(ctx context.Context) error {
 					_, err := settings.Settings(ctx)
+					return err
+				},
+			},
+			{
+				Name: "steering-store",
+				Check: func(ctx context.Context) error {
+					_, err := steeringStore.WaitingSessions(ctx)
 					return err
 				},
 			},

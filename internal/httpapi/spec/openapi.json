@@ -1207,6 +1207,162 @@
           }
         }
       }
+    },
+    "/api/v1/steering/sessions": {
+      "get": {
+        "tags": [
+          "Steering"
+        ],
+        "summary": "List review rounds waiting for an operator",
+        "operationId": "listSteeringSessions",
+        "responses": {
+          "200": {
+            "description": "Waiting rounds, oldest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SteeringSessionCollection"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
+          },
+          "default": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/v1/steering/sessions/{id}": {
+      "get": {
+        "tags": [
+          "Steering"
+        ],
+        "summary": "Read one waiting round and its conversation",
+        "operationId": "getSteeringSession",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The session, review material, editable guidance, conversation, cost, and contributors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SteeringSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
+          },
+          "default": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/v1/steering/sessions/{id}/decision": {
+      "post": {
+        "tags": [
+          "Steering"
+        ],
+        "summary": "Decide a waiting review round",
+        "description": "Records the first decision durably before resuming the round. A repeat returns the decision that already won.",
+        "operationId": "decideSteeringSession",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SteeringDecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The session with the decision that won.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SteeringSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
+          },
+          "default": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2685,6 +2841,176 @@
           "hash": {
             "type": "string",
             "description": "The content hash of the text that was used, so the naming is verifiable. The text itself is deliberately not published here."
+          }
+        }
+      },
+      "SteeringMessage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sequence",
+          "role",
+          "text",
+          "at"
+        ],
+        "properties": {
+          "sequence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "operator",
+              "agent"
+            ]
+          },
+          "author": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "at": {
+            "$ref": "#/components/schemas/NullableTimestamp"
+          }
+        }
+      },
+      "SteeringSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "itemId",
+          "round",
+          "state",
+          "waitingSince",
+          "locationId"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "itemId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "round": {
+            "type": "string",
+            "enum": [
+              "local-review",
+              "remote-comments"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "waiting",
+              "decided",
+              "abandoned"
+            ]
+          },
+          "waitingSince": {
+            "$ref": "#/components/schemas/NullableTimestamp"
+          },
+          "locationId": {
+            "$ref": "#/components/schemas/LocationID"
+          },
+          "material": {
+            "type": "string"
+          },
+          "guidance": {
+            "type": "string",
+            "maxLength": 8192
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "guide",
+              "skip",
+              "stop"
+            ]
+          },
+          "decidedAt": {
+            "$ref": "#/components/schemas/NullableTimestamp"
+          },
+          "decidedBy": {
+            "type": "string"
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "contributors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SteeringMessage"
+            }
+          },
+          "locations": {
+            "$ref": "#/components/schemas/LocationRegistry"
+          }
+        }
+      },
+      "SteeringSessionCollection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "count",
+          "limit",
+          "locations"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SteeringSession"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "locations": {
+            "$ref": "#/components/schemas/LocationRegistry"
+          }
+        }
+      },
+      "SteeringDecisionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "decision"
+        ],
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "guide",
+              "skip",
+              "stop"
+            ]
+          },
+          "guidance": {
+            "type": "string",
+            "maxLength": 8192
           }
         }
       }

@@ -39,55 +39,61 @@ const schemaMediaType = "application/schema+json"
 // model can be served next to this one within the same API version instead of forcing
 // every consumer onto a new API.
 const (
-	modelActiveWorkCollection = "active-work-collection.v1"
-	modelFleet                = "fleet.v1"
-	modelFleetCollection      = "fleet-collection.v1"
-	modelRun                  = "run.v1"
-	modelRunCollection        = "run-collection.v1"
-	modelSchedule             = "schedule.v1"
-	modelScheduleCollection   = "schedule-collection.v1"
-	modelLocation             = "location.v1"
-	modelDismissal            = "dismissal.v1"
-	modelDismissalCollection  = "dismissal-collection.v1"
-	modelDismissalRequest     = "dismissal-request.v1"
-	modelStartedWork          = "started-work.v1"
-	modelStartRequest         = "start-request.v1"
-	modelPlace                = "place.v1"
-	modelPlaceCollection      = "place-collection.v1"
-	modelPlaceRequest         = "place-request.v1"
-	modelSetting              = "setting.v1"
-	modelSettingCollection    = "setting-collection.v1"
-	modelSession              = "session.v1"
-	modelProblem              = "problem.v1"
-	modelServiceDescription   = "service-description.v1"
-	modelHealth               = "health.v1"
+	modelActiveWorkCollection      = "active-work-collection.v1"
+	modelFleet                     = "fleet.v1"
+	modelFleetCollection           = "fleet-collection.v1"
+	modelRun                       = "run.v1"
+	modelRunCollection             = "run-collection.v1"
+	modelSchedule                  = "schedule.v1"
+	modelScheduleCollection        = "schedule-collection.v1"
+	modelLocation                  = "location.v1"
+	modelDismissal                 = "dismissal.v1"
+	modelDismissalCollection       = "dismissal-collection.v1"
+	modelDismissalRequest          = "dismissal-request.v1"
+	modelStartedWork               = "started-work.v1"
+	modelStartRequest              = "start-request.v1"
+	modelPlace                     = "place.v1"
+	modelPlaceCollection           = "place-collection.v1"
+	modelPlaceRequest              = "place-request.v1"
+	modelSetting                   = "setting.v1"
+	modelSettingCollection         = "setting-collection.v1"
+	modelSteeringSession           = "steering-session.v1"
+	modelSteeringSessionCollection = "steering-session-collection.v1"
+	modelSteeringDecisionRequest   = "steering-decision-request.v1"
+	modelSession                   = "session.v1"
+	modelProblem                   = "problem.v1"
+	modelServiceDescription        = "service-description.v1"
+	modelHealth                    = "health.v1"
 )
 
 // modelSchemas maps each published model name onto the schema in the specification
 // that defines it. It is the single place the two vocabularies meet.
 var modelSchemas = map[string]string{
-	modelActiveWorkCollection: "ActiveWorkCollection",
-	modelFleet:                "Fleet",
-	modelFleetCollection:      "FleetCollection",
-	modelRun:                  "Run",
-	modelRunCollection:        "RunCollection",
-	modelSchedule:             "Schedule",
-	modelScheduleCollection:   "ScheduleCollection",
-	modelLocation:             "Location",
-	modelDismissal:            "Dismissal",
-	modelDismissalCollection:  "DismissalCollection",
-	modelDismissalRequest:     "DismissalRequest",
-	modelStartedWork:          "StartedWork",
-	modelStartRequest:         "StartWorkRequest",
-	modelPlace:                "Place",
-	modelPlaceCollection:      "PlaceCollection",
-	modelPlaceRequest:         "PlaceRegistrationRequest",
-	modelSetting:              "Setting",
-	modelSettingCollection:    "SettingCollection",
-	modelSession:              "Session",
-	modelProblem:              "Problem",
-	modelServiceDescription:   "ServiceDescription",
-	modelHealth:               "Health",
+	modelActiveWorkCollection:      "ActiveWorkCollection",
+	modelFleet:                     "Fleet",
+	modelFleetCollection:           "FleetCollection",
+	modelRun:                       "Run",
+	modelRunCollection:             "RunCollection",
+	modelSchedule:                  "Schedule",
+	modelScheduleCollection:        "ScheduleCollection",
+	modelLocation:                  "Location",
+	modelDismissal:                 "Dismissal",
+	modelDismissalCollection:       "DismissalCollection",
+	modelDismissalRequest:          "DismissalRequest",
+	modelStartedWork:               "StartedWork",
+	modelStartRequest:              "StartWorkRequest",
+	modelPlace:                     "Place",
+	modelPlaceCollection:           "PlaceCollection",
+	modelPlaceRequest:              "PlaceRegistrationRequest",
+	modelSetting:                   "Setting",
+	modelSettingCollection:         "SettingCollection",
+	modelSteeringSession:           "SteeringSession",
+	modelSteeringSessionCollection: "SteeringSessionCollection",
+	modelSteeringDecisionRequest:   "SteeringDecisionRequest",
+	modelSession:                   "Session",
+	modelProblem:                   "Problem",
+	modelServiceDescription:        "ServiceDescription",
+	modelHealth:                    "Health",
 }
 
 // modelNames lists the published models in a stable order.
@@ -395,6 +401,7 @@ func (s *Server) handleServiceDescription(w http.ResponseWriter, r *http.Request
 			{Name: "dismissals", Href: s.basePath + "/dismissals", Methods: []string{"GET", "POST"}, Schema: s.schemaURI(modelDismissalCollection)},
 			{Name: "places", Href: s.basePath + "/places", Methods: []string{"GET", "POST"}, Schema: s.schemaURI(modelPlaceCollection)},
 			{Name: "settings", Href: s.basePath + "/settings", Methods: []string{"GET"}, Schema: s.schemaURI(modelSettingCollection)},
+			{Name: "steering-sessions", Href: s.basePath + "/steering/sessions", Methods: []string{"GET"}, Schema: s.schemaURI(modelSteeringSessionCollection)},
 		},
 		"vocabularies": map[string]any{
 			"workStatus":   statuses,

@@ -9,21 +9,21 @@ an unauthenticated or cross-site attempt is refused; restarting the API loses no
 
 ## Tasks
 
-- [ ] Add the steering store behind its own port, with its own migrations and **no
+- [x] Add the steering store behind its own port, with its own migrations and **no
       cross-context foreign keys**: sessions with their state, material reference, and
       outcome; append-only messages with a monotonic sequence.
-- [ ] Add reads: the sessions currently waiting, and one session with its material,
+- [x] Add reads: the sessions currently waiting, and one session with its material,
       guidance text, conversation so far, cost so far, and who has contributed.
-- [ ] Add the decision write: proceed with guidance, proceed without guidance, stop.
+- [x] Add the decision write: proceed with guidance, proceed without guidance, stop.
       Validate guidance presence and bound; refuse over-long guidance with an
       explanation; record the deciding principal.
-- [ ] Make the write idempotent: a repeat returns the recorded decision.
-- [ ] Fail visibly if the decision cannot be durably recorded; never report success
+- [x] Make the write idempotent: a repeat returns the recorded decision.
+- [x] Fail visibly if the decision cannot be durably recorded; never report success
       optimistically.
-- [ ] Reflect the waiting state in the existing item read path (needs input, since when,
+- [x] Reflect the waiting state in the existing item read path (needs input, since when,
       which session).
-- [ ] Enforce authentication and the mutation request rules.
-- [ ] Tests: unit tests for validation and idempotency with a fake store; integration
+- [x] Enforce authentication and the mutation request rules.
+- [x] Tests: unit tests for validation and idempotency with a fake store; integration
       tests with containers for durability and sequence monotonicity; contract tests for
       the waiting-state field.
 

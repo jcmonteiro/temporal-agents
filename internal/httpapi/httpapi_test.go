@@ -194,6 +194,9 @@ func newTestServer(t *testing.T, view WorkView, mutate ...func(*Options)) *Serve
 		// The same reasoning applies to the place registry: a deployment that can be
 		// worked in publishes it, so the default test server does too.
 		Places: &placesStub{},
+		// A production hub publishes the rounds that wait for an operator. Keep that
+		// optional route in the default contract server, with an empty real service.
+		Steering: defaultSteeringView(t),
 	}
 	for _, change := range mutate {
 		change(&options)
