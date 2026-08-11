@@ -24,8 +24,11 @@ import (
 	"temporal-agents/internal/agenthub/hubtemporal"
 	"temporal-agents/internal/gitcli"
 	"temporal-agents/internal/httpapi"
+	"temporal-agents/internal/instruction"
 	"temporal-agents/internal/notification"
 	"temporal-agents/internal/notification/notificationpg"
+	"temporal-agents/internal/promptconfig"
+	"temporal-agents/internal/promptconfig/hubplaces"
 	"temporal-agents/internal/scoped/scopedpg"
 	"temporal-agents/internal/setting"
 	"temporal-agents/internal/steering"
@@ -456,6 +459,10 @@ func runAPIServer(options serveOptions) error {
 	if err != nil {
 		return err
 	}
+	prompts := &promptconfig.Service{
+		Configuration: &instruction.Configuration{Store: config},
+		Places:        hubplaces.Adapter{Registry: service},
+	}
 
 	allowedOrigins := append(localOrigins(options.address, allowedHosts, options.tlsCert != ""), options.allowedOrigins...)
 	api, err := httpapi.New(service, httpapi.Options{
@@ -471,6 +478,7 @@ func runAPIServer(options serveOptions) error {
 		Start:                service,
 		Places:               service,
 		Settings:             settings,
+		Prompts:              prompts,
 		Steering:             steeringService,
 		Notifications:        inbox,
 		HealthChecks: append([]httpapi.HealthCheck{
@@ -504,7 +512,7 @@ func runAPIServer(options serveOptions) error {
 			{
 				Name: "scoped-config",
 				Check: func(ctx context.Context) error {
-					_, err := settings.Settings(ctx)
+					_, err := prompts.Catalogue(ctx, "")
 					return err
 				},
 			},

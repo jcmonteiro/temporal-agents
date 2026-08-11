@@ -33,6 +33,8 @@ import (
 
 	"temporal-agents/internal/agenthub"
 	"temporal-agents/internal/identity"
+	"temporal-agents/internal/instruction"
+	"temporal-agents/internal/promptconfig"
 	"temporal-agents/internal/setting"
 )
 
@@ -131,6 +133,13 @@ type SettingsView interface {
 	Settings(ctx context.Context) (setting.Resolution, error)
 }
 
+// PromptConfiguration is the driving port for prompt catalogue reads and mutations.
+type PromptConfiguration interface {
+	Catalogue(ctx context.Context, locationID string) (instruction.Catalogue, error)
+	Set(ctx context.Context, locationID string, key instruction.Key, text, savedBy string) (instruction.Record, error)
+	Reset(ctx context.Context, locationID string, key instruction.Key) error
+}
+
 // HealthCheck is one dependency the health resource reports on. The wiring supplies
 // them, so the transport reports readiness without having to know what the API reads
 // through.
@@ -202,6 +211,9 @@ type Options struct {
 	// resource, exactly as a deployment with no identity provider serves no sign-in
 	// routes.
 	Settings SettingsView
+	// Prompts is the editable instruction catalogue. It is nil for a deployment that
+	// does not publish prompt configuration.
+	Prompts PromptConfiguration
 	// Steering is the surface for rounds that wait for an operator. It is nil for a
 	// deployment that does not publish steering, which then serves no steering
 	// resources.
@@ -241,6 +253,7 @@ type Server struct {
 	start           WorkStarter
 	places          PlaceView
 	settings        SettingsView
+	prompts         PromptConfiguration
 	steering        SteeringView
 	notifications   NotificationsView
 	streamPoll      time.Duration
@@ -283,6 +296,7 @@ func New(view WorkView, options Options) (*Server, error) {
 		start:           options.Start,
 		places:          options.Places,
 		settings:        options.Settings,
+		prompts:         options.Prompts,
 		steering:        options.Steering,
 		notifications:   options.Notifications,
 		streamPoll:      options.StreamPollInterval,
@@ -404,6 +418,21 @@ func (s *Server) resources() []resource {
 			pattern: s.basePath + "/settings",
 			methods: map[string]http.HandlerFunc{http.MethodGet: s.handleSettings},
 		})
+	}
+	if s.prompts != nil {
+		list = append(list,
+			resource{
+				pattern: s.basePath + "/prompts",
+				methods: map[string]http.HandlerFunc{http.MethodGet: s.handlePrompts},
+			},
+			resource{
+				pattern: s.basePath + "/prompts/{key}",
+				methods: map[string]http.HandlerFunc{
+					http.MethodPut:    s.handleSetPrompt,
+					http.MethodDelete: s.handleResetPrompt,
+				},
+			},
+		)
 	}
 	if s.notifications != nil {
 		list = append(list,
@@ -767,6 +796,92 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		items = append(items, settingFrom(value))
 	}
 	s.writeJSON(w, r, http.StatusOK, modelSettingCollection, newCollection(items, len(items)))
+}
+
+func (s *Server) handlePrompts(w http.ResponseWriter, r *http.Request) {
+	locationID, ok := s.promptLocationID(w, r)
+	if !ok {
+		return
+	}
+	catalogue, err := s.prompts.Catalogue(r.Context(), locationID)
+	if err != nil {
+		s.writePromptProblem(w, r, err)
+		return
+	}
+	items := make([]promptResource, 0, len(catalogue))
+	for _, configured := range catalogue {
+		items = append(items, promptFrom(configured))
+	}
+	s.writeJSON(w, r, http.StatusOK, modelPromptCollection, newCollection(items, len(items)))
+}
+
+func (s *Server) handleSetPrompt(w http.ResponseWriter, r *http.Request) {
+	locationID, ok := s.promptLocationID(w, r)
+	if !ok {
+		return
+	}
+	var request promptRequest
+	if !s.decodeJSONBody(w, r, &request) {
+		return
+	}
+	savedBy := ""
+	if principal, authenticated := PrincipalFrom(r.Context()); authenticated {
+		savedBy = principal.ID()
+	}
+	if _, err := s.prompts.Set(r.Context(), locationID, instruction.Key(r.PathValue("key")), request.Text, savedBy); err != nil {
+		s.writePromptProblem(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleResetPrompt(w http.ResponseWriter, r *http.Request) {
+	locationID, ok := s.promptLocationID(w, r)
+	if !ok {
+		return
+	}
+	if err := s.prompts.Reset(r.Context(), locationID, instruction.Key(r.PathValue("key"))); err != nil {
+		s.writePromptProblem(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) promptLocationID(w http.ResponseWriter, r *http.Request) (string, bool) {
+	query, ok := s.parseQuery(w, r)
+	if !ok {
+		return "", false
+	}
+	for key := range query {
+		if key != "locationId" {
+			s.writeProblem(w, r, codeInvalidRequest, "unknown query parameter: "+key)
+			return "", false
+		}
+	}
+	if len(query["locationId"]) > 1 {
+		s.writeProblem(w, r, codeInvalidRequest, "locationId must be supplied once")
+		return "", false
+	}
+	return query.Get("locationId"), true
+}
+
+func (s *Server) writePromptProblem(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, instruction.ErrInvalidText):
+		s.writeProblem(w, r, codeInvalidPrompt, err.Error())
+	case errors.Is(err, instruction.ErrUnknownKey), errors.Is(err, promptconfig.ErrPlaceNotFound):
+		s.writeProblem(w, r, codeNotFound, "no such prompt configuration resource")
+	case errors.Is(err, context.DeadlineExceeded):
+		s.writeProblem(w, r, codeTimeout, "the request exceeded the server's time budget")
+	case errors.Is(err, promptconfig.ErrUnavailable):
+		s.logger.Error("prompt configuration is unavailable",
+			"requestId", requestIDFrom(r.Context()), "path", r.URL.EscapedPath(), "error", err.Error())
+		s.writeProblem(w, r, codeDependencyUnavailable, "prompt configuration could not be reached")
+	default:
+		s.logger.Error("an unclassified prompt configuration failure reached the transport",
+			"requestId", requestIDFrom(r.Context()), "path", r.URL.EscapedPath(), "error", err.Error())
+		s.writeProblem(w, r, codeInternal, "")
+	}
 }
 
 // handleHealth reports whether the server can reach what it reads through. It probes

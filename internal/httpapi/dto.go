@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"temporal-agents/internal/agenthub"
+	"temporal-agents/internal/instruction"
 	"temporal-agents/internal/setting"
 )
 
@@ -550,6 +551,60 @@ func settingFrom(value setting.Value) settingResource {
 		resource.Purpose = spec.Purpose
 	}
 	return resource
+}
+
+// promptResource is one governed instruction at the selected scope.
+type promptResource struct {
+	Key              string                 `json:"key"`
+	Purpose          string                 `json:"purpose"`
+	Effective        string                 `json:"effective"`
+	Inherited        string                 `json:"inherited"`
+	Source           string                 `json:"source"`
+	InheritedFrom    string                 `json:"inheritedFrom"`
+	Version          int                    `json:"version"`
+	InheritedVersion int                    `json:"inheritedVersion"`
+	Overridden       bool                   `json:"overridden"`
+	SystemBlock      string                 `json:"systemBlock"`
+	RequiredInserts  []promptInsertResource `json:"requiredInserts"`
+	Advanced         bool                   `json:"advanced"`
+	MaxLength        int                    `json:"maxLength"`
+}
+
+type promptInsertResource struct {
+	Name    string `json:"name"`
+	Action  string `json:"action"`
+	Purpose string `json:"purpose"`
+}
+
+type promptRequest struct {
+	Text string `json:"text"`
+}
+
+func promptFrom(configured instruction.Configured) promptResource {
+	required := make([]promptInsertResource, 0, len(configured.Spec.Inserts))
+	for _, insert := range configured.Spec.Inserts {
+		if !insert.Required {
+			continue
+		}
+		required = append(required, promptInsertResource{
+			Name: insert.Name, Action: insert.Action(), Purpose: insert.Purpose,
+		})
+	}
+	return promptResource{
+		Key:              string(configured.Spec.Key),
+		Purpose:          configured.Spec.Purpose,
+		Effective:        configured.Effective.Text,
+		Inherited:        configured.Inherited.Text,
+		Source:           configured.Effective.Scope.Kind(),
+		InheritedFrom:    configured.Inherited.Scope.Kind(),
+		Version:          configured.Effective.Version,
+		InheritedVersion: configured.Inherited.Version,
+		Overridden:       configured.Overridden,
+		SystemBlock:      configured.Spec.System,
+		RequiredInserts:  required,
+		Advanced:         configured.Spec.Advanced,
+		MaxLength:        instruction.MaxTextLength,
+	}
 }
 
 // placeResource is one place an operator registered: which place it is, and the

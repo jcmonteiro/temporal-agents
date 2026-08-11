@@ -3,7 +3,7 @@
   "info": {
     "title": "Temporal Agents API",
     "version": "1.0.0",
-    "description": "A versioned local API for observing agent work as fleets, standalone run chains, schedules, and a paged active-work projection. The API exposes the work model rather than Temporal or database structures. It is read-only except for dismissing finished overview items. All times are RFC 3339 UTC timestamps. Existing collection reads are capped and newest first. The active-work resource uses opaque source-native cursor pagination. A continue-as-new chain is one item identified by its stable workflow ID. The server binds to loopback by default because responses can contain workflow goals and prompts.",
+    "description": "A versioned local API for observing agent work as fleets, standalone run chains, schedules, and a paged active-work projection. The API exposes the work model rather than Temporal or database structures. Writes register places, start work, steer waiting rounds, dismiss finished items, and configure governed prompts. All times are RFC 3339 UTC timestamps. Existing collection reads are capped and newest first. The active-work resource uses opaque source-native cursor pagination. A continue-as-new chain is one item identified by its stable workflow ID. The server binds to loopback by default because responses can contain workflow goals and prompts.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -61,6 +61,10 @@
     {
       "name": "Settings",
       "description": "What the tool is configured to do, resolved through the places work runs in. Each setting reports the scope its value came from, so a consumer never re-derives inheritance."
+    },
+    {
+      "name": "Prompts",
+      "description": "Governed agent instructions, editable globally and per registered place with inheritance and reset."
     }
   ],
   "paths": {
@@ -1655,6 +1659,189 @@
           }
         }
       }
+    },
+    "/api/v1/prompts": {
+      "get": {
+        "tags": [
+          "Prompts"
+        ],
+        "summary": "List prompt configuration",
+        "description": "Lists every governed prompt with its effective and inherited values, source scopes, editable inserts, and protected system block.",
+        "operationId": "listPrompts",
+        "parameters": [
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": false,
+            "description": "The opaque registered location to configure. Omit it for the installation-wide scope.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The prompt catalogue at the selected scope.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Link": {
+                "$ref": "#/components/headers/DescribedBy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptCollection"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/v1/prompts/{key}": {
+      "parameters": [
+        {
+          "name": "key",
+          "in": "path",
+          "required": true,
+          "description": "The governed prompt key.",
+          "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        }
+      ],
+      "put": {
+        "tags": [
+          "Prompts"
+        ],
+        "summary": "Set a prompt override",
+        "description": "Validates and appends an override at the selected scope. Existing versions remain immutable.",
+        "operationId": "setPrompt",
+        "parameters": [
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": false,
+            "description": "The opaque registered location to configure. Omit it for the installation-wide scope.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromptRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "The override was saved."
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidPrompt"
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Prompts"
+        ],
+        "summary": "Reset a prompt override",
+        "description": "Removes the override pointer at the selected scope and returns resolution to the inherited value.",
+        "operationId": "resetPrompt",
+        "parameters": [
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": false,
+            "description": "The opaque registered location to configure. Omit it for the installation-wide scope.",
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The override was reset, or was already inherited."
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1875,6 +2062,16 @@
       },
       "PlaceIsBusy": {
         "description": "Work is already running in the place the start names.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "InvalidPrompt": {
+        "description": "The prompt failed template, insert, protected-block, or length validation.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -3394,6 +3591,140 @@
           "unread": {
             "type": "integer",
             "minimum": 0
+          }
+        }
+      },
+      "PromptSource": {
+        "type": "string",
+        "description": "The kind of scope a prompt value came from.",
+        "enum": [
+          "directory",
+          "global",
+          "factory"
+        ]
+      },
+      "PromptInsert": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "action",
+          "purpose"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          }
+        }
+      },
+      "Prompt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "purpose",
+          "effective",
+          "inherited",
+          "source",
+          "inheritedFrom",
+          "version",
+          "inheritedVersion",
+          "overridden",
+          "systemBlock",
+          "requiredInserts",
+          "advanced",
+          "maxLength"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "effective": {
+            "type": "string"
+          },
+          "inherited": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/PromptSource"
+          },
+          "inheritedFrom": {
+            "$ref": "#/components/schemas/PromptSource"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "inheritedVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "overridden": {
+            "type": "boolean"
+          },
+          "systemBlock": {
+            "type": "string",
+            "description": "Read-only text appended by the server."
+          },
+          "requiredInserts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptInsert"
+            }
+          },
+          "advanced": {
+            "type": "boolean"
+          },
+          "maxLength": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "PromptCollection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "count",
+          "limit"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Prompt"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "PromptRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 16384
           }
         }
       }

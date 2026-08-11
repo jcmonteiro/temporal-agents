@@ -46,6 +46,8 @@ const (
 	// codePlaceIsBusy is a start refused because work is already running in the
 	// place it names.
 	codePlaceIsBusy problemCode = "place-is-busy"
+	// codeInvalidPrompt is an instruction override that is unsafe to save.
+	codeInvalidPrompt problemCode = "invalid-prompt"
 	// codeAuthenticationRequired is a request that carries no credential this hub
 	// accepts: no session, and no configured token.
 	codeAuthenticationRequired problemCode = "authentication-required"
@@ -137,6 +139,13 @@ var problemTypes = map[problemCode]problemType{
 		Description: "Two loops in one working tree stash and commit over each other, so a second " +
 			"one is refused rather than allowed to corrupt it. The detail names the work that is " +
 			"already running there. Wait for it to settle, or start the work in another place.",
+	},
+	codeInvalidPrompt: {
+		Title:  "The prompt override is invalid",
+		Status: http.StatusUnprocessableEntity,
+		Description: "The prompt cannot be saved because it is empty, too long, is not a valid " +
+			"template, omits a required insert, or copies protected system material. The detail " +
+			"names the cause and the previous version remains effective.",
 	},
 	codeAuthenticationRequired: {
 		Title:  "Authentication is required",

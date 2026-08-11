@@ -187,6 +187,7 @@ func newTestServer(t *testing.T, view WorkView, mutate ...func(*Options)) *Serve
 		// the default test server has one: a resource served by production and by no test
 		// would be a resource nothing keeps honest.
 		Settings: settingsStub{},
+		Prompts:  &promptConfigurationStub{},
 		// A hub that can be worked in can be started in, so the default test server
 		// offers the start surface: a route served by production and by no test is a
 		// route nothing keeps honest.
