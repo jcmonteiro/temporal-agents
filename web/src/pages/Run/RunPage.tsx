@@ -6,6 +6,7 @@ import { STATUS_LABEL } from "../../domain/work-item";
 import { StatusDot } from "../../components/StatusDot";
 import { Icon } from "../../components/Icon";
 import { addressOf, goTo, OVERVIEW } from "../../platform/route";
+import { SteeringButton } from "../../platform/steering";
 
 // A run is live while it runs, so the page polls on the same cadence as the rest
 // of the hub.
@@ -215,6 +216,7 @@ function Report({
         )}
       </dl>
 
+      <SteeringButton itemId={runId} />
       <Instructions view={view} />
       <Repeat view={view} />
     </>

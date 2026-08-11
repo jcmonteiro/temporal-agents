@@ -127,6 +127,33 @@ export interface PlaceDTO {
 // Work that has just been started. It is not a run: a start returns as soon as
 // the orchestrator accepts the submission, so there is no status, no iteration
 // count and no token usage yet, and the API publishes none.
+export interface SteeringMessageDTO {
+  sequence: number;
+  role: "operator" | "agent";
+  author?: string;
+  text: string;
+  tokens?: number;
+  at: string | null;
+}
+
+export interface SteeringSessionDTO {
+  id: string;
+  itemId: string;
+  round: "local-review" | "remote-comments";
+  state: "waiting" | "decided" | "abandoned";
+  waitingSince: string | null;
+  locationId: string;
+  material?: string;
+  guidance?: string;
+  decision?: "guide" | "skip" | "stop";
+  decidedAt?: string | null;
+  decidedBy?: string;
+  tokens?: number;
+  contributors?: string[];
+  messages?: SteeringMessageDTO[];
+  locations?: LocationResource[];
+}
+
 export interface StartedWorkDTO {
   id: string;
   kind: "run";

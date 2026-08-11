@@ -8,6 +8,7 @@ import type {
   PlaceDTO,
   RunDTO,
   ScheduleDTO,
+  SteeringSessionDTO,
 } from "../clients/api";
 import type { PrincipalDTO } from "../clients/session";
 
@@ -70,6 +71,10 @@ export class FakeApi {
   startedBy: Record<string, string> = {};
   /** Which stored instruction a run ran under, by run id. */
   instructionsUsed: Record<string, InstructionUseDTO[]> = {};
+  /** Steering sessions, by their stable identity. */
+  steeringSessions: Record<string, SteeringSessionDTO> = {};
+  /** How many decision writes arrived, for burst-idempotency tests. */
+  steeringDecisions = 0;
 
   private original: typeof globalThis.fetch | undefined;
 
@@ -88,6 +93,17 @@ export class FakeApi {
       }
       if (this.signInConfigured && this.principal === null) {
         return Promise.resolve(this.unauthenticated());
+      }
+      if (path === "/api/v1/steering/sessions") {
+        return Promise.resolve(this.json({
+          items: Object.values(this.steeringSessions).filter((session) => session.state === "waiting"),
+          count: Object.values(this.steeringSessions).filter((session) => session.state === "waiting").length,
+          limit: 100,
+          locations: this.locations,
+        }));
+      }
+      if (path.startsWith("/api/v1/steering/sessions/")) {
+        return Promise.resolve(this.steering(path, method, init?.body));
       }
       if (path.startsWith("/api/v1/runs/")) {
         return Promise.resolve(this.run(decodeURIComponent(path.slice("/api/v1/runs/".length))));
@@ -145,6 +161,38 @@ export class FakeApi {
       instructions: this.instructionsUsed[run.id] ?? [],
       locations: place ? [theUnknownPlace(), place] : [theUnknownPlace()],
     });
+  }
+
+  private steering(path: string, method: string, body: BodyInit | null | undefined): Response {
+    const rest = path.slice("/api/v1/steering/sessions/".length);
+    const [encodedId, action] = rest.split("/");
+    const id = decodeURIComponent(encodedId);
+    const session = this.steeringSessions[id];
+    if (!session) return this.problem(404, "not-found", "no such steering session");
+    if (method === "GET" && !action) return this.json(session);
+    const request = JSON.parse(String(body ?? "{}")) as {
+      text?: string;
+      finish?: boolean;
+      decision?: "guide" | "skip" | "stop";
+      guidance?: string;
+    };
+    if (method === "POST" && action === "question") {
+      const messages = [...(session.messages ?? [])];
+      messages.push({ sequence: messages.length + 1, role: "operator", author: this.principal?.id, text: request.text ?? "", at: "2026-08-06T12:00:00Z" });
+      const agentText = request.finish ? "Keep the retry and preserve the cause." : "Which callers need the cause?";
+      messages.push({ sequence: messages.length + 1, role: "agent", text: agentText, tokens: 40, at: "2026-08-06T12:00:01Z" });
+      const updated = { ...session, messages, tokens: (session.tokens ?? 0) + 40, guidance: request.finish ? agentText : session.guidance };
+      this.steeringSessions[id] = updated;
+      return this.json(updated);
+    }
+    if (method === "POST" && action === "decision") {
+      this.steeringDecisions += 1;
+      if (session.state === "waiting") {
+        this.steeringSessions[id] = { ...session, state: "decided", decision: request.decision, guidance: request.guidance ?? session.guidance };
+      }
+      return this.json(this.steeringSessions[id]);
+    }
+    return this.problem(404, "not-found", "no such steering resource");
   }
 
   /**
@@ -381,6 +429,26 @@ export function aRun(overrides: Partial<RunDTO> = {}): RunDTO {
     endedAt: null,
     iterations: 3,
     dismissible: false,
+    ...overrides,
+  };
+}
+
+export function aSteeringSession(
+  overrides: Partial<SteeringSessionDTO> = {},
+): SteeringSessionDTO {
+  return {
+    id: "steering-review-1",
+    itemId: "review-1",
+    round: "local-review",
+    state: "waiting",
+    waitingSince: "2026-08-06T11:00:00Z",
+    locationId: "unknown",
+    material: "The retry hides the original error.",
+    guidance: "",
+    tokens: 0,
+    contributors: [],
+    messages: [],
+    locations: [theUnknownPlace()],
     ...overrides,
   };
 }

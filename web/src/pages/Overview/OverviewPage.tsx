@@ -10,6 +10,7 @@ import {
 import { registryOf, workIn, type PlaceRegistry } from "../../domain/place";
 import { RightRail, type Selected } from "../../components/RightRail";
 import { Orbit } from "./Orbit";
+import { useSteering } from "../../platform/steering";
 
 type StatusCounts = Record<WorkItemStatus, number>;
 
@@ -37,6 +38,7 @@ interface State {
 }
 
 export function OverviewPage(): ReactNode {
+  const steering = useSteering();
   const [state, setState] = useState<State>({ data: null, error: null });
   // Identity, not a bare id: a fleet and a run may share an id.
   const [selectedId, setSelectedId] = useState<WorkItemId | null>(null);
@@ -155,6 +157,16 @@ export function OverviewPage(): ReactNode {
           >
             Here's what's orbiting your work today.
           </p>
+          {steering.sessions.length > 0 && (
+            <section aria-label="Work waiting for guidance" style={{ marginTop: 12, padding: 12, border: "1px solid var(--status-waiting)", borderRadius: "var(--radius-sm)" }}>
+              <strong>{steering.sessions.length} review round{steering.sessions.length === 1 ? "" : "s"} waiting for guidance</strong>
+              {steering.sessions.map((session) => (
+                <button key={session.id} type="button" onClick={() => steering.open(session.id)} style={{ display: "block", marginTop: 8 }}>
+                  Guide {session.itemId} · since {session.waitingSince ?? "an unknown time"}
+                </button>
+              ))}
+            </section>
+          )}
         </div>
         <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
           <Orbit

@@ -12,21 +12,21 @@ the modal closes.
 
 ## Tasks
 
-- [ ] Add one shared modal component, mounted once and opened from any surface, so there
+- [x] Add one shared modal component, mounted once and opened from any surface, so there
       is a single implementation.
-- [ ] Show the material under decision, the editable guidance field, the conversation
+- [x] Show the material under decision, the editable guidance field, the conversation
       when one exists, the session's cost, since when it has waited, and who has
       contributed.
-- [ ] Make the three decisions available, with the guiding decision disabled while the
+- [x] Make the three decisions available, with the guiding decision disabled while the
       field is empty and an explanation of why.
-- [ ] Add the questioning affordance: start it, answer inline as text streams, finish it
+- [x] Add the questioning affordance: start it, answer inline as text streams, finish it
       into the editable field; make clear that no cost is incurred until it is started.
-- [ ] Show the guidance bound and refuse over-long text with the server's explanation.
-- [ ] Make waiting work prominent on the overview and on the place page (state plus
+- [x] Show the guidance bound and refuse over-long text with the server's explanation.
+- [x] Make waiting work prominent on the overview and on the place page (state plus
       since when).
-- [ ] Handle a session decided elsewhere: the modal reports the recorded decision and
+- [x] Handle a session decided elsewhere: the modal reports the recorded decision and
       closes, rather than failing.
-- [ ] Component tests: empty guidance cannot build; a decision is sent once per click
+- [x] Component tests: empty guidance cannot build; a decision is sent once per click
       burst; streamed text renders in order; a session decided elsewhere resolves
       gracefully; the modal is keyboard operable and focus-managed.
 

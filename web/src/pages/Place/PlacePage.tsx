@@ -15,6 +15,7 @@ import { Icon } from "../../components/Icon";
 import { WorkItemDetail } from "../../components/WorkItemDetail";
 import { addressOf, OVERVIEW } from "../../platform/route";
 import { Launcher } from "./Launcher";
+import { useSteering } from "../../platform/steering";
 
 // The page shows live work, so it polls on the same cadence as the overview.
 const REFRESH_INTERVAL_MS = 5_000;
@@ -28,6 +29,7 @@ interface State {
 }
 
 export function PlacePage({ placeId }: { placeId: string }): ReactNode {
+  const steering = useSteering();
   const [state, setState] = useState<State>({ view: null, error: null });
   const [selectedId, setSelectedId] = useState<WorkItemId | null>(null);
 
@@ -94,6 +96,11 @@ export function PlacePage({ placeId }: { placeId: string }): ReactNode {
           </p>
         )}
         {view?.found === false && <NotFound placeId={placeId} />}
+        {steering.sessions.filter((session) => session.locationId === placeId).map((session) => (
+          <button key={session.id} type="button" onClick={() => steering.open(session.id)}>
+            {session.itemId} needs guidance · waiting since {session.waitingSince ?? "an unknown time"}
+          </button>
+        ))}
         {view?.found === true && (
           <PlaceReport
             place={view.place}

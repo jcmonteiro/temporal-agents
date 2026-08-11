@@ -4,6 +4,7 @@ import { LeftNav } from "./components/LeftNav";
 import { SessionUnavailablePage, SignInPage } from "./pages/SignIn/SignInPage";
 import { Router } from "./router";
 import { SessionProvider, useSession } from "./platform/session";
+import { SteeringProvider } from "./platform/steering";
 
 export function App(): ReactNode {
   return (
@@ -53,9 +54,9 @@ function Shell(): ReactNode {
 /** The hub itself, which only a usable session reaches. */
 function Workspace(): ReactNode {
   return (
-    <>
+    <SteeringProvider>
       <LeftNav />
       <Router />
-    </>
+    </SteeringProvider>
   );
 }
