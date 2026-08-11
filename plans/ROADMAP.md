@@ -15,7 +15,7 @@ that several features depend on.
 | 3 | DONE | [`prompts`](./active/prompts/) — foundation slices | prompts are stored, scoped per location, versioned, and every run records which prompt version it used | 1 |
 | 4 | DONE | [`launching-work`](./archive/launching-work/) | an operator starts and re-runs agent work from a dedicated page | 1, 2 |
 | 5 | DONE | [`steering`](./active/steering/) | a review round waits for the operator, who guides it by text or by being grilled, then builds | 1, 2, 3 (foundation), 4 |
-| 6 | TODO | [`prompts`](./active/prompts/) — configuration slices | prompts are editable globally and per location, with resets to inherited and to factory | 3 |
+| 6 | IN-PROGRESS | [`prompts`](./active/prompts/) — configuration slices | prompts are editable globally and per location, with resets to inherited and to factory | 3 |
 
 Forcing reasons for the order:
 
