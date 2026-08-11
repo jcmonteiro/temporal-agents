@@ -33,8 +33,8 @@ staticClients:
     secret: agent-hub-local-secret
     name: Agent Hub
     redirectURIs:
-      - http://localhost:8973/api/v1/auth/callback
-      - http://127.0.0.1:8973/api/v1/auth/callback
+      - http://localhost:3000/api/v1/auth/callback
+      - http://127.0.0.1:3000/api/v1/auth/callback
 
 # A password database with one operator, so a local sign-in looks like every other
 # sign-in: a form, a password, a redirect back.

@@ -140,7 +140,7 @@ FLAGS
 
 ENVIRONMENT
   AGENT_HUB_API_URL     Versioned API endpoint used by list
-                        (default http://127.0.0.1:8973/api/v1)
+                        (default http://127.0.0.1:3000/api/v1)
   AGENT_HUB_AUTH_TOKEN  Bearer token sent by list when authentication is enabled
   DATABASE_URL          Postgres connection string (required by migrate, worker,
                         serve and history)

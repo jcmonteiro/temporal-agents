@@ -59,8 +59,8 @@ make setup          # optional: enable git hooks (gofmt on commit)
 
    ```sh
    temporal-agents serve
-   # API entry point: http://127.0.0.1:8973/api/v1
-   # OpenAPI:        http://127.0.0.1:8973/api/v1/openapi.json
+   # API entry point: http://127.0.0.1:3000/api/v1
+   # OpenAPI:        http://127.0.0.1:3000/api/v1/openapi.json
    ```
 
 ### Schema migration: migrate, then start
@@ -108,7 +108,7 @@ database applies nothing, so the step is safe to run ahead of time.
 
 Workflow submission and `watch` connect to `localhost:17233` by default. Override
 that address with `TEMPORAL_ADDRESS`. The `list` command reads
-`http://127.0.0.1:8973/api/v1` instead. Override its versioned endpoint with
+`http://127.0.0.1:3000/api/v1` instead. Override its versioned endpoint with
 `AGENT_HUB_API_URL`; when the API requires authentication, `list` sends the token
 from `AGENT_HUB_AUTH_TOKEN`. A non-loopback endpoint must use HTTPS.
 
@@ -258,7 +258,7 @@ configuring. An open API is possible only by asking for it
 (`AGENT_HUB_ALLOW_UNAUTHENTICATED=1`), only on loopback, and the process says so on
 every start.
 
-The API binds to `127.0.0.1:8973` by default and accepts only configured HTTP Host
+The API binds to `127.0.0.1:3000` by default and accepts only configured HTTP Host
 names. A non-loopback `--addr` requires `--tls-cert`, `--tls-key`, and a strong
 `AGENT_HUB_AUTH_TOKEN`; remote clients send the token only over HTTPS. Additional Host
 names use `--allow-host`. Each cross-origin browser

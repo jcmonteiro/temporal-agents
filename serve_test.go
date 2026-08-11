@@ -14,8 +14,8 @@ func TestParseServeFlagsDefaultsToLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseServeFlags: %v", err)
 	}
-	if got.address != "127.0.0.1:8973" {
-		t.Fatalf("address = %q, want the loopback default 127.0.0.1:8973", got.address)
+	if got.address != "127.0.0.1:3000" {
+		t.Fatalf("address = %q, want the loopback default 127.0.0.1:3000", got.address)
 	}
 	if got.webDir != "web/dist" {
 		t.Errorf("web directory = %q, want web/dist", got.webDir)
@@ -159,10 +159,10 @@ func TestServeSecurityRequiresACompleteOptionalTLSPair(t *testing.T) {
 func TestLocalOriginsAllowsTheBundledUIOnLoopback(t *testing.T) {
 	origins := localOrigins(defaultServeAddress, []string{"hub.example.test"}, false)
 	want := map[string]bool{
-		"http://127.0.0.1:8973":        true,
-		"http://localhost:8973":        true,
-		"http://[::1]:8973":            true,
-		"http://hub.example.test:8973": true,
+		"http://127.0.0.1:3000":        true,
+		"http://localhost:3000":        true,
+		"http://[::1]:3000":            true,
+		"http://hub.example.test:3000": true,
 	}
 	for _, origin := range origins {
 		delete(want, origin)
@@ -190,7 +190,7 @@ func TestServeHelpExplainsTheSecurityBoundary(t *testing.T) {
 	var out bytes.Buffer
 	serveHelp(&out)
 	for _, want := range []string{
-		"127.0.0.1:8973",
+		"127.0.0.1:3000",
 		"/api/v1/openapi.json",
 		"DATABASE_URL",
 		"TEMPORAL_ADDRESS",

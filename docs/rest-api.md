@@ -14,7 +14,7 @@ export DATABASE_URL=postgres://postgres:postgres@localhost:15432/temporal_agents
 temporal-agents serve
 ```
 
-The default listener is `127.0.0.1:8973`. Responses can contain workflow goals and
+The default listener is `127.0.0.1:3000`. Responses can contain workflow goals and
 prompts. The server accepts only loopback Host names, its concrete listener host, and
 names supplied with `--allow-host`. This blocks DNS-rebinding requests that use a
 hostile hostname.
@@ -37,7 +37,7 @@ no configuration:
 ```sh
 docker compose up -d
 temporal-agents serve
-# then open http://localhost:8973/
+# then open http://127.0.0.1:3000/
 # operator@example.test / operator
 ```
 
@@ -91,12 +91,12 @@ contain at least 32 characters.
 
 ```sh
 export AGENT_HUB_AUTH_TOKEN="$(openssl rand -base64 32)"
-temporal-agents serve --addr 0.0.0.0:8973 \
+temporal-agents serve --addr 0.0.0.0:3000 \
   --tls-cert /run/secrets/hub.crt \
   --tls-key /run/secrets/hub.key \
   --allow-host hub.example.test
 curl -H "Authorization: Bearer $AGENT_HUB_AUTH_TOKEN" \
-  https://hub.example.test:8973/api/v1
+  https://hub.example.test:3000/api/v1
 ```
 
 The certificate must be valid for each remote host name. A TLS reverse proxy is also

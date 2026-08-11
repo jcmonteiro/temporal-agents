@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	defaultAgentHubAPIURL = "http://127.0.0.1:8973/api/v1"
+	defaultAgentHubAPIURL = "http://127.0.0.1:3000/api/v1"
 	agentHubAPIURLEnv     = "AGENT_HUB_API_URL"
 	cliHTTPTimeout        = 35 * time.Second
 	overviewTimeout       = 35 * time.Second

@@ -47,7 +47,7 @@ import (
 // non-loopback address is possible only with an explicit --addr and a bearer token;
 // no environment variable can widen the bind by accident.
 const (
-	defaultServeAddress   = "127.0.0.1:8973"
+	defaultServeAddress   = "127.0.0.1:3000"
 	defaultWebDirectory   = "web/dist"
 	agentHubAuthTokenEnv  = "AGENT_HUB_AUTH_TOKEN"
 	minimumAuthTokenBytes = 32
@@ -137,7 +137,7 @@ USAGE
 The API is served under /api/v1. Its OpenAPI contract is available at
 /api/v1/openapi.json and each versioned model schema under /api/v1/schemas.
 
-The API can expose workflow goals and prompts, so it binds to 127.0.0.1:8973 by
+The API can expose workflow goals and prompts, so it binds to 127.0.0.1:3000 by
 default. A non-loopback --addr requires TLS and a strong AGENT_HUB_AUTH_TOKEN.
 Requests must use a loopback Host, the concrete listener host, or a name listed with
 --allow-host. No cross-origin browser access is allowed by default; list each trusted
@@ -155,7 +155,7 @@ listener the token is minted on first start and stored, readable only by this us
 so 'list' on this machine needs no configuration.
 
 OPTIONS
-  --addr <host:port>       Listener address (default 127.0.0.1:8973)
+  --addr <host:port>       Listener address (default 127.0.0.1:3000)
   --web-dir <path>         Built SPA directory for local convenience (default web/dist;
                            use --web-dir= for JSON only)
   --tls-cert <path>        PEM TLS certificate chain (required outside loopback)
@@ -197,10 +197,10 @@ EXAMPLES
     AGENT_HUB_OIDC_CLIENT_SECRET=agent-hub-local-secret \
     temporal-agents serve
   AGENT_HUB_AUTH_TOKEN="$(openssl rand -base64 32)" temporal-agents serve \
-    --addr 0.0.0.0:8973 --tls-cert hub.crt --tls-key hub.key \
+    --addr 0.0.0.0:3000 --tls-cert hub.crt --tls-key hub.key \
     --allow-host hub.example.test
   curl -H "Authorization: Bearer $AGENT_HUB_AUTH_TOKEN" \
-    https://hub.example.test:8973/api/v1
+    https://hub.example.test:3000/api/v1
 `)
 }
 
