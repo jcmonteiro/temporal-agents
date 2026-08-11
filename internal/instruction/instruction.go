@@ -105,6 +105,9 @@ type Spec struct {
 	// parses), and no operator should be asked to maintain a machine contract by
 	// hand. It is empty for a key that has none.
 	System string
+	// Advanced marks instructions whose protected material makes an unsafe edit more
+	// costly. A configuration surface must put an explicit warning in front of them.
+	Advanced bool
 }
 
 // Data is the material an instruction renders from, keyed by insert name.
@@ -172,7 +175,8 @@ var specs = []Spec{
 			Name:    "Comments",
 			Purpose: "The pull request's description and its unresolved comment threads.",
 		}},
-		System: systemPilotAddress,
+		System:   systemPilotAddress,
+		Advanced: true,
 	},
 	{
 		Key:     KeySteeringQuestion,
@@ -182,7 +186,8 @@ var specs = []Spec{
 			Name:    "Material",
 			Purpose: "The review material the operator is deciding about.",
 		}},
-		System: systemSteeringQuestion,
+		System:   systemSteeringQuestion,
+		Advanced: true,
 	},
 }
 
@@ -240,17 +245,23 @@ func (s Spec) Validate(text string) error {
 		return fmt.Errorf("%w: the %s instruction is %d bytes and the limit is %d",
 			ErrInvalidText, s.Key, len(text), MaxTextLength)
 	}
-	// Rendering with a sentinel per declared insert answers both remaining questions
-	// at once: an insert the key does not declare fails the render, and a required
-	// insert that the text never reaches leaves its sentinel out of the output.
-	rendered, err := s.render(text, s.sentinels())
+	// Render the editable text without the system block. This answers three questions
+	// at once: an undeclared insert fails, a required insert leaves its sentinel in
+	// the output, and a system-owned insert in editable text can be refused instead
+	// of being duplicated before the read-only block.
+	rendered, err := s.renderPart(text, s.sentinels())
 	if err != nil {
 		return err
 	}
 	for _, insert := range s.Inserts {
-		if insert.Required && !strings.Contains(rendered, sentinel(insert.Name)) {
+		present := strings.Contains(rendered, sentinel(insert.Name))
+		if insert.Required && !present {
 			return fmt.Errorf("%w: the %s instruction must insert %s (%s)",
 				ErrInvalidText, s.Key, insert.Action(), insert.Purpose)
+		}
+		if !insert.Required && strings.Contains(s.System, insert.Action()) && present {
+			return fmt.Errorf("%w: %s is supplied by the read-only system block for %s",
+				ErrInvalidText, insert.Action(), s.Key)
 		}
 	}
 	return nil
@@ -265,10 +276,14 @@ func (s Spec) Render(text string, data Data) (string, error) {
 // render is the one rendering path, so validation and production cannot disagree
 // about what an instruction becomes.
 func (s Spec) render(text string, data Data) (string, error) {
+	return s.renderPart(text+s.System, data)
+}
+
+func (s Spec) renderPart(text string, data Data) (string, error) {
 	if data == nil {
 		data = Data{}
 	}
-	tmpl, err := template.New(string(s.Key)).Option("missingkey=error").Parse(text + s.System)
+	tmpl, err := template.New(string(s.Key)).Option("missingkey=error").Parse(text)
 	if err != nil {
 		return "", fmt.Errorf("%w: the %s instruction is not a valid template: %w", ErrInvalidText, s.Key, err)
 	}

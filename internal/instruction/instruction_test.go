@@ -83,6 +83,28 @@ func TestTheSystemsOwnBlockIsAppendedToAnyOverride(t *testing.T) {
 	}
 }
 
+func TestAnOverrideCannotCopyTheSystemsOwnMaterialIntoTheEditableText(t *testing.T) {
+	spec, _ := SpecFor(KeyPilotAddress)
+
+	err := spec.Validate("Address these comments:\n{{.Comments}}")
+
+	if !errors.Is(err, ErrInvalidText) {
+		t.Fatalf("Validate = %v, want a refusal", err)
+	}
+	if !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("the refusal %q does not explain that the system block is read-only", err)
+	}
+}
+
+func TestInstructionsWithProtectedMachineMaterialAreMarkedAdvanced(t *testing.T) {
+	for _, key := range []Key{KeyPilotAddress, KeySteeringQuestion} {
+		spec, _ := SpecFor(key)
+		if !spec.Advanced || spec.System == "" {
+			t.Fatalf("%s advanced = %v, system block = %q", key, spec.Advanced, spec.System)
+		}
+	}
+}
+
 // Refusals an operator has to be able to act on: a text that is not a template at
 // all, one that inserts something the key does not offer, an empty one, and one so
 // long it cannot be an instruction. Each names the bound or the mistake.
