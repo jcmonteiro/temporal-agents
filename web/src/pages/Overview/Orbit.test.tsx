@@ -113,6 +113,20 @@ describe("centering the canvas", () => {
     fireEvent.click(screen.getByRole("button", { name: "Recenter" }));
     expect(screen.getByText("61%")).toBeTruthy();
   });
+
+  it("fits work whose place registry was not published", () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(400);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
+
+    showOrbit({ places: registryOf([]) });
+
+    expect(
+      screen.getByRole("button", {
+        name: "Unknown, place, 1 item",
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByText("100%")).toBeNull();
+  });
 });
 
 describe("the orbit motion", () => {
