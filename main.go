@@ -107,7 +107,7 @@ COMMANDS
                                          Start the Temporal worker
   code <subcommand>                      Agent workflows for the current repo
   fleet <subcommand>                     Fan-out orchestration across a dependency graph
-  cleanup                                Remove worktrees created by 'code develop --worktree'
+  cleanup                                Remove managed development worktrees
   run "<prompt>" [--save <name>] [--chain]
                                          Start a workflow (returns immediately)
   schedule "<interval|cron>" "<prompt>" [--save <name>] [--chain]

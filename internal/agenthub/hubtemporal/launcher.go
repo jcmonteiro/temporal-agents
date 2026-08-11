@@ -32,22 +32,28 @@ type WorkflowStarter interface {
 
 // Launcher implements agenthub.Launcher over Temporal.
 type Launcher struct {
-	client    WorkflowStarter
-	taskQueue string
+	client       WorkflowStarter
+	taskQueue    string
+	worktreesDir string
 }
 
 // Compile-time proof the adapter satisfies the port it is injected as.
 var _ agenthub.Launcher = (*Launcher)(nil)
 
 // NewLauncher returns the launcher, on the task queue the worker listens to.
-func NewLauncher(c WorkflowStarter, taskQueue string) (*Launcher, error) {
+// Hub-started development uses worktreesDir so the registered checkout remains
+// untouched while the full review pipeline runs.
+func NewLauncher(c WorkflowStarter, taskQueue, worktreesDir string) (*Launcher, error) {
 	if c == nil {
 		return nil, errors.New("the orchestration client is required")
 	}
 	if strings.TrimSpace(taskQueue) == "" {
 		return nil, errors.New("the task queue is required")
 	}
-	return &Launcher{client: c, taskQueue: taskQueue}, nil
+	if strings.TrimSpace(worktreesDir) == "" {
+		return nil, errors.New("the worktrees directory is required")
+	}
+	return &Launcher{client: c, taskQueue: taskQueue, worktreesDir: worktreesDir}, nil
 }
 
 // Start implements agenthub.Launcher.
@@ -58,7 +64,7 @@ func NewLauncher(c WorkflowStarter, taskQueue string) (*Launcher, error) {
 // "UseExisting" says, and it is the server's own guarantee: two requests that race
 // each other cannot both win.
 func (l *Launcher) Start(ctx context.Context, spec agenthub.StartSpec) error {
-	workflow, input, err := submission(spec)
+	workflow, input, err := submission(spec, l.worktreesDir)
 	if err != nil {
 		return err
 	}
@@ -74,16 +80,17 @@ func (l *Launcher) Start(ctx context.Context, spec agenthub.StartSpec) error {
 }
 
 // submission maps what the core asked for onto the workflow that does it and the
-// input it takes. Everything the command line leaves at its default is left at its
-// default here too: what changes the shape of the work is the instruction and the
-// place, and both are in the specification.
-func submission(spec agenthub.StartSpec) (any, any, error) {
+// input it takes. Hub-started development is isolated in a worktree and owns the
+// complete review pipeline; a direct review still runs in the selected place.
+func submission(spec agenthub.StartSpec, worktreesDir string) (any, any, error) {
 	switch spec.Kind {
 	case agenthub.StartDevelop:
 		return codereview.DevelopWorkflow, codereview.DevelopInput{
-			Initiator: spec.StartedBy,
-			WorkDir:   spec.Directory,
-			Prompt:    spec.Prompt,
+			Initiator:    spec.StartedBy,
+			WorkDir:      spec.Directory,
+			WorktreesDir: worktreesDir,
+			Prompt:       spec.Prompt,
+			WithRemote:   true,
 		}, nil
 	case agenthub.StartReview:
 		return codereview.ReviewWorkflow, codereview.ReviewInput{

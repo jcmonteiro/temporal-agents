@@ -57,13 +57,13 @@ it("starts a develop pass here and lands on the run", async () => {
   expect(started[0].locationId).toBe("repo");
 });
 
-it("shows where the work will run, and offers no way to type it", async () => {
+it("says development starts from this place in a fresh worktree", async () => {
   await showPlace();
 
   const launcher = screen.getByRole("region", { name: "Start work here" });
-  expect(launcher.textContent).toContain("/srv/checkout");
+  expect(launcher.textContent).toContain("Starts from /srv/checkout in a fresh worktree");
   // Every field the launcher offers is about the work, never about the place:
-  // the request names the place, and the server resolves the directory.
+  // the request names the source place, and the server owns the worktree.
   const fields = [
     ...launcher.querySelectorAll("input"),
     ...launcher.querySelectorAll("textarea"),

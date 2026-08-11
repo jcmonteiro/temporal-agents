@@ -432,9 +432,13 @@ func runAPIServer(options serveOptions) error {
 	}
 	steeringService.Questioner = steeringQuestioner
 	// Starting work is the one thing this process submits rather than reads. It goes
-	// to the very queue the worker listens on, so the hub asks for the same work the
-	// command line does and the worker executes it unchanged.
-	launcher, err := hubtemporal.NewLauncher(orchestrator, TaskQueue)
+	// to the very queue the worker listens on. Develop runs use the same managed
+	// worktree base as the CLI and fleet, so the selected checkout remains untouched.
+	worktrees, err := worktreesDir()
+	if err != nil {
+		return fmt.Errorf("locate the worktrees directory: %w", err)
+	}
+	launcher, err := hubtemporal.NewLauncher(orchestrator, TaskQueue, worktrees)
 	if err != nil {
 		return err
 	}

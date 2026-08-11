@@ -13,9 +13,7 @@ import (
 )
 
 // cleanupCmd runs the interactive cleanup of the worktrees temporal-agents
-// created under the user config directory, both those from `code develop
-// --worktree` and the per-node worktrees a `fleet execute` run creates (they
-// share the same worktrees base directory).
+// created under the user config directory for CLI, hub, and fleet development.
 func cleanupCmd(args []string) {
 	if wantsHelp(args) {
 		cleanupHelp(os.Stdout)
@@ -84,11 +82,11 @@ func (p stdinPrompter) Confirm(question string, defaultYes bool) (bool, error) {
 }
 
 func cleanupHelp(w io.Writer) {
-	fmt.Fprint(w, `temporal-agents cleanup — remove the worktrees develop --worktree created
+	fmt.Fprint(w, `temporal-agents cleanup — remove managed development worktrees
 
 Loops through every git worktree temporal-agents created under your user config
-directory (<config>/temporal-agents/worktrees) — including the per-node
-worktrees a fleet execute run creates there — and, for each one, asks before
+directory (<config>/temporal-agents/worktrees) — from CLI, hub, and fleet
+development — and, for each one, asks before
 deleting it. Before a delete it checks whether the branch is merged into the
 current repository HEAD; if it is not, it asks again whether to delete by force
 (defaulting to no). The worktree directory and its branch are both removed.

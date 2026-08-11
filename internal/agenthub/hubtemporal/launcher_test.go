@@ -42,7 +42,7 @@ func (f *fakeStarter) ExecuteWorkflow(_ context.Context, options client.StartWor
 
 func TestADevelopPassIsSubmittedAsTheWorkerExecutesIt(t *testing.T) {
 	starter := &fakeStarter{}
-	launcher, err := NewLauncher(starter, "agents")
+	launcher, err := NewLauncher(starter, "agents", "/srv/worktrees")
 	if err != nil {
 		t.Fatalf("NewLauncher: %v", err)
 	}
@@ -73,8 +73,8 @@ func TestADevelopPassIsSubmittedAsTheWorkerExecutesIt(t *testing.T) {
 	if input.WorkDir != "/srv/repos/pricing" || input.Prompt != "make the flaky test pass" {
 		t.Errorf("input = %+v, want the resolved directory and the prompt", input)
 	}
-	if input.Branch != "" || input.WorktreesDir != "" || input.Summary || input.WithRemote {
-		t.Errorf("input = %+v, want everything the hub does not offer left at its default", input)
+	if input.Branch != "" || input.WorktreesDir != "/srv/worktrees" || input.Summary || !input.WithRemote {
+		t.Errorf("input = %+v, want a generated branch in a worktree with the remote pipeline", input)
 	}
 	if call.options.ID != "develop-1" || call.options.TaskQueue != "agents" {
 		t.Errorf("options = %+v, want the minted identity on the worker's queue", call.options)
@@ -89,7 +89,7 @@ func TestADevelopPassIsSubmittedAsTheWorkerExecutesIt(t *testing.T) {
 
 func TestAReviewPassIsSubmittedWithNothingButThePlace(t *testing.T) {
 	starter := &fakeStarter{}
-	launcher, _ := NewLauncher(starter, "agents")
+	launcher, _ := NewLauncher(starter, "agents", "/srv/worktrees")
 
 	err := launcher.Start(context.Background(), agenthub.StartSpec{
 		WorkflowID: "review-1",
@@ -115,7 +115,7 @@ func TestAReviewPassIsSubmittedWithNothingButThePlace(t *testing.T) {
 
 func TestWorkTheHubCannotStartIsNeverSubmitted(t *testing.T) {
 	starter := &fakeStarter{}
-	launcher, _ := NewLauncher(starter, "agents")
+	launcher, _ := NewLauncher(starter, "agents", "/srv/worktrees")
 
 	err := launcher.Start(context.Background(), agenthub.StartSpec{
 		WorkflowID: "fleet-1", Kind: "fleet", Directory: "/srv/repos/pricing",
@@ -131,7 +131,7 @@ func TestWorkTheHubCannotStartIsNeverSubmitted(t *testing.T) {
 
 func TestAnOrchestratorThatRefusesTheSubmissionIsReported(t *testing.T) {
 	starter := &fakeStarter{err: errors.New("the namespace is unavailable")}
-	launcher, _ := NewLauncher(starter, "agents")
+	launcher, _ := NewLauncher(starter, "agents", "/srv/worktrees")
 
 	err := launcher.Start(context.Background(), agenthub.StartSpec{
 		WorkflowID: "review-1", Kind: agenthub.StartReview, Directory: "/srv/repos/pricing",
@@ -143,11 +143,14 @@ func TestAnOrchestratorThatRefusesTheSubmissionIsReported(t *testing.T) {
 }
 
 func TestALauncherWithoutWhatItNeedsDoesNotBuild(t *testing.T) {
-	if _, err := NewLauncher(nil, "agents"); err == nil {
+	if _, err := NewLauncher(nil, "agents", "/srv/worktrees"); err == nil {
 		t.Error("a launcher with no client was built")
 	}
-	if _, err := NewLauncher(&fakeStarter{}, "  "); err == nil {
+	if _, err := NewLauncher(&fakeStarter{}, "  ", "/srv/worktrees"); err == nil {
 		t.Error("a launcher with no task queue was built")
+	}
+	if _, err := NewLauncher(&fakeStarter{}, "agents", "  "); err == nil {
+		t.Error("a launcher with no worktrees directory was built")
 	}
 }
 

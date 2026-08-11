@@ -31,9 +31,8 @@ func configPath() (string, error) {
 	return filepath.Join(dir, "temporal-agents", "templates.json"), nil
 }
 
-// worktreesDir returns <user config dir>/temporal-agents/worktrees, the base
-// directory under which `code develop --worktree` creates a per-branch git
-// worktree.
+// worktreesDir returns <user config dir>/temporal-agents/worktrees, the shared
+// base for CLI, hub, and fleet development worktrees.
 func worktreesDir() (string, error) {
 	dir, err := os.UserConfigDir()
 	if err != nil {

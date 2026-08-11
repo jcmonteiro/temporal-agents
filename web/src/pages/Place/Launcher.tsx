@@ -70,8 +70,8 @@ export function Launcher({ place }: { place: Place }): ReactNode {
       >
         Start work here
       </h2>
-      {/* Where the work runs is context, not a field: it is this place, and the
-          request names the place rather than the path. */}
+      {/* The request names the source place rather than a path. Develop is then
+          isolated in a server-managed worktree; review stays in this place. */}
       <p
         style={{
           margin: 0,
@@ -79,7 +79,9 @@ export function Launcher({ place }: { place: Place }): ReactNode {
           fontSize: "var(--font-size-sm)",
         }}
       >
-        In {place.directory ?? place.ref ?? place.label}
+        {kind === "develop" ? "Starts from " : "In "}
+        {place.directory ?? place.ref ?? place.label}
+        {kind === "develop" && " in a fresh worktree"}
       </p>
 
       <form
@@ -104,7 +106,7 @@ export function Launcher({ place }: { place: Place }): ReactNode {
           <Choice
             checked={kind === "develop"}
             label="Develop"
-            says="Implement something, then review it until the loop converges."
+            says="Implement in a fresh worktree, then run local and Copilot review."
             onChoose={() => change(() => setKind("develop"))}
           />
           <Choice
