@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   clampZoom,
+  fittedTo,
   IDENTITY,
   MAX_VISIBLE_DEPTH,
   MAX_ZOOM,
@@ -104,6 +105,31 @@ describe("panning", () => {
 
   it("leaves the scale alone", () => {
     expect(panned({ x: 0, y: 0, k: 2.5 }, 100, 100).k).toBe(2.5);
+  });
+});
+
+describe("fitting content", () => {
+  it("centres asymmetric content on both axes", () => {
+    const bounds = {
+      left: 100,
+      top: 50,
+      right: 300,
+      bottom: 450,
+    };
+
+    const view = fittedTo(bounds, 800, 600);
+
+    expect(toScreen(view, 200, 250)).toEqual([400, 300]);
+  });
+
+  it("uses the limiting canvas axis", () => {
+    const view = fittedTo(
+      { left: 0, top: 0, right: 200, bottom: 800 },
+      1000,
+      500,
+    );
+
+    expect(view.k).toBeLessThan(1);
   });
 });
 
