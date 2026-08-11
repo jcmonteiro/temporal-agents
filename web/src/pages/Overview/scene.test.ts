@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { registryOf, type Place, type PlaceRegistry } from "../../domain/place";
 import type { WorkItem, WorkItemStatus } from "../../domain/work-item";
 import {
-  extentOf,
+  boundsOf,
+  CENTRE_RADIUS,
   fittedView,
   layoutScene,
   type PlaceBody,
@@ -318,10 +319,36 @@ describe("the view that shows the whole picture", () => {
     }
   });
 
-  it("keeps the neutral mark in the middle of the canvas", () => {
-    const view = fittedView(busy, REPOSITORY_WITH_WORKTREES, size, false);
+  it("centres the full picture when Unknown is the only place", () => {
+    const items = work("unknown", 1);
+    const places = registryOf([UNKNOWN]);
+    const view = fittedView(items, places, size, false);
+    const drawn = layoutScene(items, places, {
+      ...size,
+      visibleDepth: visibleDepthFor(view, false),
+    });
+    const unknown = bodyOf(drawn, "unknown");
+    const left = Math.min(
+      drawn.centre.x - CENTRE_RADIUS,
+      unknown.centre.x - unknown.reach,
+    );
+    const right = Math.max(
+      drawn.centre.x + CENTRE_RADIUS,
+      unknown.centre.x + unknown.reach,
+    );
+    const top = Math.min(
+      drawn.centre.y - CENTRE_RADIUS,
+      unknown.centre.y - unknown.reach,
+    );
+    const bottom = Math.max(
+      drawn.centre.y + CENTRE_RADIUS,
+      unknown.centre.y + unknown.reach,
+    );
+    const topLeft = onScreen(view, { x: left, y: top });
+    const bottomRight = onScreen(view, { x: right, y: bottom });
 
-    expect(onScreen(view, { x: 600, y: 400 })).toEqual({ x: 600, y: 400 });
+    expect((topLeft.x + bottomRight.x) / 2).toBeCloseTo(size.width / 2);
+    expect((topLeft.y + bottomRight.y) / 2).toBeCloseTo(size.height / 2);
   });
 
   it("shows the folding the zoom it needs agrees with", () => {
@@ -332,9 +359,9 @@ describe("the view that shows the whole picture", () => {
       ...size,
       visibleDepth: depth,
     });
-    expect(extentOf(scene) * view.k).toBeLessThanOrEqual(
-      Math.min(size.width, size.height),
-    );
+    const bounds = boundsOf(scene);
+    expect((bounds.right - bounds.left) * view.k).toBeLessThanOrEqual(size.width);
+    expect((bounds.bottom - bounds.top) * view.k).toBeLessThanOrEqual(size.height);
   });
 
   it("fits the folded picture when the operator collapsed everything", () => {
@@ -344,9 +371,9 @@ describe("the view that shows the whole picture", () => {
       ...size,
       visibleDepth: 0,
     });
-    expect(extentOf(scene) * view.k).toBeLessThanOrEqual(
-      Math.min(size.width, size.height),
-    );
+    const bounds = boundsOf(scene);
+    expect((bounds.right - bounds.left) * view.k).toBeLessThanOrEqual(size.width);
+    expect((bounds.bottom - bounds.top) * view.k).toBeLessThanOrEqual(size.height);
     expect(view.k).toBeGreaterThanOrEqual(MIN_ZOOM);
   });
 

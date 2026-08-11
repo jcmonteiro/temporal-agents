@@ -152,10 +152,10 @@ export function Orbit({
   );
   const fitted = useRef(false);
   useEffect(() => {
-    if (fitted.current || !size.measured || items.length === 0) return;
+    if (fitted.current || !size.measured || places.places.length === 0) return;
     fitted.current = true;
     setView(fit);
-  }, [fit, items.length, size.measured]);
+  }, [fit, places.places.length, size.measured]);
 
   // How deep the places are drawn follows from the view: zooming out folds the
   // deeper ones into their parents, and collapse-all forces the base ancestor.

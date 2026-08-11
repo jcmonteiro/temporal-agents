@@ -3,13 +3,14 @@ import { UNKNOWN_PLACE_ID } from "../../domain/place";
 import type { WorkItem } from "../../domain/work-item";
 import { layoutOrbit, type OrbitSlot } from "./layout";
 import {
-  centredAt,
+  centredOn,
   fittedTo,
   IDENTITY,
   MAX_VISIBLE_DEPTH,
   visibleDepthFor,
   ZOOM_HAIR,
   zoomThatShowsDepth,
+  type Bounds,
   type View,
 } from "./view";
 
@@ -372,17 +373,21 @@ function bodiesOf(roots: Node[]): PlaceBody[] {
   return bodies;
 }
 
-/** How wide the whole scene is, label room included. */
-export function extentOf(scene: Scene): number {
-  let furthest = 0;
+/** The boundary of everything the scene draws, with label room included. */
+export function boundsOf(scene: Scene): Bounds {
+  const bounds = {
+    left: scene.centre.x - CENTRE_RADIUS,
+    top: scene.centre.y - CENTRE_RADIUS,
+    right: scene.centre.x + CENTRE_RADIUS,
+    bottom: scene.centre.y + CENTRE_RADIUS,
+  };
   for (const body of scene.bodies) {
-    const away = Math.hypot(
-      body.centre.x - scene.centre.x,
-      body.centre.y - scene.centre.y,
-    );
-    furthest = Math.max(furthest, away + body.reach);
+    bounds.left = Math.min(bounds.left, body.centre.x - body.reach);
+    bounds.top = Math.min(bounds.top, body.centre.y - body.reach);
+    bounds.right = Math.max(bounds.right, body.centre.x + body.reach);
+    bounds.bottom = Math.max(bounds.bottom, body.centre.y + body.reach);
   }
-  return 2 * furthest;
+  return bounds;
 }
 
 /**
@@ -400,12 +405,10 @@ export function fittedView(
   size: { width: number; height: number },
   collapseAll: boolean,
 ): View {
+  const sceneAt = (visibleDepth: number): Scene =>
+    layoutScene(items, places, { ...size, visibleDepth });
   const fitAt = (visibleDepth: number): View =>
-    fittedTo(
-      extentOf(layoutScene(items, places, { ...size, visibleDepth })),
-      size.width,
-      size.height,
-    );
+    fittedTo(boundsOf(sceneAt(visibleDepth)), size.width, size.height);
   if (collapseAll) return fitAt(0);
   for (let depth = MAX_VISIBLE_DEPTH; depth > 0; depth--) {
     const view = fitAt(depth);
@@ -415,7 +418,8 @@ export function fittedView(
   if (view === IDENTITY || visibleDepthFor(view, false) === 0) return view;
   // The folded scene leaves room to spare, but showing it at that zoom would
   // unfold the places again. Hold the zoom just below where they unfold.
-  return centredAt(
+  return centredOn(
+    boundsOf(sceneAt(0)),
     zoomThatShowsDepth(1) - ZOOM_HAIR,
     size.width,
     size.height,

@@ -98,6 +98,23 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("centering the canvas", () => {
+  it("fits the picture on load and recenters it when Unknown is the only place", () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(400);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
+
+    showOrbit({ items: [] });
+
+    expect(screen.getByText("61%")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(screen.getByText("74%")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Recenter" }));
+    expect(screen.getByText("61%")).toBeTruthy();
+  });
+});
+
 describe("the orbit motion", () => {
   it("turns by default", () => {
     showOrbit();

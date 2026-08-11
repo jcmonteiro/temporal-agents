@@ -80,27 +80,51 @@ export function wheelZoomFactor(deltaY: number): number {
 // fitted, so a body's label is never cut off.
 const FIT_MARGIN = 48;
 
+/** The rectangular boundary of the content in canvas coordinates. */
+export interface Bounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
 /**
- * The view that brings content of this size, laid out about the canvas centre,
- * fully into the canvas. Content that already fits is never magnified.
+ * The view that brings the full content boundary into the canvas. Content that
+ * already fits is never magnified. Both axes are centred independently, so an
+ * asymmetric picture, such as one place beside the neutral mark, is centred as
+ * a whole.
  *
  * A canvas that has not been measured yet cannot be fitted, so the view is left
  * as it is.
  */
-export function fittedTo(extent: number, width: number, height: number): View {
-  if (width <= 0 || height <= 0 || extent <= 0) return IDENTITY;
-  const room = Math.min(width, height) - 2 * FIT_MARGIN;
-  if (room <= 0) return IDENTITY;
-  return centredAt(Math.min(1, room / extent), width, height);
+export function fittedTo(bounds: Bounds, width: number, height: number): View {
+  const contentWidth = bounds.right - bounds.left;
+  const contentHeight = bounds.bottom - bounds.top;
+  if (width <= 0 || height <= 0 || contentWidth <= 0 || contentHeight <= 0) {
+    return IDENTITY;
+  }
+  const roomWidth = width - 2 * FIT_MARGIN;
+  const roomHeight = height - 2 * FIT_MARGIN;
+  if (roomWidth <= 0 || roomHeight <= 0) return IDENTITY;
+  return centredOn(
+    bounds,
+    Math.min(1, roomWidth / contentWidth, roomHeight / contentHeight),
+    width,
+    height,
+  );
 }
 
-/**
- * The view at this zoom, with the canvas centre held still. Content laid out
- * about that centre therefore stays centred.
- */
-export function centredAt(zoom: number, width: number, height: number): View {
+/** The view at this zoom, with the given content boundary in the middle. */
+export function centredOn(
+  bounds: Bounds,
+  zoom: number,
+  width: number,
+  height: number,
+): View {
   const k = clampZoom(zoom);
-  return { k, x: (width / 2) * (1 - k), y: (height / 2) * (1 - k) };
+  const contentX = (bounds.left + bounds.right) / 2;
+  const contentY = (bounds.top + bounds.bottom) / 2;
+  return { k, x: width / 2 - contentX * k, y: height / 2 - contentY * k };
 }
 
 /** The zoom at which one more level of places appears. */
