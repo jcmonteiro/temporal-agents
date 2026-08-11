@@ -1,6 +1,6 @@
 ## Code Style
 
-Hexagonal Architecture!
+- Always respect Hexagonal Architecture.
 
 ## Plans
 
@@ -12,6 +12,7 @@ feature's plan only while working on that feature, and never load
 ## Testing
 
 - Tests follow the definitions of "Unit Testing Principles, Practices, and Patterns - Vladimir Khorikov"
+  > Test a unit of _behavior_, not a unit of _code_.
 - Integration tests MUST BE developed with testcontainers-go and not docker compose or manually run containers.
 
 ### Frontend (`web/`)
