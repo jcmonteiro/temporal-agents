@@ -39,7 +39,7 @@ func newLoopEnv(t *testing.T, instructions *scopedtest.Store, records *execstore
 	env.RegisterActivity(&instruction.Activity{Store: instructions})
 	// The settings resolve through a store of their own here, so a test that counts
 	// reads of the instruction store counts instruction reads and nothing else.
-	env.RegisterActivity(&setting.Activity{Resolver: setting.Resolver{Store: scopedtest.New()}})
+	env.RegisterActivity(&setting.Activity{Resolver: setting.Resolver{Store: autonomousSettings()}})
 	env.RegisterActivity(&steering.Activities{Store: records})
 	env.RegisterWorkflow(steering.SessionWorkflow)
 	env.RegisterWorkflow(ReviewWorkflow)

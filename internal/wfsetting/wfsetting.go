@@ -36,9 +36,9 @@ const resolveChangeID = "resolve-settings"
 // can be mid-flight across the worker upgrade.
 //
 // The consequence is deliberate: an execution started before the upgrade carries no
-// resolution, and every setting therefore reads as what the build ships (see
-// setting.Resolution.Enabled). For steering that means off, which is byte-for-byte
-// how those executions already behave.
+// resolution. Steering treats that absent historical value as off, which is
+// byte-for-byte how those executions already behave. New executions resolve the
+// current shipped or scoped value before they test it.
 func Enabled(ctx workflow.Context) bool {
 	return workflow.GetVersion(ctx, resolveChangeID, workflow.DefaultVersion, 1) == 1
 }

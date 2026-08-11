@@ -43,7 +43,7 @@ func newDevelopEnvWithStore(t *testing.T, store *execstoretest.Store) *testsuite
 	// makes a develop run record the place its worktree is in.
 	env.RegisterActivity(&place.Activity{Prober: placetest.New()})
 	env.RegisterActivity(&instruction.Activity{Store: scopedtest.New()})
-	env.RegisterActivity(&setting.Activity{Resolver: setting.Resolver{Store: scopedtest.New()}})
+	env.RegisterActivity(&setting.Activity{Resolver: setting.Resolver{Store: autonomousSettings()}})
 	env.RegisterActivity(&steering.Activities{Store: store})
 	env.RegisterWorkflow(steering.SessionWorkflow)
 	env.RegisterWorkflow(DevelopWorkflow)
@@ -55,6 +55,7 @@ func newDevelopEnvWithStore(t *testing.T, store *execstoretest.Store) *testsuite
 
 func TestDevelopWorkflow_HappyPath_DevelopsThenTriggersReview(t *testing.T) {
 	env := newDevelopEnv(t)
+	autonomous := setting.Resolution{{Key: setting.KeySteeringEnabled, Enabled: false}}
 
 	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
@@ -63,10 +64,10 @@ func TestDevelopWorkflow_HappyPath_DevelopsThenTriggersReview(t *testing.T) {
 	// it as detached lifecycle ownership. The read side uses that durable fact to
 	// show the Review after Develop has completed.
 	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.MatchedBy(func(in ReviewInput) bool {
-		return in.Detached
+		return in.Detached && !in.Settings.Enabled(setting.KeySteeringEnabled)
 	})).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
 
-	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing"})
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing", Settings: autonomous})
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
@@ -409,23 +410,24 @@ func TestDevelopWorkflow_Failure_SendsFailureNotification(t *testing.T) {
 
 func TestDevelopWorkflow_WithRemote_OrchestratesReviewOpenPRAndPilot(t *testing.T) {
 	env := newDevelopEnv(t)
+	autonomous := setting.Resolution{{Key: setting.KeySteeringEnabled, Enabled: false}}
 
 	env.OnActivity(a.CreateBranch, mock.Anything, mock.Anything).Return(CreateBranchResult{Branch: "feat/x", WorkDir: "/repo", BaseSHA: "base"}, nil)
 	env.OnActivity(a.RunDevelopAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "done"}, nil)
 	env.OnActivity(a.EnsureDeveloped, mock.Anything, mock.Anything).Return([]string{"sha1"}, nil)
 	// The full remote pipeline runs as supervised children this workflow waits on.
 	env.OnWorkflow(ReviewWorkflow, mock.Anything, mock.MatchedBy(func(in ReviewInput) bool {
-		return !in.Detached
+		return !in.Detached && !in.Settings.Enabled(setting.KeySteeringEnabled)
 	})).Return(ReviewOutcome{Summary: "reviewed", Converged: true}, nil)
 	env.OnWorkflow(OpenPRWorkflow, mock.Anything, mock.Anything).
 		Return(OpenPRResult{Summary: "opened", URL: "https://github.com/acme/widgets/pull/7"}, nil)
 	// The pilot loop is triggered with chaining enabled so it loops until Copilot
 	// has nothing left; here it is mocked to return once.
 	env.OnWorkflow(PilotWorkflow, mock.Anything, mock.MatchedBy(func(in PilotInput) bool {
-		return in.Chain
+		return in.Chain && !in.Settings.Enabled(setting.KeySteeringEnabled)
 	})).Return("piloted", nil)
 
-	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing", WithRemote: true})
+	env.ExecuteWorkflow(DevelopWorkflow, DevelopInput{WorkDir: "/repo", Branch: "feat/x", Prompt: "do the thing", WithRemote: true, Settings: autonomous})
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())

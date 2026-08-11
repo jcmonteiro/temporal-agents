@@ -32,7 +32,7 @@ func newDevelopEnvIn(t *testing.T, store *execstoretest.Store, prober place.Prob
 	env.RegisterActivity(&notification.Activity{})
 	env.RegisterActivity(&place.Activity{Prober: prober})
 	env.RegisterActivity(&instruction.Activity{Store: scopedtest.New()})
-	env.RegisterActivity(&setting.Activity{Resolver: setting.Resolver{Store: scopedtest.New()}})
+	env.RegisterActivity(&setting.Activity{Resolver: setting.Resolver{Store: autonomousSettings()}})
 	env.RegisterWorkflow(DevelopWorkflow)
 	env.RegisterWorkflow(ReviewWorkflow)
 	return env
@@ -120,7 +120,7 @@ func TestPilotWorkflow_RecordsThePlaceThePassRunsIn(t *testing.T) {
 	env.RegisterActivity(&notification.Activity{})
 	env.RegisterActivity(&place.Activity{Prober: placetest.New()})
 	env.RegisterActivity(&instruction.Activity{Store: scopedtest.New()})
-	env.RegisterActivity(&setting.Activity{Resolver: setting.Resolver{Store: scopedtest.New()}})
+	env.RegisterActivity(&setting.Activity{Resolver: setting.Resolver{Store: autonomousSettings()}})
 	env.RegisterWorkflow(PilotWorkflow)
 	pr := PullRequest{Number: 7, URL: "https://github.com/o/r/pull/7", HeadRef: "feat/x"}
 	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).Return(pr, nil)

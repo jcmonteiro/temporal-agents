@@ -416,6 +416,10 @@ type DevelopInput struct {
 	// been both developed and reviewed. When false the workflow keeps its original
 	// behavior of starting the review loop as an abandoned child and returning.
 	AwaitReview bool
+	// Settings carries a per-run override to every review child. It is empty for
+	// normal runs, which resolve scoped settings at the first review pass. The CLI
+	// sets it only when --no-steering requests autonomous execution.
+	Settings setting.Resolution
 }
 
 // OpenPRInput is the input to OpenPRWorkflow.

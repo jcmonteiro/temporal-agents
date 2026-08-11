@@ -689,7 +689,7 @@ func DevelopWorkflow(ctx workflow.Context, in DevelopInput) (result string, err 
 		ctx, "develop-detached-review-ownership", workflow.DefaultVersion, 1) == 1
 	child := workflow.ExecuteChildWorkflow(childCtx, ReviewWorkflow,
 		ReviewInput{Initiator: in.Initiator, Detached: detached, WorkDir: in.WorkDir,
-			TokensSoFar: agentResult.Tokens, Summary: in.Summary})
+			TokensSoFar: agentResult.Tokens, Summary: in.Summary, Settings: in.Settings})
 	if err := child.GetChildWorkflowExecution().Get(ctx, nil); err != nil {
 		return "", fmt.Errorf("start review workflow: %w", err)
 	}
@@ -764,7 +764,8 @@ func developAndAwaitReview(ctx workflow.Context, in DevelopInput, commits []stri
 	reviewCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: reviewID})
 	var outcome ReviewOutcome
 	if err := workflow.ExecuteChildWorkflow(reviewCtx, ReviewWorkflow,
-		ReviewInput{Initiator: in.Initiator, WorkDir: in.WorkDir, TokensSoFar: tokens, Summary: in.Summary}).Get(ctx, &outcome); err != nil {
+		ReviewInput{Initiator: in.Initiator, WorkDir: in.WorkDir, TokensSoFar: tokens,
+			Summary: in.Summary, Settings: in.Settings}).Get(ctx, &outcome); err != nil {
 		return "", fmt.Errorf("review workflow: %w", err)
 	}
 	// The review loop can end two ways: it converged (the review agent found
@@ -849,7 +850,8 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 	// pilot loop that iterates N times bills N pilot summaries, not one.
 	reviewCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "review-" + id})
 	if err := workflow.ExecuteChildWorkflow(reviewCtx, ReviewWorkflow,
-		ReviewInput{Initiator: in.Initiator, WorkDir: in.WorkDir, TokensSoFar: tokens, Summary: in.Summary}).Get(ctx, nil); err != nil {
+		ReviewInput{Initiator: in.Initiator, WorkDir: in.WorkDir, TokensSoFar: tokens,
+			Summary: in.Summary, Settings: in.Settings}).Get(ctx, nil); err != nil {
 		return "", prURL, fmt.Errorf("review workflow: %w", err)
 	}
 
@@ -887,7 +889,8 @@ func developWithRemote(ctx workflow.Context, in DevelopInput, commits []string, 
 	// converges.
 	pilotCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{WorkflowID: "pilot-" + id})
 	if err := workflow.ExecuteChildWorkflow(pilotCtx, PilotWorkflow,
-		PilotInput{Initiator: in.Initiator, WorkDir: in.WorkDir, Chain: true, Summary: in.Summary}).Get(ctx, nil); err != nil {
+		PilotInput{Initiator: in.Initiator, WorkDir: in.WorkDir, Chain: true,
+			Summary: in.Summary, Settings: in.Settings}).Get(ctx, nil); err != nil {
 		return "", prURL, fmt.Errorf("pilot workflow: %w", err)
 	}
 

@@ -11,6 +11,7 @@ import (
 	"go.temporal.io/sdk/client"
 
 	"temporal-agents/internal/codereview"
+	"temporal-agents/internal/setting"
 )
 
 // codeCmd dispatches the "code" subcommands.
@@ -28,43 +29,48 @@ func codeCmd(args []string) {
 			pilotHelp(os.Stdout)
 			return
 		}
-		mode, text, chain, summary := parsePilotFlags(args[1:])
-		startPilot(mode, text, chain, summary)
+		mode, text, chain, summary, steering := parsePilotFlags(args[1:])
+		startPilot(mode, text, chain, summary, steering)
 	case "review":
 		if wantsHelp(args[1:]) {
 			reviewHelp(os.Stdout)
 			return
 		}
-		startReview(parseReviewFlags(args[1:]))
+		summary, steering := parseReviewFlags(args[1:])
+		startReview(summary, steering)
 	case "develop":
 		if wantsHelp(args[1:]) {
 			developHelp(os.Stdout)
 			return
 		}
-		prompt, branch, worktree, summary, withRemote := parseDevelopFlags(args[1:])
-		startDevelop(prompt, branch, worktree, summary, withRemote)
+		prompt, branch, worktree, summary, withRemote, steering := parseDevelopFlags(args[1:])
+		startDevelop(prompt, branch, worktree, summary, withRemote, steering)
 	default:
 		fatalf("unknown code subcommand %q (try: pilot, review, develop)", args[0])
 	}
 }
 
-// parseReviewFlags reads the review command's only flag, --summary, and rejects
-// any other argument.
-func parseReviewFlags(args []string) (summary bool) {
+// parseReviewFlags reads the review command's --summary and --no-steering flags
+// and rejects any other argument.
+func parseReviewFlags(args []string) (summary, steering bool) {
+	steering = true
 	for _, a := range args {
-		if a == "--summary" {
+		switch a {
+		case "--summary":
 			summary = true
-			continue
+		case "--no-steering":
+			steering = false
+		default:
+			fatalf("unexpected argument %q", a)
 		}
-		fatalf("unexpected argument %q", a)
 	}
-	return summary
+	return summary, steering
 }
 
 // startReview launches the ReviewWorkflow for the current repository. It starts
 // with no payload, so the first pass only reviews; actionable items drive
 // subsequent implement-then-review passes via continue-as-new.
-func startReview(summary bool) {
+func startReview(summary, steering bool) {
 	c := dial()
 	defer c.Close()
 
@@ -73,8 +79,9 @@ func startReview(summary bool) {
 		ID:        id,
 		TaskQueue: TaskQueue,
 	}, codereview.ReviewWorkflow, codereview.ReviewInput{
-		WorkDir: cwd(),
-		Summary: summary,
+		WorkDir:  cwd(),
+		Summary:  summary,
+		Settings: cliSteeringSettings(steering),
 	})
 	if err != nil {
 		fatalf("Could not start workflow: %v", err)
@@ -86,14 +93,18 @@ func startReview(summary bool) {
 	if summary {
 		fmt.Printf("  summary: on (webhook message summarizes the last Pi run)\n")
 	}
+	if !steering {
+		fmt.Printf("  steering: off (review feedback is handled autonomously)\n")
+	}
 	fmt.Printf("  watch:   temporal-agents watch %s\n", we.GetID())
 }
 
 // parseDevelopFlags reads the develop command's arguments: a required prompt
 // (positional), an optional branch name (--branch <name> or --branch=<name>;
 // defaults to a generated alias when omitted), and the optional --worktree,
-// --summary and --with-remote flags.
-func parseDevelopFlags(args []string) (prompt, branch string, worktree, summary, withRemote bool) {
+// --summary, --with-remote and --no-steering flags.
+func parseDevelopFlags(args []string) (prompt, branch string, worktree, summary, withRemote, steering bool) {
+	steering = true
 	setPrompt := func(v string) {
 		if prompt != "" {
 			fatalf("unexpected argument %q", v)
@@ -109,6 +120,8 @@ func parseDevelopFlags(args []string) (prompt, branch string, worktree, summary,
 			withRemote = true
 		case a == "--worktree":
 			worktree = true
+		case a == "--no-steering":
+			steering = false
 		case a == "--branch":
 			if i+1 >= len(args) {
 				fatalf("--branch requires a branch name")
@@ -127,14 +140,14 @@ func parseDevelopFlags(args []string) (prompt, branch string, worktree, summary,
 	if err := codereview.ValidateBranchName(branch); err != nil {
 		fatalf("invalid branch name: %v", err)
 	}
-	return prompt, branch, worktree, summary, withRemote
+	return prompt, branch, worktree, summary, withRemote, steering
 }
 
 // startDevelop launches the DevelopWorkflow for the current repository. When
 // worktree is set the workflow develops in a fresh git worktree created under
 // the user config directory instead of switching the branch in the current
 // working directory.
-func startDevelop(prompt, branch string, worktree, summary, withRemote bool) {
+func startDevelop(prompt, branch string, worktree, summary, withRemote, steering bool) {
 	c := dial()
 	defer c.Close()
 
@@ -158,6 +171,7 @@ func startDevelop(prompt, branch string, worktree, summary, withRemote bool) {
 		Prompt:       prompt,
 		Summary:      summary,
 		WithRemote:   withRemote,
+		Settings:     cliSteeringSettings(steering),
 	})
 	if err != nil {
 		fatalf("Could not start workflow: %v", err)
@@ -185,15 +199,19 @@ func startDevelop(prompt, branch string, worktree, summary, withRemote bool) {
 	if withRemote {
 		fmt.Printf("  remote:  on (after review, open the PR + Copilot, then run the pilot loop)\n")
 	}
+	if !steering {
+		fmt.Printf("  steering: off (review feedback is handled autonomously)\n")
+	}
 	fmt.Printf("  watch:   temporal-agents watch %s\n", we.GetID())
 }
 
 // parsePilotFlags reads the optional, mutually exclusive --append/--replace
 // flags (each in "--flag value" or "--flag=value" form) and returns the prompt
-// mode plus its text, along with the --summary toggle. Chaining is on by
-// default and is disabled with --no-chain.
-func parsePilotFlags(args []string) (mode codereview.PromptMode, text string, chain, summary bool) {
+// mode plus its text, along with the --summary toggle. Chaining and steering are
+// on by default and are disabled with --no-chain and --no-steering.
+func parsePilotFlags(args []string) (mode codereview.PromptMode, text string, chain, summary, steering bool) {
 	chain = true
+	steering = true
 	set := func(m codereview.PromptMode, v string) {
 		if mode != codereview.PromptDefault {
 			fatalf("--append and --replace are mutually exclusive")
@@ -211,6 +229,8 @@ func parsePilotFlags(args []string) (mode codereview.PromptMode, text string, ch
 			chain = false
 		case a == "--summary":
 			summary = true
+		case a == "--no-steering":
+			steering = false
 		case a == "--append", a == "--replace":
 			if i+1 >= len(args) {
 				fatalf("%s requires a prompt", a)
@@ -225,7 +245,7 @@ func parsePilotFlags(args []string) (mode codereview.PromptMode, text string, ch
 			fatalf("unexpected argument %q", a)
 		}
 	}
-	return mode, text, chain, summary
+	return mode, text, chain, summary, steering
 }
 
 // startPilot launches the PilotWorkflow for the current repository. Chaining is
@@ -233,7 +253,7 @@ func parsePilotFlags(args []string) (mode codereview.PromptMode, text string, ch
 // a pass finds no unresolved comments left. --no-chain opts out, running a
 // single pass. (The develop --with-remote pipeline sets Chain directly,
 // independent of this standalone flag.)
-func startPilot(mode codereview.PromptMode, text string, chain, summary bool) {
+func startPilot(mode codereview.PromptMode, text string, chain, summary, steering bool) {
 	c := dial()
 	defer c.Close()
 
@@ -247,6 +267,7 @@ func startPilot(mode codereview.PromptMode, text string, chain, summary bool) {
 		PromptText: text,
 		Chain:      chain,
 		Summary:    summary,
+		Settings:   cliSteeringSettings(steering),
 	})
 	if err != nil {
 		fatalf("Could not start workflow: %v", err)
@@ -266,7 +287,19 @@ func startPilot(mode codereview.PromptMode, text string, chain, summary bool) {
 	if summary {
 		fmt.Printf("  summary: on (webhook message summarizes the last Pi run)\n")
 	}
+	if !steering {
+		fmt.Printf("  steering: off (review feedback is handled autonomously)\n")
+	}
 	fmt.Printf("  watch:   temporal-agents watch %s\n", we.GetID())
+}
+
+// cliSteeringSettings leaves the scoped default in control unless the operator
+// explicitly requests autonomous execution for this run.
+func cliSteeringSettings(enabled bool) setting.Resolution {
+	if enabled {
+		return nil
+	}
+	return setting.Resolution{{Key: setting.KeySteeringEnabled, Enabled: false}}
 }
 
 func codeHelp(w io.Writer) {
@@ -281,6 +314,9 @@ SUBCOMMANDS
   pilot    Address the unresolved review comments on the current branch's PR
   review   Review the current branch locally, then implement + re-review in a loop
   develop  Create a branch, implement a prompt, then start a local review loop
+
+All subcommands enable steering by default: each review round waits for operator
+input before an agent acts. Use --no-steering for autonomous execution.
 
 All subcommands accept --summary, which summarizes a Pi execution and sends
 that summary as the webhook notification's body (only the webhook). For review
@@ -319,7 +355,7 @@ or the Copilot request already exists), then the pilot loop (the same one as
 "code pilot", which loops until Copilot has no unresolved comments left).
 
 USAGE
-  temporal-agents code develop "<prompt>" [--branch <name>] [--worktree] [--summary] [--with-remote]
+  temporal-agents code develop "<prompt>" [--branch <name>] [--worktree] [--summary] [--with-remote] [--no-steering]
 
 FLAGS
   --branch <name>   Name of the new branch to create and develop on. Optional;
@@ -341,6 +377,8 @@ FLAGS
                     Copilot review, then run the pilot loop—this workflow
                     supervises each stage and stays alive until the pilot loop
                     finishes.
+  --no-steering     Do not wait for operator input before acting on local or
+                    Copilot review feedback.
 
 EXAMPLES
   temporal-agents code develop "add a rate limiter to the API client" --branch feat/rate-limit
@@ -366,12 +404,16 @@ Copilot involved). The review's raw output is carried into the next pass, where:
 In other words: with a payload it implements + reviews; without one it just
 reviews.
 
+By default, each review round waits for operator input before the next implement
+pass. Use --no-steering for autonomous execution.
+
 USAGE
-  temporal-agents code review [--summary]
+  temporal-agents code review [--summary] [--no-steering]
 
 FLAGS
-  --summary   Before returning (on success or failure), summarize the last Pi
-              execution and send it as the webhook message (only the webhook)
+  --summary       Before returning (on success or failure), summarize the last Pi
+                  execution and send it as the webhook message (only the webhook)
+  --no-steering   Do not wait for operator input before acting on review feedback
 
 EXAMPLES
   temporal-agents code review
@@ -393,16 +435,19 @@ The agent works from a built-in default prompt. Use the flags to adjust it:
 
 By default a pilot keeps looping: after a pass that addresses comments it
 continues, folding in the fresh Copilot review, until a pass finds no unresolved
-comments left. With --no-chain it runs a single pass instead.
+comments left. With --no-chain it runs a single pass instead. Each pass waits for
+operator input before acting on Copilot feedback unless --no-steering is set.
 
 USAGE
-  temporal-agents code pilot [--append <prompt> | --replace <prompt>] [--no-chain] [--summary]
+  temporal-agents code pilot [--append <prompt> | --replace <prompt>] [--no-chain] [--summary] [--no-steering]
 
 FLAGS
   --append <prompt>   Append extra instructions to the default prompt
   --replace <prompt>  Replace the default prompt entirely
   --no-chain          Run a single pass rather than looping until no unresolved
                       comments remain
+  --no-steering       Do not wait for operator input before acting on Copilot
+                      review feedback
   --summary           Summarize the agent's work and send it as the webhook
                       message (only the webhook). When chaining (the default)
                       this runs on each pass that addresses comments (and on a

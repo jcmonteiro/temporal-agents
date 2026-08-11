@@ -24,10 +24,10 @@ import (
 // resolved once at the loop's start and carried from there, so this is a read of
 // what the loop decided when it began, never a fresh question.
 //
-// A loop that resolved nothing reads the shipped default, which is on: review
-// findings wait for an operator unless a scoped setting or run input switches it off.
+// A loop that resolved nothing predates setting resolution and stays autonomous
+// during replay. New loops always carry the resolved factory or scoped value.
 func steered(settings setting.Resolution) bool {
-	return settings.Enabled(setting.KeySteeringEnabled)
+	return len(settings) > 0 && settings.Enabled(setting.KeySteeringEnabled)
 }
 
 // pause stops the loop on the operator and returns their decision.

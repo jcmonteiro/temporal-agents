@@ -296,6 +296,12 @@ func TestTheRunThatIsWaitingNamesTheSessionItWaitsIn(t *testing.T) {
 		"a settled pass names no session, because it is waiting in none")
 }
 
+func TestAHistoryWithoutResolvedSettingsRemainsAutonomous(t *testing.T) {
+	if steered(nil) {
+		t.Fatal("an old history with no settings must not gain a new pause during replay")
+	}
+}
+
 // A loop nobody asked to steer must behave exactly as it did: no session, no wait,
 // and nothing on its record about waiting for a human.
 func TestAnUnsteeredRoundNeverStopsForAnybody(t *testing.T) {
