@@ -39,6 +39,30 @@ func aStartOf(placeID string) string {
 	return string(body)
 }
 
+func TestATrustedSiblingOriginCanStartWork(t *testing.T) {
+	const origin = "http://127.0.0.1:3001"
+	starter := &starterStub{}
+	server, _ := newAuthenticatedServer(t, &stubProvider{principal: theOperator},
+		func(options *Options) {
+			options.AllowedOrigins = []string{origin}
+			options.Start = starter
+		})
+	session := signInThroughTheBrowser(t, server)
+
+	created := startWork(t, server, aStartOf("dir-1"), func(request *http.Request) {
+		request.AddCookie(session)
+		request.Header.Set("Origin", origin)
+		request.Header.Set("Sec-Fetch-Site", "same-site")
+	})
+
+	if created.Code != http.StatusCreated {
+		t.Fatalf("start from the configured UI origin = %d: %s", created.Code, created.Body.String())
+	}
+	if len(starter.requests) != 1 {
+		t.Fatalf("starts = %d, want one", len(starter.requests))
+	}
+}
+
 func TestStartedWorkIsAnsweredWithWhereToFindItAndNoInventedStatus(t *testing.T) {
 	starter := &starterStub{}
 	server := newTestServer(t, &viewStub{}, func(options *Options) { options.Start = starter })

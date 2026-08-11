@@ -28,6 +28,7 @@ import (
 // *identity.Service implements it.
 type SignIn interface {
 	// BeginSignIn starts a sign-in for a browser that wants to end up at returnTo.
+	// The identity core validates it against its configured frontend origins.
 	BeginSignIn(ctx context.Context, returnTo string) (identity.SignIn, error)
 	// CompleteSignIn finishes one, or refuses it.
 	CompleteSignIn(ctx context.Context, callback identity.Callback) (identity.Grant, error)
@@ -162,8 +163,8 @@ func PrincipalFrom(ctx context.Context) (identity.Principal, bool) {
 // handleSignIn sends the browser to the provider.
 //
 // The requested destination is carried in the pending record rather than in the
-// redirect, so nothing a consumer supplies is ever reflected into a Location header
-// (see identity.SafeReturnPath for the narrowing the core applies to it).
+// provider redirect. The identity core narrows it to an application path or an
+// absolute URL on an explicitly allowed frontend origin.
 func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 	if !s.allowSignInAttempt(w, r) {
 		return
@@ -418,8 +419,8 @@ func newAuthenticator(options Options) (identity.Authenticator, error) {
 	return chain, nil
 }
 
-// requireSameSite refuses a mutation that a page on another site caused the browser
-// to make.
+// requireSameSite refuses a mutation that an untrusted page caused the browser to
+// make.
 //
 // Loopback binding is not a defence here: any page an operator visits can send a
 // request to 127.0.0.1, and once this hub can start agent work, a cross-site request
@@ -427,6 +428,10 @@ func newAuthenticator(options Options) (identity.Authenticator, error) {
 // cookie's SameSite attribute already blocks most of it; this is the second, explicit
 // rule, because a defence that depends only on a browser honouring a cookie
 // attribute is one browser bug away from nothing.
+//
+// A sibling origin is allowed only when the operator named its exact Origin. This is
+// how the UI and API can use different ports on one site without trusting every
+// sibling. The CORS middleware applies the same allowlist before this check.
 //
 // A request that declares nothing — a script, the CLI, curl — is allowed through:
 // those carry no ambient credential a third party could borrow, and refusing them
@@ -442,6 +447,12 @@ func (s *Server) requireSameSite(next http.Handler) http.Handler {
 			// "none" is a user-initiated navigation, "same-origin" is this application,
 			// and an absent header is a client that is not a browser.
 			next.ServeHTTP(w, r)
+		case "same-site":
+			if s.allowedOrigins[r.Header.Get("Origin")] {
+				next.ServeHTTP(w, r)
+				return
+			}
+			fallthrough
 		default:
 			s.writeProblem(w, r, codeCrossSiteRequest,
 				"a change must be requested by this application, from this site")

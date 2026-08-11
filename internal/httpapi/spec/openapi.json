@@ -886,7 +886,7 @@
             "name": "return",
             "in": "query",
             "required": false,
-            "description": "Where to send the browser once it is signed in. Only a path inside this application is honoured; anything else is replaced by /.",
+            "description": "Where to send the browser once it is signed in. An application-relative path or an absolute URL on an exact allowlisted frontend origin is honoured; anything else is replaced by /.",
             "schema": {
               "type": "string",
               "maxLength": 2048

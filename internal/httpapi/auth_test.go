@@ -65,16 +65,17 @@ var theOperator = identity.Principal{
 }
 
 // newSignInService wires the real core over the in-memory store.
-func newSignInService(t *testing.T, provider identity.Provider) (*identity.Service, *identitytest.Store) {
+func newSignInService(t *testing.T, provider identity.Provider, allowedReturnOrigins ...string) (*identity.Service, *identitytest.Store) {
 	t.Helper()
 	store := identitytest.NewStore()
 	service, err := identity.NewService(identity.Dependencies{
-		Provider:       provider,
-		Sessions:       store,
-		Principals:     store,
-		PendingSignIns: store,
-		RedirectURI:    "http://localhost:8973" + BasePath + "/auth/callback",
-		Now:            func() time.Time { return fixedNow },
+		Provider:             provider,
+		Sessions:             store,
+		Principals:           store,
+		PendingSignIns:       store,
+		RedirectURI:          "http://localhost:8973" + BasePath + "/auth/callback",
+		AllowedReturnOrigins: allowedReturnOrigins,
+		Now:                  func() time.Time { return fixedNow },
 	})
 	if err != nil {
 		t.Fatalf("wire the identity service: %v", err)
@@ -117,6 +118,46 @@ func signInThroughTheBrowser(t *testing.T, server *Server) *http.Cookie {
 		t.Fatalf("returned to %q, want the path the browser asked for", got)
 	}
 	return cookieNamed(t, response.Result().Cookies(), sessionCookieName)
+}
+
+// TestSignInReturnsOnlyToAnAllowedFrontend pins both sides of the redirect policy
+// through the real identity core and HTTP handlers.
+func TestSignInReturnsOnlyToAnAllowedFrontend(t *testing.T) {
+	const allowedOrigin = "http://127.0.0.1:3001"
+	service, _ := newSignInService(t, &stubProvider{principal: theOperator}, allowedOrigin)
+	server := newTestServer(t, &viewStub{}, func(options *Options) {
+		options.SignIn = service
+		options.Authenticator = service
+		options.AllowedOrigins = []string{allowedOrigin}
+	})
+
+	for name, testCase := range map[string]struct {
+		requested string
+		want      string
+	}{
+		"allowed sibling": {requested: allowedOrigin + "/#/runs", want: allowedOrigin + "/#/runs"},
+		"unlisted origin": {requested: "https://hostile.example/", want: "/"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			started := request(t, server, http.MethodGet,
+				BasePath+"/auth/sign-in?return="+url.QueryEscape(testCase.requested), nil)
+			pending := cookieNamed(t, started.Result().Cookies(), signInCookieName)
+			state := queryOf(t, started.Header().Get("Location")).Get("state")
+			callback := newRequest(http.MethodGet,
+				BasePath+"/auth/callback?code=the-code&state="+url.QueryEscape(state), nil)
+			callback.AddCookie(pending)
+			response := httptest.NewRecorder()
+
+			server.ServeHTTP(response, callback)
+
+			if response.Code != http.StatusSeeOther {
+				t.Fatalf("callback status = %d, want 303 (body %s)", response.Code, response.Body.String())
+			}
+			if got := response.Header().Get("Location"); got != testCase.want {
+				t.Fatalf("callback Location = %q, want %q", got, testCase.want)
+			}
+		})
+	}
 }
 
 // TestABrowserSignsInAndThenReadsTheAPI is the slice's demo at the transport: the
@@ -502,6 +543,40 @@ func TestAnotherSitesPageCannotChangeAnything(t *testing.T) {
 			}
 			if response.Code == http.StatusForbidden {
 				t.Fatalf("a request from %q was refused as cross-site", site)
+			}
+		})
+	}
+}
+
+// TestOnlyAConfiguredSameSiteSiblingCanChangeAnything pins every part of the
+// exception: the request must name an Origin, that exact Origin must be configured,
+// and the browser must classify it as same-site rather than cross-site.
+func TestOnlyAConfiguredSameSiteSiblingCanChangeAnything(t *testing.T) {
+	const allowedOrigin = "http://127.0.0.1:3001"
+	server, _ := newAuthenticatedServer(t, &stubProvider{principal: theOperator},
+		func(options *Options) { options.AllowedOrigins = []string{allowedOrigin} })
+	session := signInThroughTheBrowser(t, server)
+
+	cases := map[string]struct {
+		origin string
+		site   string
+	}{
+		"same-site without Origin":  {site: "same-site"},
+		"unlisted same-site Origin": {origin: "http://127.0.0.1:3002", site: "same-site"},
+		"listed cross-site Origin":  {origin: allowedOrigin, site: "cross-site"},
+	}
+	for name, testCase := range cases {
+		t.Run(name, func(t *testing.T) {
+			mutation := newRequest(http.MethodDelete, BasePath+"/dismissals/run:run-1", nil)
+			mutation.AddCookie(session)
+			mutation.Header.Set("Origin", testCase.origin)
+			mutation.Header.Set("Sec-Fetch-Site", testCase.site)
+			response := httptest.NewRecorder()
+
+			server.ServeHTTP(response, mutation)
+
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", response.Code)
 			}
 		})
 	}

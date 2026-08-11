@@ -1,3 +1,4 @@
+import { apiAddress } from "../config/api";
 import { err, ok, type Result } from "../utils/result";
 import { fetchJSON, send } from "./http";
 
@@ -35,11 +36,19 @@ export async function endSession(): Promise<Result<void, Error>> {
 /**
  * Where the browser goes to sign in, carrying where it wants to come back to.
  *
- * The destination is a path inside this application, fragment included: the hub
- * is one document with a fragment route, so "/#/places/x" is what returns the
- * operator to the page they asked for. The server narrows anything else to "/",
- * so this can never become an open redirect.
+ * A same-origin API receives the application path. A separately hosted bundle
+ * sends its absolute URL instead, so the callback can return to the UI origin. The
+ * server accepts that URL only when its exact origin is configured.
  */
-export function signInAddress(returnTo: string): string {
-  return `/api/v1/auth/sign-in?return=${encodeURIComponent(returnTo)}`;
+export function signInAddress(
+  returnTo: string,
+  frontendOrigin: string = window.location.origin,
+): string {
+  const normalizedFrontendOrigin = new URL(frontendOrigin).origin;
+  const apiOrigin = new URL(apiAddress("/auth/sign-in"), normalizedFrontendOrigin).origin;
+  const target =
+    apiOrigin === normalizedFrontendOrigin
+      ? returnTo
+      : new URL(returnTo, normalizedFrontendOrigin).href;
+  return apiAddress(`/auth/sign-in?return=${encodeURIComponent(target)}`);
 }

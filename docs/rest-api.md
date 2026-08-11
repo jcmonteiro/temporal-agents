@@ -51,7 +51,7 @@ The routes are:
 
 | Route | Purpose |
 |---|---|
-| `GET /api/v1/auth/sign-in?return=<path>` | Redirects to the provider. `return` is honoured only when it is a path inside the application. |
+| `GET /api/v1/auth/sign-in?return=<target>` | Redirects to the provider. `return` is honoured only when it is an application-relative path or an absolute URL on an exact `--allow-origin` frontend origin. |
 | `GET /api/v1/auth/callback` | Where the provider sends the browser back. Sets the session cookie and redirects. |
 | `GET /api/v1/auth/session` | Who the request is made by (`session.v1`). |
 | `DELETE /api/v1/auth/session` | Ends the session immediately and clears the cookie. |
@@ -105,17 +105,34 @@ reachable from another host, `AGENT_HUB_AUTH_TOKEN` is required even though the
 process itself still listens on loopback. The proxy must keep the upstream connection
 on the same host and must preserve the client's `Authorization` header unchanged.
 
-The server explicitly allows its own configured origins for the bundled UI. Each
-additional browser origin must be listed separately:
+The server allows its own configured origins for the bundled UI. Each additional
+browser origin must be listed separately. An allowed value must be an exact HTTP(S)
+origin: credentials, paths, queries, fragments, `*`, and `null` are rejected at
+startup. For example, a UI on port 3001 that calls the API on port 3000 needs:
 
 ```sh
 temporal-agents serve --allow-origin http://127.0.0.1:3001
 ```
 
+For a session-authenticated browser client, the UI and API must be same-site. The
+client must send each request with Fetch `credentials: "include"`; the API answers an
+exact allowlisted origin with `Access-Control-Allow-Credentials: true`. Listing an
+origin does not allow cross-site mutations.
+
+The bundled UI uses `credentials: "include"`. Its API endpoint defaults to the
+same-origin `/api/v1` path. For a separate sibling origin, sign-in carries the UI's
+absolute return URL; the API accepts it only because that UI origin is allowlisted.
+Set the versioned endpoint when building a bundle that calls a sibling origin
+directly:
+
+```sh
+VITE_AGENT_HUB_API_URL=http://127.0.0.1:3000/api/v1 pnpm --dir web build
+```
+
 `web/dist` is served as a single-page application for local convenience when it
 exists. Use `--web-dir=` for JSON only or `--web-dir <path>` for another bundle.
-Static hosting is independent of the API: the same bundle can be hosted elsewhere
-without changing any API URL or payload.
+Static hosting is independent of the API payload, but a separately hosted bundle
+must be built with `VITE_AGENT_HUB_API_URL` set to the API it calls.
 
 ## Discover the contract
 
@@ -470,10 +487,14 @@ fields and multiple JSON documents.
 
 - There is no unauthenticated mode that can be left on unnoticed: a server that
   neither authenticates nor was explicitly asked not to refuses to start.
-- A change (`POST`, `DELETE`) is refused when the browser reports it as cross-site.
-  Loopback binding is no defence: any page can send a request to a local port.
+- A change (`POST`, `PUT`, `PATCH`, `DELETE`) is refused when the browser reports
+  an untrusted origin. A same-site UI on another port is trusted only when its exact
+  origin is configured; a cross-site request remains blocked. Loopback binding is no
+  defence: any page can send a request to a local port.
 - Signing in is server-side. No provider token, refresh token or identity ever reaches
-  the browser, and the session cookie is script-inaccessible and same-site.
+  the browser, and the session cookie is script-inaccessible and same-site. A callback
+  returns only to an application-relative path or an absolute URL whose exact origin
+  is in the frontend allowlist; every other requested target becomes `/`.
 - A callback is accepted once, only when it is bound to a sign-in this server started
   for this browser (state, nonce, PKCE, and a server-side pending record). Which check
   refused a callback is never disclosed.
@@ -484,7 +505,9 @@ fields and multiple JSON documents.
 - Every request Host must match the loopback names, the concrete listener host, or an
   exact `--allow-host` entry.
 - A supplied browser Origin is rejected unless it is one of the server's own origins
-  or an exact `--allow-origin` entry. Wildcards are not accepted.
+  or an exact `--allow-origin` entry. Wildcards are not accepted. Allowed origins
+  receive credentialed CORS; session-based clients must use Fetch
+  `credentials: "include"`.
 - Requests have body, rate, and time limits. Responses use restrictive browser
   security headers.
 - Postgres remains bound to loopback in the local compose stack.

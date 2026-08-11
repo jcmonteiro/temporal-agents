@@ -400,6 +400,26 @@ func TestAStoreThatCannotBeReachedIsNotARefusedCredential(t *testing.T) {
 	require.NotErrorIs(t, err, identity.ErrUnauthenticated)
 }
 
+// TestTheBrowserCanReturnToAnAllowedFrontendOrigin pins the separately hosted
+// bundle flow: the callback returns to the exact frontend origin configured by the
+// operator, including its fragment route.
+func TestTheBrowserCanReturnToAnAllowedFrontendOrigin(t *testing.T) {
+	const target = "http://127.0.0.1:3001/#/runs"
+	service, _, _, _ := newFixture(t, func(dependencies *identity.Dependencies) {
+		dependencies.AllowedReturnOrigins = []string{"http://127.0.0.1:3001"}
+	})
+	ctx := context.Background()
+
+	signIn, err := service.BeginSignIn(ctx, target)
+	require.NoError(t, err)
+	grant, err := service.CompleteSignIn(ctx, identity.Callback{
+		RequestToken: signIn.RequestToken, State: stateOf(t, signIn), Code: "code",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, target, grant.ReturnTo)
+}
+
 // TestTheBrowserIsOnlyEverSentSomewhereInsideTheApplication pins the open-redirect
 // rule at the surface that would be most attractive to abuse.
 func TestTheBrowserIsOnlyEverSentSomewhereInsideTheApplication(t *testing.T) {

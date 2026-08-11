@@ -24,6 +24,7 @@ import (
 	"temporal-agents/internal/agenthub/hubtemporal"
 	"temporal-agents/internal/gitcli"
 	"temporal-agents/internal/httpapi"
+	"temporal-agents/internal/identity"
 	"temporal-agents/internal/instruction"
 	"temporal-agents/internal/notification"
 	"temporal-agents/internal/notification/notificationpg"
@@ -77,7 +78,7 @@ type serveOptions struct {
 	// allowedHosts are HTTP Host names accepted in addition to loopback names and
 	// the concrete listener host.
 	allowedHosts []string
-	// allowedOrigins are the browser origins explicitly allowed to read the API.
+	// allowedOrigins are the browser origins explicitly allowed to call the API.
 	allowedOrigins []string
 }
 
@@ -121,6 +122,13 @@ func parseServeFlags(args []string) (serveOptions, error) {
 	if strings.TrimSpace(options.address) == "" {
 		return serveOptions{}, errors.New("--addr must not be empty")
 	}
+	for index, configured := range options.allowedOrigins {
+		origin, err := identity.ParseBrowserOrigin(configured)
+		if err != nil {
+			return serveOptions{}, fmt.Errorf("--allow-origin: %w", err)
+		}
+		options.allowedOrigins[index] = origin
+	}
 	return options, nil
 }
 
@@ -140,8 +148,11 @@ The API is served under /api/v1. Its OpenAPI contract is available at
 The API can expose workflow goals and prompts, so it binds to 127.0.0.1:3000 by
 default. A non-loopback --addr requires TLS and a strong AGENT_HUB_AUTH_TOKEN.
 Requests must use a loopback Host, the concrete listener host, or a name listed with
---allow-host. No cross-origin browser access is allowed by default; list each trusted
-frontend origin with --allow-origin.
+--allow-host. No cross-origin browser access is allowed by default. A session-based
+frontend on another same-site origin must be listed with --allow-origin and must use
+fetch with credentials: 'include'. The API then answers with credentialed CORS. The
+bundled UI uses that fetch mode; set VITE_AGENT_HUB_API_URL to the versioned API
+endpoint when building it for another origin.
 
 Every route needs a credential, except signing in, the provider's callback, and the
 health probe. A person signs in with an identity provider: the browser is redirected
@@ -309,6 +320,10 @@ func runAPIServer(options serveOptions) error {
 	if err != nil {
 		return err
 	}
+	allowedOrigins := append(
+		localOrigins(options.address, allowedHosts, options.tlsCert != ""),
+		options.allowedOrigins...,
+	)
 	loopback, err := isLoopbackAddress(options.address)
 	if err != nil {
 		return err
@@ -399,7 +414,7 @@ func runAPIServer(options serveOptions) error {
 	// Signing in is opened before anything is served, so a hub configured with a
 	// provider it cannot reach stops here with a message instead of failing at an
 	// operator's first click.
-	signIn, err := openIdentity(ctx, dsn, identityOptions)
+	signIn, err := openIdentity(ctx, dsn, identityOptions, allowedOrigins)
 	if err != nil {
 		return err
 	}
@@ -468,7 +483,6 @@ func runAPIServer(options serveOptions) error {
 		Places:        hubplaces.Adapter{Registry: service},
 	}
 
-	allowedOrigins := append(localOrigins(options.address, allowedHosts, options.tlsCert != ""), options.allowedOrigins...)
 	api, err := httpapi.New(service, httpapi.Options{
 		Logger:               slog.Default(),
 		AllowedHosts:         allowedHosts,

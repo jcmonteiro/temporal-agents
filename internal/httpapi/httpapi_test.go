@@ -645,9 +645,10 @@ func TestHostMustBeExplicitlyAllowed(t *testing.T) {
 	}
 }
 
-// TestCORSRejectsUnlistedOriginsAndAllowsExactMatches pins that a supplied Origin
-// is an access decision, not only a response-header decision.
-func TestCORSRejectsUnlistedOriginsAndAllowsExactMatches(t *testing.T) {
+// TestCORSRejectsUnlistedOriginsAndAllowsCredentialedExactMatches pins that a
+// supplied Origin is an access decision, not only a response-header decision. An
+// allowed browser must also be able to send its session cookie.
+func TestCORSRejectsUnlistedOriginsAndAllowsCredentialedExactMatches(t *testing.T) {
 	view := &viewStub{}
 	denied := newTestServer(t, view)
 	req := newRequest(http.MethodGet, BasePath+"/runs", nil)
@@ -662,7 +663,7 @@ func TestCORSRejectsUnlistedOriginsAndAllowsExactMatches(t *testing.T) {
 	}
 
 	allowed := newTestServer(t, view, func(options *Options) {
-		options.AllowedOrigins = []string{"https://hub.example", "*"}
+		options.AllowedOrigins = []string{"https://hub.example"}
 	})
 	for origin, want := range map[string]struct {
 		status      int
@@ -681,6 +682,33 @@ func TestCORSRejectsUnlistedOriginsAndAllowsExactMatches(t *testing.T) {
 		if got := res.Header().Get("Access-Control-Allow-Origin"); got != want.allowOrigin {
 			t.Errorf("origin %s allowed as %q, want %q", origin, got, want.allowOrigin)
 		}
+		wantCredentials := ""
+		if want.allowOrigin != "" {
+			wantCredentials = "true"
+		}
+		if got := res.Header().Get("Access-Control-Allow-Credentials"); got != wantCredentials {
+			t.Errorf("origin %s allows credentials as %q, want %q", origin, got, wantCredentials)
+		}
+		if want.allowOrigin != "" && !strings.Contains(res.Header().Get("Access-Control-Allow-Methods"), http.MethodPatch) {
+			t.Errorf("origin %s does not advertise PATCH: %q", origin, res.Header().Get("Access-Control-Allow-Methods"))
+		}
+	}
+}
+
+// TestInvalidAllowedOriginsStopTheServer pins validation at the adapter boundary,
+// including callers that do not use the serve command's flag parser.
+func TestInvalidAllowedOriginsStopTheServer(t *testing.T) {
+	for _, origin := range []string{"*", "null", "https://ui.example/app"} {
+		t.Run(origin, func(t *testing.T) {
+			_, err := New(&viewStub{}, Options{
+				AllowUnauthenticated: true,
+				AllowedOrigins:       []string{origin},
+			})
+
+			if err == nil {
+				t.Fatalf("New with origin %q = nil error, want a refusal", origin)
+			}
+		})
 	}
 }
 

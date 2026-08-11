@@ -1,16 +1,16 @@
+import { apiAddress } from "../config/api";
 import { err, ok, type Result } from "../utils/result";
 
 // Transport adapter: the only place in the frontend that talks to the network.
-// Base path is proxied by Vite in dev (see vite.config.ts) and served by the
-// same origin in production. See internal/httpapi/httpapi.go.
-const BASE = "/api/v1";
+// The default API path is proxied by Vite in dev (see vite.config.ts) and served
+// by the same origin in production. See internal/httpapi/httpapi.go.
 
 // One request bound; the Go server also enforces its own.
 const DEFAULT_TIMEOUT_MS = 15_000;
 
 /**
- * How the browser proves who it is: the same-origin session cookie the API set,
- * and nothing else.
+ * How the browser proves who it is: the session cookie the API set, and nothing
+ * else. `include` is required when the UI and API are trusted sibling origins.
  *
  * This is the one place a credential is attached. There is no token in script
  * storage, no Authorization header assembled in a component, and no identity
@@ -18,7 +18,7 @@ const DEFAULT_TIMEOUT_MS = 15_000;
  * wanted to. A component that wanted to authenticate a request differently
  * would have to change this line, which is the point.
  */
-const CREDENTIALS: RequestCredentials = "same-origin";
+const CREDENTIALS: RequestCredentials = "include";
 
 /**
  * A failure the API answered with, carrying the status so a caller can tell
@@ -148,7 +148,7 @@ async function request(
     // A body makes the request one a browser will not send cross-site without
     // asking first, which is the rule the API enforces on every change.
     if (init.body !== undefined) headers["Content-Type"] = "application/json";
-    const res = await fetch(BASE + path, {
+    const res = await fetch(apiAddress(path), {
       method: init.method,
       credentials: CREDENTIALS,
       headers,
