@@ -44,13 +44,13 @@ func New() *Store {
 
 // Set implements scoped.Writer: it appends a version of key at scope and points that
 // scope at it, which is what saving an override does.
-func (s *Store) Set(_ context.Context, key scoped.Key, scope scoped.Scope, text string) (scoped.Record, error) {
+func (s *Store) Set(_ context.Context, key scoped.Key, scope scoped.Scope, text, savedBy string) (scoped.Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.Err != nil {
 		return scoped.Record{}, s.Err
 	}
-	return s.appendVersion(key, scope, text), nil
+	return s.appendVersion(key, scope, text, savedBy), nil
 }
 
 // Store records a value the way a test states its setup: the same append-and-point
@@ -58,15 +58,24 @@ func (s *Store) Set(_ context.Context, key scoped.Key, scope scoped.Scope, text 
 func (s *Store) Store(key scoped.Key, scope scoped.Scope, text string) scoped.Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.appendVersion(key, scope, text)
+	return s.appendVersion(key, scope, text, "")
 }
 
-// Clear removes the pointer at scope without removing its versions, which is what
-// resetting to the inherited value does.
-func (s *Store) Clear(key scoped.Key, scope scoped.Scope) {
+// Reset implements scoped.Writer by removing only the current pointer.
+func (s *Store) Reset(_ context.Context, key scoped.Key, scope scoped.Scope) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.Err != nil {
+		return s.Err
+	}
 	delete(s.pointers[key], scope)
+	return nil
+}
+
+// Clear removes the pointer at scope without removing its versions, which is a
+// concise setup operation for tests.
+func (s *Store) Clear(key scoped.Key, scope scoped.Scope) {
+	_ = s.Reset(context.Background(), key, scope)
 }
 
 // Versions reports every version ever appended for one (key, scope), so a test can
@@ -128,12 +137,12 @@ func (s *Store) PublishFactory(_ context.Context, key scoped.Key, text string) (
 			return current, nil
 		}
 	}
-	return s.appendVersion(key, scoped.FactoryScope, text), nil
+	return s.appendVersion(key, scoped.FactoryScope, text, ""), nil
 }
 
 // appendVersion is the one write path, so the fake cannot mutate a version any more
 // than the real adapter can. The caller holds the lock.
-func (s *Store) appendVersion(key scoped.Key, scope scoped.Scope, text string) scoped.Record {
+func (s *Store) appendVersion(key scoped.Key, scope scoped.Scope, text, savedBy string) scoped.Record {
 	if s.versions[key] == nil {
 		s.versions[key] = map[scoped.Scope][]scoped.Record{}
 		s.pointers[key] = map[scoped.Scope]int{}
@@ -144,6 +153,7 @@ func (s *Store) appendVersion(key scoped.Key, scope scoped.Scope, text string) s
 		Version: len(s.versions[key][scope]) + 1,
 		Text:    text,
 		Hash:    scoped.Hash(text),
+		SavedBy: savedBy,
 	}
 	s.versions[key][scope] = append(s.versions[key][scope], record)
 	s.pointers[key][scope] = record.Version

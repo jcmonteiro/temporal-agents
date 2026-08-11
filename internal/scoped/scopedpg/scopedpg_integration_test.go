@@ -107,7 +107,10 @@ func TestAFinishedRunsValueStillResolvesAfterALaterEdit(t *testing.T) {
 	require.Equal(t, scoped.FactoryScope, used.Scope)
 
 	// The operator then overrides the value for that place.
-	saveOverride(t, store, reviewInstruction, scoped.DirectoryScope(worktree), "Review only the infrastructure changes")
+	saved, err := store.Set(ctx, reviewInstruction, scoped.DirectoryScope(worktree),
+		"Review only the infrastructure changes", "operator-1")
+	require.NoError(t, err)
+	require.Equal(t, "operator-1", saved.SavedBy)
 
 	after, err := store.Current(ctx, []scoped.Key{reviewInstruction}, chain)
 	require.NoError(t, err)
@@ -119,6 +122,72 @@ func TestAFinishedRunsValueStillResolvesAfterALaterEdit(t *testing.T) {
 	require.NoError(t, err, "the version a finished run recorded is no longer resolvable")
 	require.Equal(t, used.Text, recorded.Text)
 	require.Equal(t, used.Hash, recorded.Hash)
+}
+
+// Reset removes only the current pointer. Every version stays recoverable for past
+// executions, and resolution immediately returns to the broader scope.
+func TestResetKeepsHistoryAndReturnsResolutionToTheInheritedValue(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	scope := scoped.DirectoryScope("/src/agents")
+	require.NoError(t, scoped.PublishDefault(ctx, store, reviewInstruction, "shipped"))
+	saved, err := store.Set(ctx, reviewInstruction, scope, "local", "operator-1")
+	require.NoError(t, err)
+
+	require.NoError(t, store.Reset(ctx, reviewInstruction, scope))
+
+	current, err := store.Current(ctx, []scoped.Key{reviewInstruction}, scoped.Chain("/src/agents", ""))
+	require.NoError(t, err)
+	winner, ok := scoped.Winner(current, reviewInstruction, scoped.Chain("/src/agents", ""))
+	require.True(t, ok)
+	require.Equal(t, scoped.FactoryScope, winner.Scope)
+	historical, err := store.Version(ctx, reviewInstruction, scope, saved.Version)
+	require.NoError(t, err)
+	require.Equal(t, "local", historical.Text)
+	require.Equal(t, "operator-1", historical.SavedBy)
+}
+
+// Writers serialize per key. Each save therefore gets a distinct dense version and
+// the pointer always selects the greatest committed version, independent of which
+// caller acquired the lock first.
+func TestConcurrentSavesProduceDistinctVersionsAndPointAtTheLatest(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	scope := scoped.DirectoryScope("/src/agents")
+
+	var wait sync.WaitGroup
+	results := make(chan scoped.Record, 2)
+	failures := make(chan error, 2)
+	for _, save := range []struct {
+		text string
+		by   string
+	}{{"first candidate", "operator-1"}, {"second candidate", "operator-2"}} {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			record, err := store.Set(ctx, reviewInstruction, scope, save.text, save.by)
+			results <- record
+			failures <- err
+		}()
+	}
+	wait.Wait()
+	close(results)
+	close(failures)
+	for err := range failures {
+		require.NoError(t, err)
+	}
+
+	versions := map[int]scoped.Record{}
+	for record := range results {
+		versions[record.Version] = record
+	}
+	require.Len(t, versions, 2)
+	require.Contains(t, versions, 1)
+	require.Contains(t, versions, 2)
+	current, err := store.Current(ctx, []scoped.Key{reviewInstruction}, []scoped.Scope{scope})
+	require.NoError(t, err)
+	require.Len(t, current, 1)
+	require.Equal(t, versions[2], current[0])
 }
 
 // A pointer that named a version nobody stored would resolve to nothing, and the

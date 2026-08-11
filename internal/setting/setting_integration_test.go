@@ -92,6 +92,6 @@ func save(t *testing.T, store *scopedpg.Store, scope scoped.Scope, enabled bool)
 	require.True(t, ok)
 	text := setting.Format(enabled)
 	require.NoError(t, spec.Validate(text))
-	_, err := store.Set(context.Background(), setting.KeySteeringEnabled, scope, text)
+	_, err := store.Set(context.Background(), setting.KeySteeringEnabled, scope, text, "")
 	require.NoError(t, err)
 }

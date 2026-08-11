@@ -99,7 +99,7 @@ func (s *Store) SchemaState(ctx context.Context) (schema.State, error) {
 // core's rule, and an adapter that ranked them here would be a second place that
 // decides it.
 const currentSQL = `
-SELECT p.key, p.scope, p.version, v.body, v.hash
+SELECT p.key, p.scope, p.version, v.body, v.hash, v.saved_by
 FROM scoped_pointers p
 JOIN scoped_values v ON v.key = p.key AND v.scope = p.scope AND v.version = p.version
 WHERE p.key = ANY($1) AND p.scope = ANY($2)`
@@ -139,14 +139,14 @@ func (s *Store) Version(ctx context.Context, key scoped.Key, scope scoped.Scope,
 
 // versionSQL reads one stored version by its identity.
 const versionSQL = `
-SELECT key, scope, version, body, hash
+SELECT key, scope, version, body, hash, saved_by
 FROM scoped_values
 WHERE key = $1 AND scope = $2 AND version = $3`
 
 // pointedAtFactorySQL reads what the factory scope currently points at, which is
 // what publication compares the build's text against.
 const pointedAtFactorySQL = `
-SELECT p.key, p.scope, p.version, v.body, v.hash
+SELECT p.key, p.scope, p.version, v.body, v.hash, v.saved_by
 FROM scoped_pointers p
 JOIN scoped_values v ON v.key = p.key AND v.scope = p.scope AND v.version = p.version
 WHERE p.key = $1 AND p.scope = $2`
@@ -155,10 +155,10 @@ WHERE p.key = $1 AND p.scope = $2`
 // computed from the rows themselves, under the caller's lock, so versions stay dense
 // and are never reused.
 const appendVersionSQL = `
-INSERT INTO scoped_values (key, scope, version, body, hash)
-SELECT $1, $2, COALESCE(MAX(version), 0) + 1, $3, $4
+INSERT INTO scoped_values (key, scope, version, body, hash, saved_by)
+SELECT $1, $2, COALESCE(MAX(version), 0) + 1, $3, $4, $5
 FROM scoped_values WHERE key = $1 AND scope = $2
-RETURNING key, scope, version, body, hash`
+RETURNING key, scope, version, body, hash, saved_by`
 
 // pointSQL moves one scope's pointer to a version, which is the only write that ever
 // changes what a scope resolves to.
@@ -173,7 +173,7 @@ ON CONFLICT (key, scope) DO UPDATE SET version = EXCLUDED.version, updated_at = 
 // same per-key lock publication takes, so two writers cannot compute the same next
 // version number and so a pointer is never left naming a version that was rolled
 // back.
-func (s *Store) Set(ctx context.Context, key scoped.Key, scope scoped.Scope, text string) (scoped.Record, error) {
+func (s *Store) Set(ctx context.Context, key scoped.Key, scope scoped.Scope, text, savedBy string) (scoped.Record, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return scoped.Record{}, fmt.Errorf("save the value for %s: %w", key, err)
@@ -183,7 +183,7 @@ func (s *Store) Set(ctx context.Context, key scoped.Key, scope scoped.Scope, tex
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, publishLockClass, lockKey(key)); err != nil {
 		return scoped.Record{}, fmt.Errorf("take the write lock for %s: %w", key, err)
 	}
-	saved, err := appendAndPoint(ctx, tx, key, scope, text)
+	saved, err := appendAndPoint(ctx, tx, key, scope, text, savedBy)
 	if err != nil {
 		return scoped.Record{}, err
 	}
@@ -193,11 +193,34 @@ func (s *Store) Set(ctx context.Context, key scoped.Key, scope scoped.Scope, tex
 	return saved, nil
 }
 
+// Reset implements scoped.Writer. It removes only the mutable pointer, under the
+// same per-key lock as Set, so a concurrent save and reset have one serial order.
+// Immutable versions remain available to every execution that recorded one.
+func (s *Store) Reset(ctx context.Context, key scoped.Key, scope scoped.Scope) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("reset the value for %s: %w", key, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, publishLockClass, lockKey(key)); err != nil {
+		return fmt.Errorf("take the write lock for %s: %w", key, err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM scoped_pointers WHERE key = $1 AND scope = $2`,
+		string(key), string(scope)); err != nil {
+		return fmt.Errorf("reset the value for %s: %w", key, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("reset the value for %s: %w", key, err)
+	}
+	return nil
+}
+
 // appendAndPoint is the one write path: a new version, and the pointer moved to it.
 // Both publication and an operator's save go through it, so an override and a
 // shipped default are stored exactly alike.
-func appendAndPoint(ctx context.Context, tx pgx.Tx, key scoped.Key, scope scoped.Scope, text string) (scoped.Record, error) {
-	rows, err := tx.Query(ctx, appendVersionSQL, string(key), string(scope), text, scoped.Hash(text))
+func appendAndPoint(ctx context.Context, tx pgx.Tx, key scoped.Key, scope scoped.Scope, text, savedBy string) (scoped.Record, error) {
+	rows, err := tx.Query(ctx, appendVersionSQL, string(key), string(scope), text, scoped.Hash(text), savedBy)
 	if err != nil {
 		return scoped.Record{}, fmt.Errorf("append the value for %s: %w", key, err)
 	}
@@ -239,7 +262,7 @@ func (s *Store) PublishFactory(ctx context.Context, key scoped.Key, text string)
 		return current, nil
 	}
 
-	appended, err := appendAndPoint(ctx, tx, key, scoped.FactoryScope, text)
+	appended, err := appendAndPoint(ctx, tx, key, scoped.FactoryScope, text, "")
 	if err != nil {
 		return scoped.Record{}, err
 	}
@@ -273,7 +296,7 @@ func scanRecord(row pgx.CollectableRow) (scoped.Record, error) {
 	var key, scope string
 	var record scoped.Record
 	var version int64
-	if err := row.Scan(&key, &scope, &version, &record.Text, &record.Hash); err != nil {
+	if err := row.Scan(&key, &scope, &version, &record.Text, &record.Hash, &record.SavedBy); err != nil {
 		return scoped.Record{}, err
 	}
 	record.Key = scoped.Key(key)

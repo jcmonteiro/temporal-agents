@@ -36,6 +36,9 @@ type Record struct {
 	Text string
 	// Hash is the content hash of Text (see Hash).
 	Hash string
+	// SavedBy identifies the principal that created this version. It is empty for a
+	// shipped default and on an explicitly unauthenticated local deployment.
+	SavedBy string
 }
 
 // Reader is the driven port resolution reads through. An adapter answers only what
@@ -72,8 +75,11 @@ type Publisher interface {
 // text.
 type Writer interface {
 	// Set appends a version of key at scope and points that scope at it, returning
-	// the stored record.
-	Set(ctx context.Context, key Key, scope Scope, text string) (Record, error)
+	// the stored record. savedBy is the principal responsible for the version.
+	Set(ctx context.Context, key Key, scope Scope, text, savedBy string) (Record, error)
+	// Reset removes the pointer for key at scope. Versions remain append-only and
+	// recoverable; resolution therefore returns to the next scope in the chain.
+	Reset(ctx context.Context, key Key, scope Scope) error
 }
 
 // Store is every half, for the composition root that owns one adapter.
