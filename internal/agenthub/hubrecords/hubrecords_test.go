@@ -41,8 +41,8 @@ func TestRecordedExecutionsTranslatesARecord(t *testing.T) {
 	save(t, store, execstore.Execution{
 		WorkflowID: "develop-1", RunID: "r1", Kind: execstore.KindDevelop,
 		Prompt: "add the endpoint", StartedAt: started, EndedAt: ended,
-		Status: execstore.StatusSucceeded, Tokens: 1234,
-		Detail: execstore.Detail{Branch: "feature", PlanID: "plan-1"},
+		Status: execstore.StatusSucceeded, Tokens: 1234, ParentWorkflowID: "develop-parent",
+		Detail: execstore.Detail{Detached: true, Branch: "feature", PlanID: "plan-1"},
 	})
 
 	got := recordedExecutions(t, store, agenthub.RecordQuery{})
@@ -63,6 +63,9 @@ func TestRecordedExecutionsTranslatesARecord(t *testing.T) {
 		t.Errorf("tokens = %d, want 1234", e.Tokens)
 	case e.PlanID != "plan-1":
 		t.Errorf("plan id = %q, want plan-1", e.PlanID)
+	case e.ParentWorkflowID != "develop-parent" || !e.Detached:
+		t.Errorf("lifecycle = parent %q/detached %t, want develop-parent/true",
+			e.ParentWorkflowID, e.Detached)
 	case !e.StartedAt.Equal(started) || !e.EndedAt.Equal(ended):
 		t.Errorf("times = %v/%v, want %v/%v", e.StartedAt, e.EndedAt, started, ended)
 	}

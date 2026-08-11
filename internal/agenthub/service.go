@@ -347,8 +347,8 @@ func (s *Service) Fleet(ctx context.Context, id string) (Fleet, error) {
 	return s.buildFleet(ctx, parents[0], tree, live, plans[id])
 }
 
-// Runs returns the standalone run satellites, newest first: every running chain
-// plus every finished chain the operator has not dismissed.
+// Runs returns the independently represented run satellites, newest first: every
+// running chain plus every finished chain the operator has not dismissed.
 //
 // A chain that has continued as new any number of times is one satellite, keyed by
 // its workflow ID and showing its latest iteration's status. A run fired by a
@@ -995,6 +995,7 @@ func merge(chains map[string]Execution, iterations map[string]int, e Execution) 
 	newest.PlanID = firstNonEmpty(newest.PlanID, older.PlanID)
 	newest.ScheduleID = firstNonEmpty(newest.ScheduleID, older.ScheduleID)
 	newest.ParentWorkflowID = firstNonEmpty(newest.ParentWorkflowID, older.ParentWorkflowID)
+	newest.Detached = newest.Detached || older.Detached
 	// A place is a fact about the chain, not about one iteration: an iteration
 	// recorded before the probe existed (or one whose probe failed) must not erase
 	// the place a sibling iteration established.
@@ -1090,12 +1091,12 @@ func runClasses() []wfid.Class {
 // isRunSatellite reports whether an execution belongs on the overview as a run
 // satellite of its own.
 //
-// A child execution belongs to whatever started it (a fleet's node to its fleet, a
-// review to its develop run) and a schedule-fired run is represented by its
-// schedule, so neither is a satellite: listing them would show the same work
-// twice.
+// A supervised child belongs to whatever started it (a fleet's node to its fleet,
+// or a review to a supervising develop run). A detached child has independent
+// lifecycle ownership after its parent closes, so it is a satellite despite the
+// parent correlation. A schedule-fired run remains represented by its schedule.
 func isRunSatellite(e Execution) bool {
-	if e.ParentWorkflowID != "" || e.ScheduleID != "" {
+	if (e.ParentWorkflowID != "" && !e.Detached) || e.ScheduleID != "" {
 		return false
 	}
 	for _, c := range runClasses() {

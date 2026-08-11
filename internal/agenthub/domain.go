@@ -87,7 +87,9 @@ type ItemKind string
 const (
 	// KindFleet is a fleet: one orchestrated plan graph.
 	KindFleet ItemKind = "fleet"
-	// KindRun is a single top-level workflow execution chain.
+	// KindRun is one independently represented workflow execution chain. It is
+	// usually top-level, but can be a detached child whose parent no longer owns its
+	// lifecycle.
 	KindRun ItemKind = "run"
 	// KindSchedule is a schedule, not one of the runs it fires.
 	KindSchedule ItemKind = "schedule"
@@ -298,7 +300,8 @@ const (
 	RunTypeFleetPlan RunType = "fleet-plan"
 )
 
-// Run is one standalone execution chain: a satellite that is not part of a fleet.
+// Run is one independently represented execution chain: a satellite that is not
+// part of a fleet or owned by a supervising parent.
 //
 // Identity is the workflow ID, which is stable across a chained run's
 // continue-as-new iterations, so a chain that has looped a thousand times is one

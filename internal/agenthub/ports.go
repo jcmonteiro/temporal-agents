@@ -61,6 +61,10 @@ type Execution struct {
 	// ParentWorkflowID is the execution that started this one as a child, or empty
 	// for a top-level execution.
 	ParentWorkflowID string
+	// Detached reports that this child owns an independent lifecycle after its
+	// parent closes. It remains a child for correlation but is a run satellite of
+	// its own.
+	Detached bool
 	// PlanID is the stored plan a fleet execution executes, when the source knows
 	// it.
 	PlanID string

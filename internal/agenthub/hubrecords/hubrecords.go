@@ -256,6 +256,7 @@ func executionFrom(record execstore.Execution) agenthub.Execution {
 		Tokens:           record.Tokens,
 		ScheduleID:       record.ScheduleID,
 		ParentWorkflowID: record.ParentWorkflowID,
+		Detached:         record.Detail.Detached,
 		PlanID:           record.Detail.PlanID,
 		// The place travels as the facts that were recorded, not as a location: the
 		// core owns what a directory and its repository mean, and this adapter must not

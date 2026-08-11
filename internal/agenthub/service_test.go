@@ -515,9 +515,31 @@ func TestRunsCountALiveIterationBeforeItsRecordLands(t *testing.T) {
 	}
 }
 
+func TestRunsShowDetachedReviewChildrenAsIndependentWork(t *testing.T) {
+	detached := agenthubtest.Run(
+		"review-"+uuidLike("detached"), "", agenthub.OutcomeRunning, ago(time.Minute))
+	detached.ParentWorkflowID = "develop-" + uuidLike("parent")
+	detached.Detached = true
+	supervised := agenthubtest.Run(
+		"review-"+uuidLike("supervised"), "", agenthub.OutcomeRunning, ago(2*time.Minute))
+	supervised.ParentWorkflowID = "develop-" + uuidLike("supervisor")
+
+	service := newService(t, agenthubtest.New().WithRecorded(detached, supervised))
+	runs, err := service.Runs(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("Runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].ID != detached.WorkflowID || runs[0].Type != agenthub.RunTypeReview {
+		t.Fatalf("runs = %+v, want only detached review %q", runs, detached.WorkflowID)
+	}
+	if _, err := service.Run(context.Background(), detached.WorkflowID); err != nil {
+		t.Fatalf("read detached review by ID: %v", err)
+	}
+}
+
 // TestRunsExcludeChildrenAndScheduledRuns pins that the overview shows each piece
-// of work once: a fleet's node belongs to its fleet, a review to the develop run
-// that started it, and a schedule-fired run to its schedule.
+// of work once: a fleet's node belongs to its fleet, a supervised review to the
+// develop run that started it, and a schedule-fired run to its schedule.
 func TestRunsExcludeChildrenAndScheduledRuns(t *testing.T) {
 	fleetID := "fleet-" + uuidLike("7")
 	standalone := agenthubtest.Run("run-"+uuidLike("8"), "summarize the README", agenthub.OutcomeSucceeded, ago(time.Hour))

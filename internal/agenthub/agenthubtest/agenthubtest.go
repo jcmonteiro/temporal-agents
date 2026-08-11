@@ -309,7 +309,7 @@ func (s *Source) RunChains(_ context.Context, query agenthub.ChainQuery) ([]agen
 		if query.WorkflowID != "" && e.WorkflowID != query.WorkflowID {
 			continue
 		}
-		if excluded[e.WorkflowID] || e.ParentWorkflowID != "" || e.ScheduleID != "" || !runClass(e.Class) {
+		if excluded[e.WorkflowID] || (e.ParentWorkflowID != "" && !e.Detached) || e.ScheduleID != "" || !runClass(e.Class) {
 			continue
 		}
 		groups[e.WorkflowID] = append(groups[e.WorkflowID], e)
