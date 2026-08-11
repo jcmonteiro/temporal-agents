@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -32,6 +33,14 @@ func piArgs(sessionID string, readOnly bool) []string {
 		args = append(args, "--exclude-tools", "edit,write")
 	}
 	return args
+}
+
+// piArgsQuestioning denies every built-in tool that can modify the real working
+// tree. The questioning agent can inspect files through read, but cannot use edit,
+// write, or a shell command to change them.
+func piArgsQuestioning(sessionID string) []string {
+	return append([]string{"-p", "--mode", "json", "--session-id", sessionID},
+		"--exclude-tools", "edit,write,bash")
 }
 
 // maxResumes bounds how many times Run resumes the session after a threshold
@@ -293,6 +302,23 @@ func (Agent) RunReadOnly(ctx context.Context, prompt, workDir string) (output st
 	return r.Output, r.Tokens, err
 }
 
+// RunQuestioningTurn runs one read-only exchange under the steering session's stable
+// identity. Every exchange supplies the same identity, so Pi resumes the same
+// conversational memory even though each turn is a separate bounded activity.
+func (Agent) RunQuestioningTurn(
+	ctx context.Context,
+	prompt string,
+	workDir string,
+	sessionID string,
+) (output string, tokens int, err error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return "", 0, errors.New("a Pi session identity is required")
+	}
+	go warmContextWindows()
+	r, err := runLoop(ctx, runOnce, piArgsQuestioning(sessionID), workDir, prompt)
+	return r.Output, r.Tokens, err
+}
+
 // Run runs the Pi agent for prompt in workDir, streaming Pi's JSON events as
 // Temporal heartbeat details. Each heartbeat carries the full progress
 // transcript so far; the final assistant message is returned as the result.
@@ -310,7 +336,15 @@ func Run(ctx context.Context, prompt, workDir string) (Result, error) {
 // session id, warms the context-window cache, builds the CLI arguments (with the
 // read-only tool policy when requested), and drives the resume loop.
 func runAgent(ctx context.Context, prompt, workDir string, readOnly bool) (Result, error) {
-	sessionID := activity.GetInfo(ctx).WorkflowExecution.RunID
+	return runAgentInSession(ctx, prompt, workDir, activity.GetInfo(ctx).WorkflowExecution.RunID, readOnly)
+}
+
+// runAgentInSession is runAgent with an explicit identity for callers whose
+// conversation spans more than one activity.
+func runAgentInSession(ctx context.Context, prompt, workDir, sessionID string, readOnly bool) (Result, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return Result{}, errors.New("a Pi session identity is required")
+	}
 
 	// Resolve context-window sizes from the pi model catalog for the token
 	// percentage. Warm the cache up front so the first usage event renders a

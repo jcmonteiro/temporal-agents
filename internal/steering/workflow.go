@@ -130,6 +130,10 @@ func SessionWorkflow(ctx workflow.Context, in SessionInput) (decision Decision, 
 		workflow.GetLogger(ctx).Info("ignored a repeated steering decision",
 			"round", in.Round, "recorded", decision.Choice, "ignored", repeat.Choice)
 	}
+	rec.Tokens, err = conversationTokens(ctx, workflow.GetInfo(ctx).WorkflowExecution.ID)
+	if err != nil {
+		return Decision{}, err
+	}
 	return decision, nil
 }
 

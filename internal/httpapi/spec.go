@@ -60,6 +60,7 @@ const (
 	modelSteeringSession           = "steering-session.v1"
 	modelSteeringSessionCollection = "steering-session-collection.v1"
 	modelSteeringDecisionRequest   = "steering-decision-request.v1"
+	modelSteeringQuestionRequest   = "steering-question-request.v1"
 	modelSession                   = "session.v1"
 	modelProblem                   = "problem.v1"
 	modelServiceDescription        = "service-description.v1"
@@ -90,6 +91,7 @@ var modelSchemas = map[string]string{
 	modelSteeringSession:           "SteeringSession",
 	modelSteeringSessionCollection: "SteeringSessionCollection",
 	modelSteeringDecisionRequest:   "SteeringDecisionRequest",
+	modelSteeringQuestionRequest:   "SteeringQuestionRequest",
 	modelSession:                   "Session",
 	modelProblem:                   "Problem",
 	modelServiceDescription:        "ServiceDescription",

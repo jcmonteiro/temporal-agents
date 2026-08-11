@@ -402,6 +402,10 @@ func (s *Server) resources() []resource {
 				methods: map[string]http.HandlerFunc{http.MethodGet: s.handleSteeringSession},
 			},
 			resource{
+				pattern: s.basePath + "/steering/sessions/{id}/question",
+				methods: map[string]http.HandlerFunc{http.MethodPost: s.handleSteeringQuestion},
+			},
+			resource{
 				pattern: s.basePath + "/steering/sessions/{id}/decision",
 				methods: map[string]http.HandlerFunc{http.MethodPost: s.handleSteeringDecision},
 			},

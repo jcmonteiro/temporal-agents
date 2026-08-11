@@ -127,6 +127,21 @@ func TestTwoOperatorsDecidingAtOnceRecordOneDecisionBetweenThem(t *testing.T) {
 	require.True(t, stored.DecidedAt.Equal(opened.Add(time.Hour)))
 }
 
+func TestAQuestioningDraftStaysEditableUntilTheDecision(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	_, err := store.OpenSession(ctx, waitingRound("steering-1", time.Now()))
+	require.NoError(t, err)
+
+	require.NoError(t, store.SetGuidance(ctx, "steering-1", "first draft"))
+	require.NoError(t, store.SetGuidance(ctx, "steering-1", "edited draft"))
+
+	stored, err := store.Session(ctx, "steering-1")
+	require.NoError(t, err)
+	require.Equal(t, "edited draft", stored.Guidance)
+	require.True(t, stored.Waiting(), "editing guidance is not a decision")
+}
+
 // The guidance the decision carries is the guidance that was stored: two copies
 // would eventually disagree, and the agent is handed exactly one of them.
 func TestTheGuidanceThatWasDecidedIsTheGuidanceThatIsRead(t *testing.T) {

@@ -542,7 +542,14 @@ func runWorker(opts notifyOptions) {
 	// loop that pauses, and records an execution row of its own so what it costs is
 	// attributable without it becoming a second item on the overview.
 	w.RegisterWorkflow(steering.SessionWorkflow)
-	w.RegisterActivity(&steering.Activities{Store: store, Sessions: sessions})
+	w.RegisterWorkflow(steering.QuestionTurnWorkflow)
+	w.RegisterActivity(&steering.Activities{
+		Store:            store,
+		Sessions:         sessions,
+		Conversation:     sessions,
+		Instructions:     config,
+		QuestioningAgent: piagent.Agent{},
+	})
 
 	// The fleet workflows fan out over a dependency graph, reusing the codereview
 	// develop workflow for each node. FleetWorkflow runs codereview.DevelopWorkflow

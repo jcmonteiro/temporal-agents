@@ -53,6 +53,9 @@ const (
 	// KeyPilotAddress is what the agent is told when it addresses the unresolved
 	// review comments on a pull request.
 	KeyPilotAddress Key = "pilot.address"
+	// KeySteeringQuestion is what the read-only questioning agent is told when it
+	// helps an operator turn context into guidance for one review round.
+	KeySteeringQuestion Key = "steering.question"
 )
 
 // MaxTextLength bounds one instruction, in bytes. The bound exists so a paste
@@ -134,6 +137,14 @@ const (
 	// systemPilotAddress appends the pull request's description and its unresolved
 	// comment threads, rendered by the code that read them.
 	systemPilotAddress = "\n{{.Comments}}"
+
+	factorySteeringQuestion = `Help the operator turn their context into concise guidance for an implementing agent.
+Ask exactly one focused question in each response. Do not propose or make repository changes.
+When asked to finish, return only a self-contained guidance draft, not a question or an explanation.`
+
+	// The material is system-owned so an override cannot make the questioning agent
+	// discuss a different round or omit what the operator is deciding about.
+	systemSteeringQuestion = "\n\nReview material:\n{{.Material}}"
 )
 
 // specs is the catalogue: the closed set of instructions this build governs.
@@ -162,6 +173,16 @@ var specs = []Spec{
 			Purpose: "The pull request's description and its unresolved comment threads.",
 		}},
 		System: systemPilotAddress,
+	},
+	{
+		Key:     KeySteeringQuestion,
+		Purpose: "How the read-only agent questions an operator into guidance for one review round.",
+		Factory: factorySteeringQuestion,
+		Inserts: []Insert{{
+			Name:    "Material",
+			Purpose: "The review material the operator is deciding about.",
+		}},
+		System: systemSteeringQuestion,
 	},
 }
 

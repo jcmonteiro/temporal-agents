@@ -34,6 +34,27 @@ func aWaitingSession(opened time.Time) steering.Session {
 	}
 }
 
+type apiQuestioner struct {
+	store *steeringtest.Store
+}
+
+func (q apiQuestioner) RunQuestionTurn(ctx context.Context, turn steering.QuestionTurn) error {
+	text := "Which callers depend on the wrapped cause?"
+	if turn.Finish {
+		text = "Keep the retry and preserve the wrapped cause."
+	}
+	_, err := q.store.AppendMessage(ctx, steering.Message{
+		SessionID: turn.SessionID, Role: steering.RoleAgent, Text: text, Tokens: 40, At: fixedNow,
+	})
+	if err != nil {
+		return err
+	}
+	if turn.Finish {
+		return q.store.SetGuidance(ctx, turn.SessionID, text)
+	}
+	return nil
+}
+
 func defaultSteeringView(t *testing.T) SteeringView {
 	t.Helper()
 	store := steeringtest.New()
@@ -47,6 +68,7 @@ func newSteeringServer(t *testing.T, store *steeringtest.Store) *Server {
 	service, err := steering.NewService(store, store)
 	require.NoError(t, err)
 	service.Now = func() time.Time { return fixedNow }
+	service.Questioner = apiQuestioner{store: store}
 	return newTestServer(t, &viewStub{}, func(options *Options) {
 		options.AllowUnauthenticated = false
 		options.AuthToken = steeringTestToken
@@ -124,6 +146,27 @@ func TestAnAuthenticatedOperatorDecidesAWaitingSessionExactlyOnce(t *testing.T) 
 	require.Equal(t, "keep the retry", resource.Guidance)
 	require.Len(t, store.Deliveries(), 2)
 	require.Equal(t, steering.ChoiceGuide, store.Deliveries()[1].Decision.Choice)
+}
+
+func TestAnAuthenticatedOperatorCanAskToBeQuestionedAndFinishWithADraft(t *testing.T) {
+	store := steeringtest.New().WithSession(aWaitingSession(fixedNow.Add(-time.Hour)))
+	server := newSteeringServer(t, store)
+	target := BasePath + "/steering/sessions/steering-review-1/question"
+
+	asked := steeringRequest(t, server, http.MethodPost, target, `{"text":"Question me"}`)
+	require.Equal(t, http.StatusOK, asked.Code, asked.Body.String())
+	var conversation steeringSessionResource
+	decodeResponse(t, asked, &conversation)
+	require.Len(t, conversation.Messages, 2)
+	require.NotEmpty(t, conversation.Messages[0].Author)
+	require.Equal(t, "Which callers depend on the wrapped cause?", conversation.Messages[1].Text)
+
+	finished := steeringRequest(t, server, http.MethodPost, target,
+		`{"text":"That is enough","finish":true}`)
+	require.Equal(t, http.StatusOK, finished.Code, finished.Body.String())
+	decodeResponse(t, finished, &conversation)
+	require.Equal(t, "Keep the retry and preserve the wrapped cause.", conversation.Guidance)
+	require.Equal(t, 80, conversation.Tokens)
 }
 
 func TestASteeringDecisionObeysAuthenticationAndSameSiteRules(t *testing.T) {

@@ -34,6 +34,8 @@ type SteeringView interface {
 	Waiting(ctx context.Context) ([]steering.Session, error)
 	// Conversation returns one session with its material, guidance, turns and cost.
 	Conversation(ctx context.Context, id string) (steering.Conversation, error)
+	// Question runs one optional read-only agent exchange.
+	Question(ctx context.Context, id string, request steering.QuestionRequest) (steering.Conversation, error)
 	// Decide records a decision and resumes the round it was waiting on. A repeat
 	// returns the decision that was recorded.
 	Decide(ctx context.Context, id string, decision steering.Decision) (steering.Session, error)
@@ -100,6 +102,12 @@ type steeringMessageResource struct {
 }
 
 // steeringDecisionRequest is what an operator sends to answer a waiting round.
+// steeringQuestionRequest is one operator contribution to the questioning agent.
+type steeringQuestionRequest struct {
+	Text   string `json:"text"`
+	Finish bool   `json:"finish,omitempty"`
+}
+
 type steeringDecisionRequest struct {
 	// Decision is one of "guide", "skip" or "stop". Guiding carries the text;
 	// skipping is how an operator proceeds without any, so empty text never has to
@@ -200,6 +208,32 @@ func steeringConversationFrom(conversation steering.Conversation) (steeringSessi
 	return resource, nil
 }
 
+// handleSteeringQuestion runs one optional questioning exchange and answers with
+// the durable conversation after its agent output has been appended.
+func (s *Server) handleSteeringQuestion(w http.ResponseWriter, r *http.Request) {
+	var request steeringQuestionRequest
+	if !s.decodeJSONBody(w, r, &request) {
+		return
+	}
+	principal := ""
+	if authenticated, ok := PrincipalFrom(r.Context()); ok {
+		principal = authenticated.ID()
+	}
+	conversation, err := s.steering.Question(r.Context(), r.PathValue("id"), steering.QuestionRequest{
+		Text: request.Text, Principal: principal, Finish: request.Finish,
+	})
+	if err != nil {
+		s.writeSteeringProblem(w, r, err)
+		return
+	}
+	resource, err := steeringConversationFrom(conversation)
+	if err != nil {
+		s.writeSteeringProblem(w, r, err)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, modelSteeringSession, resource)
+}
+
 // handleSteeringDecision answers a waiting round.
 //
 // It answers 200 with the session as it stands: a decision creates no resource, and
@@ -241,6 +275,9 @@ func (s *Server) writeSteeringProblem(w http.ResponseWriter, r *http.Request, er
 		s.writeProblem(w, r, codeNotFound, "no such steering session")
 	case errors.Is(err, steering.ErrInvalidDecision):
 		s.writeProblem(w, r, codeInvalidRequest, err.Error())
+	case errors.Is(err, steering.ErrQuestioningUnavailable):
+		s.writeProblem(w, r, codeDependencyUnavailable,
+			"questioning is unavailable; type guidance directly, skip, or stop")
 	case errors.Is(err, steering.ErrUnavailable):
 		// The cause names a dependency and may carry a driver's message, so it goes to
 		// the log while the consumer is told what to do about it: nothing was decided,

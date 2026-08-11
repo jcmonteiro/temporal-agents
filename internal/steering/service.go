@@ -36,6 +36,8 @@ type SessionStore interface {
 	// AppendMessage appends one turn and returns it with the sequence it was given.
 	// Sequences are per session, dense and monotonic.
 	AppendMessage(ctx context.Context, message Message) (Message, error)
+	// SetGuidance replaces the editable guidance draft while the session waits.
+	SetGuidance(ctx context.Context, id, guidance string) error
 	// RecordDecision records a decision against a waiting session and returns the
 	// session as it stands afterwards. It must be first-decision-wins: a session that
 	// already carries one is returned unchanged, so a retried request and a second
@@ -70,6 +72,33 @@ type DecisionSignaller interface {
 	SignalDecision(ctx context.Context, sessionID string, decision Decision) error
 }
 
+// QuestionTurn identifies one operator turn for the bounded questioning workflow.
+// The text itself stays in the durable conversation; orchestration receives only
+// this reference, so the transcript is not copied into workflow history.
+type QuestionTurn struct {
+	SessionID        string
+	OperatorSequence int64
+	Finish           bool
+}
+
+// Questioner runs one read-only agent exchange and writes its result to the durable
+// conversation before it returns.
+type Questioner interface {
+	RunQuestionTurn(ctx context.Context, turn QuestionTurn) error
+}
+
+// QuestionRequest is one contribution from an operator. Finish asks the agent to
+// condense the exchange into the editable guidance draft.
+type QuestionRequest struct {
+	Text      string
+	Principal string
+	Finish    bool
+}
+
+// ErrQuestioningUnavailable reports only the optional conversational path. It does
+// not affect direct guidance, skip, or stop.
+var ErrQuestioningUnavailable = errors.New("the questioning agent is unavailable")
+
 // Service is the driving surface of this context: what an operator's interface
 // calls. It is a value with two ports and a clock, so a test drives the whole
 // decision path without a database and without an orchestrator.
@@ -78,6 +107,9 @@ type Service struct {
 	Sessions SessionStore
 	// Signals resumes a waiting round. It is required.
 	Signals DecisionSignaller
+	// Questioner runs one optional agent turn. When absent, every decision path still
+	// works and Question reports that only questioning is unavailable.
+	Questioner Questioner
 	// Now supplies the current time, defaulting to time.Now.
 	Now func() time.Time
 }
@@ -123,6 +155,43 @@ func (s *Service) Conversation(ctx context.Context, id string) (Conversation, er
 		return Conversation{}, unavailable("read the steering conversation", err)
 	}
 	return Conversation{Session: session, Messages: messages}, nil
+}
+
+// Question appends one attributed operator turn, runs one bounded agent exchange,
+// and returns the conversation as durably stored afterwards.
+func (s *Service) Question(ctx context.Context, id string, request QuestionRequest) (Conversation, error) {
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(request.Text) == "" {
+		return Conversation{}, fmt.Errorf("%w: a question needs a session and text", ErrInvalidMessage)
+	}
+	if strings.TrimSpace(request.Principal) == "" {
+		return Conversation{}, fmt.Errorf("%w: an operator turn needs its author", ErrInvalidMessage)
+	}
+	if s.Questioner == nil {
+		return Conversation{}, ErrQuestioningUnavailable
+	}
+	session, err := s.Sessions.Session(ctx, id)
+	if err != nil {
+		return Conversation{}, unavailable("read the steering session", err)
+	}
+	if !session.Waiting() {
+		return Conversation{}, fmt.Errorf("%w: the steering session is no longer waiting", ErrInvalidMessage)
+	}
+	message, err := s.Sessions.AppendMessage(ctx, Message{
+		SessionID: id,
+		Role:      RoleOperator,
+		Author:    request.Principal,
+		Text:      request.Text,
+		At:        s.now(),
+	})
+	if err != nil {
+		return Conversation{}, unavailable("record the operator's answer", err)
+	}
+	if err := s.Questioner.RunQuestionTurn(ctx, QuestionTurn{
+		SessionID: id, OperatorSequence: message.Sequence, Finish: request.Finish,
+	}); err != nil {
+		return Conversation{}, fmt.Errorf("%w: %v", ErrQuestioningUnavailable, err)
+	}
+	return s.Conversation(ctx, id)
 }
 
 // Decide records an operator's decision and resumes the round it was waiting on.

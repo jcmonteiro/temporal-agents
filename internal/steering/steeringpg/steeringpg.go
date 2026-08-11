@@ -270,6 +270,30 @@ func (s *Store) AppendMessage(ctx context.Context, message steering.Message) (st
 	return appended, nil
 }
 
+// setGuidanceSQL replaces the draft only while the session still waits. Once a
+// decision wins, its artifact is immutable with the decision.
+const setGuidanceSQL = `
+UPDATE steering_sessions SET guidance = $2
+WHERE id = $1 AND state = 'waiting'`
+
+// SetGuidance implements steering.SessionStore.
+func (s *Store) SetGuidance(ctx context.Context, id, guidance string) error {
+	if err := (steering.Decision{Choice: steering.ChoiceGuide, Guidance: guidance}).Validate(); err != nil {
+		return err
+	}
+	tag, err := s.pool.Exec(ctx, setGuidanceSQL, id, guidance)
+	if err != nil {
+		return fmt.Errorf("save the steering guidance draft: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		if _, err := s.Session(ctx, id); err != nil {
+			return err
+		}
+		return fmt.Errorf("%w: the steering session is no longer waiting", steering.ErrInvalidMessage)
+	}
+	return nil
+}
+
 // recordDecisionSQL writes a decision only where none is recorded, and returns the
 // row either way.
 //

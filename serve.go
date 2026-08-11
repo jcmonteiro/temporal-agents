@@ -415,6 +415,11 @@ func runAPIServer(options serveOptions) error {
 	if err != nil {
 		return err
 	}
+	steeringQuestioner, err := steeringtemporal.NewQuestioner(orchestrator, TaskQueue)
+	if err != nil {
+		return err
+	}
+	steeringService.Questioner = steeringQuestioner
 	// Starting work is the one thing this process submits rather than reads. It goes
 	// to the very queue the worker listens on, so the hub asks for the same work the
 	// command line does and the worker executes it unchanged.

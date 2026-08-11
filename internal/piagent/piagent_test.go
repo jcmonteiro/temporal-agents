@@ -171,6 +171,14 @@ func TestPiArgs_RunsNonInteractiveJSONForSession(t *testing.T) {
 	}
 }
 
+func TestPiArgs_QuestioningDeniesEveryToolThatCanWrite(t *testing.T) {
+	args := piArgsQuestioning("steering-123")
+	want := []string{"-p", "--mode", "json", "--session-id", "steering-123", "--exclude-tools", "edit,write,bash"}
+	if strings.Join(args, " ") != strings.Join(want, " ") {
+		t.Fatalf("piArgsQuestioning = %v, want %v", args, want)
+	}
+}
+
 func TestPiArgs_ReadOnlyDeniesMutatingTools(t *testing.T) {
 	args := piArgs("session-123", true)
 	want := []string{"-p", "--mode", "json", "--session-id", "session-123", "--exclude-tools", "edit,write"}

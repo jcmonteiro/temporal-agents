@@ -9,6 +9,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"temporal-agents/internal/execstore"
+	"temporal-agents/internal/instruction"
 	"temporal-agents/internal/place"
 	"temporal-agents/internal/wfrecord"
 )
@@ -61,10 +62,14 @@ type Activities struct {
 	// Store is the durable execution history port. A nil store makes the write fail
 	// loudly rather than panic, since recording is a hard dependency.
 	Store execstore.ExecutionWriter
-	// Sessions is the steering store: what an operator reads and decides. It is a
-	// hard dependency of a pausing loop for the same reason — a round waiting in a
-	// session nobody can read is a loop stuck with no visible cause.
+	// Sessions is the narrow store used by the durable pause itself.
 	Sessions SessionRecorder
+	// Conversation is the full steering store used by bounded questioning turns.
+	Conversation SessionStore
+	// Instructions resolves the governed questioning prompt at the paused place.
+	Instructions instruction.Reader
+	// QuestioningAgent runs one read-only Pi exchange under the stable session ID.
+	QuestioningAgent QuestioningAgent
 }
 
 // ErrNoStore is returned by an activity asked to write without a steering store

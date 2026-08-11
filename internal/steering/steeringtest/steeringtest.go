@@ -173,6 +173,28 @@ func (s *Store) AppendMessage(_ context.Context, message steering.Message) (stee
 	return message, nil
 }
 
+// SetGuidance implements steering.SessionStore for the editable draft.
+func (s *Store) SetGuidance(_ context.Context, id, guidance string) error {
+	if err := (steering.Decision{Choice: steering.ChoiceGuide, Guidance: guidance}).Validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Failure != nil {
+		return s.Failure
+	}
+	session, ok := s.sessions[id]
+	if !ok {
+		return steering.ErrNoSuchSession
+	}
+	if !session.Waiting() {
+		return steering.ErrInvalidMessage
+	}
+	session.Guidance = guidance
+	s.sessions[id] = session
+	return nil
+}
+
 // RecordDecision implements steering.SessionStore, first decision wins.
 func (s *Store) RecordDecision(_ context.Context, id string, decision steering.Decision, at time.Time) (steering.Session, error) {
 	s.mu.Lock()
