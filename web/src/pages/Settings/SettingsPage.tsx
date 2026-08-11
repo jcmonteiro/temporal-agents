@@ -6,6 +6,7 @@ import {
 } from "../../clients/places";
 import { ApiError } from "../../clients/http";
 import { addressOf } from "../../platform/route";
+import { PromptConfiguration } from "./PromptConfiguration";
 
 /**
  * What the hub is configured with.
@@ -36,6 +37,7 @@ export function SettingsPage(): ReactNode {
           What this hub is configured with.
         </p>
       </header>
+      <PromptConfiguration />
       <Places />
     </main>
   );

@@ -124,6 +124,30 @@ export interface PlaceDTO {
   locations?: LocationResource[];
 }
 
+export type PromptSource = "directory" | "global" | "factory";
+
+export interface PromptInsertDTO {
+  name: string;
+  action: string;
+  purpose: string;
+}
+
+export interface PromptDTO {
+  key: string;
+  purpose: string;
+  effective: string;
+  inherited: string;
+  source: PromptSource;
+  inheritedFrom: PromptSource;
+  version: number;
+  inheritedVersion: number;
+  overridden: boolean;
+  systemBlock: string;
+  requiredInserts: PromptInsertDTO[];
+  advanced: boolean;
+  maxLength: number;
+}
+
 // Work that has just been started. It is not a run: a start returns as soon as
 // the orchestrator accepts the submission, so there is no status, no iteration
 // count and no token usage yet, and the API publishes none.

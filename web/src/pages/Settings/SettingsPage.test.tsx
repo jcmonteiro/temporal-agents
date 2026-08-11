@@ -113,6 +113,7 @@ it("says the places could not be read rather than that there are none", async ()
 
   await openTheSettings();
 
-  expect(screen.getByRole("status").textContent).toMatch(/could not be read/i);
-  expect(screen.queryByText(/no place is registered yet/i)).toBeNull();
+  const places = screen.getByRole("heading", { name: "Places" }).closest("section") as HTMLElement;
+  expect(within(places).getByRole("status").textContent).toMatch(/could not be read/i);
+  expect(within(places).queryByText(/no place is registered yet/i)).toBeNull();
 });

@@ -104,6 +104,33 @@ func TestPromptCataloguePublishesEditableAndInheritedValuesWithSafetyMetadata(t 
 	}
 }
 
+func TestPromptResourcesKeepTheFieldNamesTheWebClientReads(t *testing.T) {
+	prompts := &promptConfigurationStub{catalogue: promptCatalogue(t)}
+	server := newTestServer(t, &viewStub{}, func(options *Options) { options.Prompts = prompts })
+	response := request(t, server, http.MethodGet, BasePath+"/prompts", nil)
+	var document map[string]any
+	decodeResponse(t, response, &document)
+	for _, key := range []string{"items", "count", "limit"} {
+		if _, ok := document[key]; !ok {
+			t.Errorf("prompt collection has no %q", key)
+		}
+	}
+	items, ok := document["items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("items = %v, want one prompt", document["items"])
+	}
+	item := items[0].(map[string]any)
+	for _, key := range []string{
+		"key", "purpose", "effective", "inherited", "source", "inheritedFrom",
+		"version", "inheritedVersion", "overridden", "systemBlock",
+		"requiredInserts", "advanced", "maxLength",
+	} {
+		if _, ok := item[key]; !ok {
+			t.Errorf("prompt has no %q, which the web client reads", key)
+		}
+	}
+}
+
 func TestSavingAPromptAttributesTheAuthenticatedPrincipalAndPlace(t *testing.T) {
 	prompts := &promptConfigurationStub{}
 	server := newTestServer(t, &viewStub{}, func(options *Options) {

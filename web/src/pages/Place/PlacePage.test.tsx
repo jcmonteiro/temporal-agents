@@ -95,6 +95,15 @@ describe("the page of one place", () => {
     expect(screen.getByText("Nothing runs here at the moment.")).toBeTruthy();
   });
 
+  it("reaches instruction configuration in the place scope", async () => {
+    await showPlace("tree");
+
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Instructions" })).toBeTruthy(),
+    );
+    expect(screen.getByText("Scope: feature")).toBeTruthy();
+  });
+
   it("says plainly that it knows no such place", async () => {
     await showPlace("gone");
 

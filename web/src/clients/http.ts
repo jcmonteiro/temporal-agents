@@ -113,6 +113,16 @@ export async function postJSON<T>(path: string, body: unknown): Promise<Result<T
   }
 }
 
+/** PUTs a JSON document and reads no body. */
+export async function putJSON(
+  path: string,
+  body: unknown,
+): Promise<Result<void, Error>> {
+  const res = await request(path, { method: "PUT", body });
+  if (!res.ok) return err(res.error);
+  return ok(undefined);
+}
+
 /** Sends a request that changes something and reads no body. */
 export async function send(
   path: string,

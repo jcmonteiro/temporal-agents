@@ -16,6 +16,7 @@ import { WorkItemDetail } from "../../components/WorkItemDetail";
 import { addressOf, OVERVIEW } from "../../platform/route";
 import { Launcher } from "./Launcher";
 import { useSteering } from "../../platform/steering";
+import { PromptConfiguration } from "../Settings/PromptConfiguration";
 
 // The page shows live work, so it polls on the same cadence as the overview.
 const REFRESH_INTERVAL_MS = 5_000;
@@ -272,8 +273,7 @@ function PlaceReport({
 
       <Launcher place={place} />
 
-      {/* The settings scoped to this place hang off it too, and are a feature of
-          their own. Nothing is drawn for them yet. */}
+      <PromptConfiguration fixedLocation={{ id: place.id, label: place.label }} />
     </>
   );
 }

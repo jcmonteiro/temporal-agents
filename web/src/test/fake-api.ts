@@ -7,6 +7,7 @@ import type {
   LocationResource,
   NotificationDTO,
   PlaceDTO,
+  PromptDTO,
   RunDTO,
   ScheduleDTO,
   SteeringSessionDTO,
@@ -77,13 +78,19 @@ export class FakeApi {
   /** How many decision writes arrived, for burst-idempotency tests. */
   steeringDecisions = 0;
   notifications: NotificationDTO[] = [];
+  /** Prompt catalogues exactly as the server resolved them, keyed by location id. */
+  promptCatalogues: Record<string, PromptDTO[]> = { global: [] };
+  /** Optional validation refusal for the next prompt save. */
+  promptRefusal: string | null = null;
+  promptResets: Array<{ locationId: string; key: string }> = [];
 
   private original: typeof globalThis.fetch | undefined;
 
   install(): void {
     this.original = globalThis.fetch;
     globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-      const path = new URL(String(input), "http://test.local").pathname;
+      const url = new URL(String(input), "http://test.local");
+      const path = url.pathname;
       const method = init?.method ?? "GET";
       if (this.down) {
         return Promise.resolve(
@@ -127,6 +134,18 @@ export class FakeApi {
       }
       if (path === "/api/v1/places") {
         return Promise.resolve(this.places(method, init?.body));
+      }
+      if (path === "/api/v1/prompts" && method === "GET") {
+        return Promise.resolve(this.prompts(url.searchParams.get("locationId") ?? ""));
+      }
+      if (path.startsWith("/api/v1/prompts/")) {
+        const key = decodeURIComponent(path.slice("/api/v1/prompts/".length));
+        return Promise.resolve(this.changePrompt(
+          method,
+          key,
+          url.searchParams.get("locationId") ?? "",
+          init?.body,
+        ));
       }
       const body = this.bodyFor(path);
       if (!body) {
@@ -295,6 +314,50 @@ export class FakeApi {
     return this.json({ ...place, locations: [theUnknownPlace(), location] }, 201);
   }
 
+  private prompts(locationId: string): Response {
+    const items = this.promptCatalogues[locationId || "global"] ?? [];
+    return this.json({ items, count: items.length, limit: items.length });
+  }
+
+  private changePrompt(
+    method: string,
+    key: string,
+    locationId: string,
+    body: BodyInit | null | undefined,
+  ): Response {
+    const catalogueKey = locationId || "global";
+    const items = this.promptCatalogues[catalogueKey] ?? [];
+    const index = items.findIndex((item) => item.key === key);
+    if (index < 0) return this.problem(404, "not-found", "no such prompt");
+    if (method === "PUT") {
+      if (this.promptRefusal !== null) {
+        return this.problem(422, "invalid-prompt", this.promptRefusal);
+      }
+      const text = String((JSON.parse(String(body ?? "{}")) as { text?: unknown }).text ?? "");
+      items[index] = {
+        ...items[index],
+        effective: text,
+        source: locationId === "" ? "global" : "directory",
+        overridden: true,
+      };
+      this.promptCatalogues[catalogueKey] = [...items];
+      return new Response(null, { status: 204 });
+    }
+    if (method === "DELETE") {
+      this.promptResets.push({ locationId, key });
+      items[index] = {
+        ...items[index],
+        effective: items[index].inherited,
+        source: items[index].inheritedFrom,
+        version: items[index].inheritedVersion,
+        overridden: false,
+      };
+      this.promptCatalogues[catalogueKey] = [...items];
+      return new Response(null, { status: 204 });
+    }
+    return this.problem(405, "method-not-allowed", "method not allowed");
+  }
+
   /** The registry the places resource publishes for what it holds. */
   private registeredLocations(): LocationResource[] {
     const referenced = new Set(this.registered.map((place) => place.locationId));
@@ -412,6 +475,25 @@ export function aDirectoryPlace(
     label: "checkout",
     parentId: null,
     directory: "/srv/checkout",
+    ...overrides,
+  };
+}
+
+export function aPrompt(overrides: Partial<PromptDTO> = {}): PromptDTO {
+  return {
+    key: "review.perform",
+    purpose: "How the agent reviews the current branch.",
+    effective: "Review the branch",
+    inherited: "Review the shipped branch",
+    source: "global",
+    inheritedFrom: "factory",
+    version: 2,
+    inheritedVersion: 1,
+    overridden: false,
+    systemBlock: "",
+    requiredInserts: [],
+    advanced: false,
+    maxLength: 16_384,
     ...overrides,
   };
 }
