@@ -52,5 +52,14 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Install Storybook browser
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Test Storybook
+        run: pnpm test:storybook
+
       - name: Build
         run: pnpm build
+
+      - name: Build Storybook
+        run: pnpm build-storybook
