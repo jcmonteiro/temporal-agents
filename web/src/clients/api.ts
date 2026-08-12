@@ -98,6 +98,13 @@ export interface RunDTO {
   instructions?: InstructionUseDTO[];
 }
 
+export interface DismissalDTO {
+  id: string;
+  kind: "fleet" | "run";
+  itemId: string;
+  dismissedAt: string | null;
+}
+
 export interface ScheduleDTO {
   id: string;
   kind: "schedule";

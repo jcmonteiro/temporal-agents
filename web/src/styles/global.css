@@ -273,9 +273,10 @@ button:disabled {
   background: var(--color-accent);
 }
 
-/* Satellites are focusable <g> elements. Suppress the browser's default
+/* Satellite controls are focusable <g> elements. Suppress the browser's default
    rectangular focus box and show a circular ring only for keyboard focus. */
-.satellite {
+.satellite-target,
+.satellite-dismiss {
   outline: none;
 }
 
@@ -283,7 +284,7 @@ button:disabled {
   opacity: 0;
 }
 
-.satellite:focus-visible .satellite-focus {
+.satellite-target:focus-visible .satellite-focus {
   opacity: 1;
 }
 
@@ -291,6 +292,30 @@ button:disabled {
    keyboard focus ring would only double it up. Suppress it while selected. */
 .satellite[data-selected] .satellite-focus {
   opacity: 0;
+}
+
+.satellite-dismiss {
+  cursor: pointer;
+  opacity: 0.72;
+  transition: opacity var(--motion-fast) ease;
+}
+
+.satellite-dismiss-focus {
+  opacity: 0;
+}
+
+.satellite:hover .satellite-dismiss,
+.satellite-dismiss:focus-visible {
+  opacity: 1;
+}
+
+.satellite-dismiss:focus-visible .satellite-dismiss-focus {
+  opacity: 1;
+}
+
+.satellite-dismiss[aria-disabled="true"] {
+  cursor: wait;
+  opacity: 0.35;
 }
 
 /* A place is focusable in the same way as a satellite. */

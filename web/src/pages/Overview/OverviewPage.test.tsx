@@ -197,6 +197,29 @@ describe("the Overview", () => {
 
     expect(satelliteNames()).toEqual(["Fix the flaky test, Done"]);
   });
+
+  it("dismisses a reviewed run directly from its satellite", async () => {
+    api.runs = [aRun({ dismissible: true })];
+    await showOverview();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss Fix the flaky test" }));
+
+    await waitFor(() => expect(satelliteNames()).toEqual([]));
+    expect(api.dismissedRuns).toEqual(["run-1"]);
+  });
+
+  it("shows a dismissed run again after its state changes", async () => {
+    api.runs = [aRun({ dismissible: true })];
+    await showOverviewOnAFakeClock();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss Fix the flaky test" }));
+    await tick();
+    expect(satelliteNames()).toEqual([]);
+
+    api.runs = [aRun({ status: "failed", dismissible: true })];
+    await tick(REFRESH_INTERVAL_MS);
+
+    expect(satelliteNames()).toEqual(["Fix the flaky test, Failed"]);
+  });
 });
 
 describe("the places on the Overview", () => {

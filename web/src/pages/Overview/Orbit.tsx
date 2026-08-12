@@ -65,6 +65,8 @@ interface Props {
   selectedPlaceId: string | null;
   onSelect: (item: WorkItem) => void;
   onSelectPlace: (place: Place) => void;
+  onDismiss: (item: WorkItem) => void;
+  dismissing: Set<string>;
   onClear: () => void;
 }
 
@@ -75,6 +77,8 @@ export function Orbit({
   selectedPlaceId,
   onSelect,
   onSelectPlace,
+  onDismiss,
+  dismissing,
   onClear,
 }: Props): ReactNode {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -466,71 +470,121 @@ export function Orbit({
                       className="satellite"
                       data-selected={isSelected || undefined}
                       transform={`translate(${at.x}, ${at.y})`}
-                      style={{ cursor: "pointer" }}
-                      onClick={() => {
-                        // Suppress the click that ends a pan gesture.
-                        if (suppressClick.current) {
-                          suppressClick.current = false;
-                          return;
-                        }
-                        onSelect(item);
-                      }}
-                      tabIndex={0}
-                      role="button"
+                      role="group"
                       aria-label={`${item.label}, ${STATUS_LABEL[item.status]}`}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          onSelect(item);
-                        }
-                      }}
                     >
-                      {/* Circular focus ring, shown only for keyboard focus. */}
-                      <circle
-                        className="satellite-focus"
-                        r={35}
-                        fill="none"
-                        stroke="var(--color-accent)"
-                        strokeWidth={2}
-                      />
-                      <circle
-                        r={30}
-                        fill="var(--color-surface)"
-                        stroke={
-                          isSelected
-                            ? "var(--color-accent)"
-                            : "var(--color-border-strong)"
-                        }
-                        strokeWidth={isSelected ? 2 : 1.25}
-                      />
                       <g
-                        transform="translate(-12, -12)"
-                        color="var(--color-text)"
-                        style={{ pointerEvents: "none" }}
+                        className="satellite-target"
+                        style={{ cursor: "pointer" }}
+                        onClick={() => {
+                          // Suppress the click that ends a pan gesture.
+                          if (suppressClick.current) {
+                            suppressClick.current = false;
+                            return;
+                          }
+                          onSelect(item);
+                        }}
+                        tabIndex={0}
+                        role="button"
+                        aria-label={`${item.label}, ${STATUS_LABEL[item.status]}`}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            onSelect(item);
+                          }
+                        }}
                       >
-                        <Icon name={item.icon} size={24} />
-                      </g>
-                      <g transform="translate(0, 52)" style={{ pointerEvents: "none" }}>
+                        {/* Circular focus ring, shown only for keyboard focus. */}
                         <circle
-                          cx={-6}
-                          cy={-4}
-                          r={4}
+                          className="satellite-focus"
+                          r={35}
                           fill="none"
-                          stroke={STATUS_VAR[item.status]}
-                          strokeWidth={1.5}
+                          stroke="var(--color-accent)"
+                          strokeWidth={2}
                         />
-                        <text
-                          x={2}
-                          y={0}
-                          fill="var(--color-text-muted)"
-                          style={{
-                            fontFamily: "var(--font-sans)",
-                            fontSize: 11,
+                        <circle
+                          r={30}
+                          fill="var(--color-surface)"
+                          stroke={
+                            isSelected
+                              ? "var(--color-accent)"
+                              : "var(--color-border-strong)"
+                          }
+                          strokeWidth={isSelected ? 2 : 1.25}
+                        />
+                        <g
+                          transform="translate(-12, -12)"
+                          color="var(--color-text)"
+                          style={{ pointerEvents: "none" }}
+                        >
+                          <Icon name={item.icon} size={24} />
+                        </g>
+                        <g transform="translate(0, 52)" style={{ pointerEvents: "none" }}>
+                          <circle
+                            cx={-6}
+                            cy={-4}
+                            r={4}
+                            fill="none"
+                            stroke={STATUS_VAR[item.status]}
+                            strokeWidth={1.5}
+                          />
+                          <text
+                            x={2}
+                            y={0}
+                            fill="var(--color-text-muted)"
+                            style={{
+                              fontFamily: "var(--font-sans)",
+                              fontSize: 11,
+                            }}
+                          >
+                            {STATUS_LABEL[item.status]}
+                          </text>
+                        </g>
+                      </g>
+                      {item.kind === "run" && item.dismissible && (
+                        <g
+                          className="satellite-dismiss"
+                          transform="translate(24, -24)"
+                          role="button"
+                          tabIndex={0}
+                          aria-label={`Dismiss ${item.label}`}
+                          aria-disabled={dismissing.has(itemKey(item)) || undefined}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (!dismissing.has(itemKey(item))) onDismiss(item);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              if (!dismissing.has(itemKey(item))) onDismiss(item);
+                            }
                           }}
                         >
-                          {STATUS_LABEL[item.status]}
-                        </text>
-                      </g>
+                          <circle r={14} fill="transparent" />
+                          <circle
+                            className="satellite-dismiss-focus"
+                            r={14}
+                            fill="none"
+                            stroke="var(--color-accent)"
+                            strokeWidth={2}
+                          />
+                          <circle
+                            r={11}
+                            fill="var(--color-surface-2)"
+                            stroke="var(--color-border-strong)"
+                            strokeWidth={1.25}
+                          />
+                          <path
+                            d="M-3.5 -3.5L3.5 3.5M3.5 -3.5L-3.5 3.5"
+                            fill="none"
+                            stroke="var(--color-text-muted)"
+                            strokeWidth={1.5}
+                            strokeLinecap="round"
+                            style={{ pointerEvents: "none" }}
+                          />
+                        </g>
+                      )}
                     </g>
                   );
                 })}

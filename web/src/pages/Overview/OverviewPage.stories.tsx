@@ -50,6 +50,7 @@ const meta = {
         label: "Review tax rounding",
         status: "done",
         locationId: "checkout",
+        dismissible: true,
       }),
     ];
     api.schedules = [aSchedule({

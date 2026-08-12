@@ -49,6 +49,7 @@ function showOrbit(
 } {
   const onSelect = vi.fn();
   const onSelectPlace = vi.fn();
+  const onDismiss = vi.fn();
   const onClear = vi.fn();
   render(
     <Orbit
@@ -58,6 +59,8 @@ function showOrbit(
       selectedPlaceId={null}
       onSelect={onSelect}
       onSelectPlace={onSelectPlace}
+      onDismiss={onDismiss}
+      dismissing={new Set()}
       onClear={onClear}
       {...overrides}
     />,
@@ -67,7 +70,8 @@ function showOrbit(
 
 /** The satellite of the given work item, as the operator picks it out. */
 function satellite(label: string): SVGGElement {
-  return screen.getByRole("button", { name: label }) as unknown as SVGGElement;
+  const target = screen.getByRole("button", { name: label });
+  return target.closest(".satellite") as unknown as SVGGElement;
 }
 
 /** The place a satellite occupies on the canvas. */
