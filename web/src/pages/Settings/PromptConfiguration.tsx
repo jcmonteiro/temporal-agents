@@ -104,7 +104,7 @@ export function PromptConfiguration({ fixedLocation }: Props): ReactNode {
             <small>Editing {scopeLabel} configuration</small>
           </label>
         ) : (
-          <span className="settings-state">Scope · {scopeLabel}</span>
+          <span className="settings-state">Scope: {scopeLabel}</span>
         )}
       </header>
 
