@@ -21,7 +21,6 @@ const ENTRIES: Entry[] = [
   { key: "fleets", label: "Fleets" },
   { key: "workflows", label: "Workflows" },
   { key: "templates", label: "Templates" },
-  { key: "insights", label: "Insights" },
   { key: "settings", label: "Settings", href: addressOf(SETTINGS) },
 ];
 

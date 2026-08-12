@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { fireEvent } from "@testing-library/dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { RunPage } from "./RunPage";
@@ -49,7 +49,8 @@ it("reports what the run is, where it runs and how it stands", async () => {
 
   expect(screen.getByRole("heading", { name: "Fix the flaky test" })).toBeTruthy();
   expect(screen.getByText("In Progress")).toBeTruthy();
-  expect(screen.getByRole("link", { name: "checkout" }).getAttribute("href")).toBe(
+  const summary = screen.getByLabelText("Run summary");
+  expect(within(summary).getByRole("link", { name: "checkout" }).getAttribute("href")).toBe(
     "#/places/repo",
   );
   expect(screen.getByText("2026-08-06T12:00:00Z")).toBeTruthy();
@@ -74,7 +75,18 @@ it("organizes run state, operational details, and available actions for scanning
   expect(screen.getByRole("region", { name: "Operational details" })).toBeTruthy();
   const actions = screen.getByRole("region", { name: "Available actions" });
   expect(actions.textContent).toContain("Run this again");
-  expect(screen.getByRole("link", { name: "Back to overview" })).toBeTruthy();
+
+  const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });
+  expect(within(breadcrumb).getByRole("link", { name: "Overview" }).getAttribute("href")).toBe(
+    "#/",
+  );
+  expect(within(breadcrumb).getByRole("link", { name: "checkout" }).getAttribute("href")).toBe(
+    "#/places/repo",
+  );
+  expect(within(breadcrumb).getByText("Fix the flaky test").getAttribute("aria-current")).toBe(
+    "page",
+  );
+  expect(screen.queryByText(/back to overview/i)).toBeNull();
 });
 
 it("says a run that has only just been started is starting, not missing", async () => {

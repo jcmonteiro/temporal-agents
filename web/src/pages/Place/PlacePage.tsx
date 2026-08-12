@@ -76,9 +76,7 @@ export function PlacePage({
             : "place-page__frame place-page__frame--wide"
         }
       >
-        <a className="place-page__back" href={addressOf(OVERVIEW)}>
-          <span>←</span> Back to the overview
-        </a>
+        <PlaceBreadcrumb view={view} />
 
         <div className="place-page__primary">
           {error !== null && view === null && (
@@ -118,7 +116,6 @@ export function PlacePage({
             <PlaceReport
               place={view.place}
               category={category}
-              ancestry={view.ancestry}
               placesHere={view.children}
               items={view.items}
               selected={selectedId}
@@ -157,6 +154,37 @@ export function PlacePage({
   );
 }
 
+function PlaceBreadcrumb({ view }: { view: PlaceView | null }): ReactNode {
+  const ancestors = view?.found ? view.ancestry.slice(0, -1) : [];
+  const current = view?.found ? view.place.label : "Place";
+
+  return (
+    <nav className="place-page__breadcrumb" aria-label="Breadcrumb">
+      <ol>
+        <li><a href={addressOf(OVERVIEW)}>Overview</a></li>
+        {ancestors.map((ancestor) => (
+          <li key={ancestor.id}>
+            <span aria-hidden="true">›</span>
+            <a
+              href={addressOf({
+                name: "place",
+                placeId: ancestor.id,
+                category: "overview",
+              })}
+            >
+              {ancestor.label}
+            </a>
+          </li>
+        ))}
+        <li>
+          <span aria-hidden="true">›</span>
+          <span aria-current="page">{current}</span>
+        </li>
+      </ol>
+    </nav>
+  );
+}
+
 function LoadingState(): ReactNode {
   return (
     <section className="place-state ui-surface" role="status">
@@ -190,7 +218,6 @@ function NotFound({ placeId }: { placeId: string }): ReactNode {
 function PlaceReport({
   place,
   category,
-  ancestry,
   placesHere,
   items,
   selected,
@@ -198,14 +225,11 @@ function PlaceReport({
 }: {
   place: Place;
   category: PlaceCategory;
-  ancestry: Place[];
   placesHere: Place[];
   items: WorkItem[];
   selected: WorkItemId | null;
   onSelect: (item: WorkItem) => void;
 }): ReactNode {
-  // The place itself closes the ancestry chain and is not a link above itself.
-  const above = ancestry.slice(0, -1);
   const location = place.directory ?? place.ref ?? "Where this work ran was not recorded";
 
   return (
@@ -215,24 +239,6 @@ function PlaceReport({
           <PlaceMark />
           <div>
             <p className="ui-eyebrow">Place workspace</p>
-            {above.length > 0 && (
-              <nav className="place-hero__ancestry" aria-label="Places above this one">
-                {above.map((ancestor) => (
-                  <span key={ancestor.id}>
-                    <a
-                      href={addressOf({
-                        name: "place",
-                        placeId: ancestor.id,
-                        category: "overview",
-                      })}
-                    >
-                      {ancestor.label}
-                    </a>
-                    <span aria-hidden="true">›</span>
-                  </span>
-                ))}
-              </nav>
-            )}
             <h1>{place.label}</h1>
             <p className="place-hero__location">{location}</p>
           </div>

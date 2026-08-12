@@ -82,6 +82,7 @@ it("keeps the shell while the page changes", async () => {
   const sections = screen.getByRole("navigation", { name: "Sections" });
 
   expect(within(sections).getByRole("link", { name: "Overview" })).toBeTruthy();
+  expect(within(sections).queryByText("Insights")).toBeNull();
   expect(screen.getByText("Agent Hub")).toBeTruthy();
 });
 

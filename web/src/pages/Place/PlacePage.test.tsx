@@ -88,14 +88,9 @@ describe("the page of one place", () => {
     expect(within(nearbyPlaces).getByRole("link", { name: "feature" })).toBeTruthy();
   });
 
-  it("names the places above and below it", async () => {
-    await showPlace("tree");
-
-    const above = screen.getByRole("navigation", { name: "Places above this one" });
-    expect(within(above).getByRole("link", { name: "checkout" })).toBeTruthy();
-
-    await cleanup();
+  it("names the places below it", async () => {
     await showPlace("repo");
+
     const here = screen.getByText("Places here").closest("section") as HTMLElement;
     expect(within(here).getByRole("link", { name: "feature" })).toBeTruthy();
   });
@@ -161,14 +156,18 @@ describe("the page of one place", () => {
     expect(within(detail).getByText("Done")).toBeTruthy();
   });
 
-  it("leads back to the overview", async () => {
-    await showPlace("repo");
+  it("shows its place hierarchy as breadcrumbs", async () => {
+    await showPlace("tree");
 
-    expect(
-      screen
-        .getByRole("link", { name: "← Back to the overview" })
-        .getAttribute("href"),
-    ).toBe("#/");
+    const breadcrumb = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(within(breadcrumb).getByRole("link", { name: "Overview" }).getAttribute("href")).toBe(
+      "#/",
+    );
+    expect(within(breadcrumb).getByRole("link", { name: "checkout" }).getAttribute("href")).toBe(
+      "#/places/repo",
+    );
+    expect(within(breadcrumb).getByText("feature").getAttribute("aria-current")).toBe("page");
+    expect(screen.queryByText(/back to the overview/i)).toBeNull();
   });
 
   it("shows the work that appeared since the last refresh", async () => {

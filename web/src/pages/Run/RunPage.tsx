@@ -60,11 +60,7 @@ export function RunPage({ runId }: { runId: string }): ReactNode {
   return (
     <main className="run-page">
       <div className="run-page__content">
-        <nav className="run-page__breadcrumb" aria-label="Breadcrumb">
-          <a href={addressOf(OVERVIEW)}>
-            <span aria-hidden="true">←</span> Back to overview
-          </a>
-        </nav>
+        <RunBreadcrumb runId={runId} view={view} />
 
         {error !== null && (
           <div className="ui-feedback ui-feedback--error run-page__feedback" role="status">
@@ -78,6 +74,37 @@ export function RunPage({ runId }: { runId: string }): ReactNode {
         {view?.known === true && <Report runId={runId} view={view} />}
       </div>
     </main>
+  );
+}
+
+function RunBreadcrumb({ runId, view }: { runId: string; view: RunView | null }): ReactNode {
+  const known = view?.known === true ? view : null;
+  const current = known ? known.run.label || "Untitled run" : runId;
+
+  return (
+    <nav className="run-page__breadcrumb" aria-label="Breadcrumb">
+      <ol>
+        <li><a href={addressOf(OVERVIEW)}>Overview</a></li>
+        {known?.place && (
+          <li>
+            <span aria-hidden="true">›</span>
+            <a
+              href={addressOf({
+                name: "place",
+                placeId: known.place.id,
+                category: "overview",
+              })}
+            >
+              {known.place.label}
+            </a>
+          </li>
+        )}
+        <li>
+          <span aria-hidden="true">›</span>
+          <span aria-current="page">{current}</span>
+        </li>
+      </ol>
+    </nav>
   );
 }
 
