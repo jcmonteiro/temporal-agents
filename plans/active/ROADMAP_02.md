@@ -13,7 +13,7 @@ shipping order and cross-slice design decisions.
 | 2 | DONE | Improve `/settings` | [`02-settings`](./ui-design-improvement/slices/02-settings.md) | settings become clear, calm, and consistent across forms and states | 1 |
 | 3 | DONE | Improve `/runs` pages | [`03-runs`](./ui-design-improvement/slices/03-runs.md) | run information and actions become easy to scan and understand | 1, 2 |
 | 4 | DONE | Improve the steering modal | [`04-steering-modal`](./ui-design-improvement/slices/04-steering-modal.md) | steering feels focused, trustworthy, and part of the run experience | 1, 3 |
-| 5 | IN-PROGRESS | Validate the cohesive experience | [`05-cohesive-validation`](./ui-design-improvement/slices/05-cohesive-validation.md) | the redesigned and existing strong surfaces work as one responsive, accessible product | 2, 3, 4 |
+| 5 | DONE | Validate the cohesive experience | [`05-cohesive-validation`](./ui-design-improvement/slices/05-cohesive-validation.md) | the redesigned and existing strong surfaces work as one responsive, accessible product | 2, 3, 4 |
 
 ## Why this order is required
 

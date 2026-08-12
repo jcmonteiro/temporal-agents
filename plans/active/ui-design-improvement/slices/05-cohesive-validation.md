@@ -34,9 +34,9 @@ steering. Repeat key views in dark theme and at a narrow viewport.
 
 ## Done when
 
-- [ ] The full review path feels governed by one design system.
-- [ ] Notifications and the locations canvas retain their quality and behavior.
-- [ ] All target surfaces pass light, dark, narrow, and wide review.
-- [ ] No known essential-content clipping or accidental horizontal overflow remains.
-- [ ] Storybook interactions and accessibility checks pass for the full review path.
-- [ ] All frontend tests and the production build pass.
+- [x] The full review path feels governed by one design system.
+- [x] Notifications and the locations canvas retain their quality and behavior.
+- [x] All target surfaces pass light, dark, narrow, and wide review.
+- [x] No known essential-content clipping or accidental horizontal overflow remains.
+- [x] Storybook interactions and accessibility checks pass for the full review path.
+- [x] All frontend tests and the production build pass.
