@@ -144,8 +144,8 @@
 .place-hero__orbit span,
 .place-selection__orbit::after {
   position: absolute;
-  top: 2px;
-  right: 5px;
+  top: 0;
+  right: 3px;
   width: 10px;
   height: 10px;
   border: 2px solid var(--color-surface);
