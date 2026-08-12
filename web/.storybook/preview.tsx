@@ -41,7 +41,7 @@ const preview: Preview = {
     },
     options: {
       storySort: {
-        order: ["Pages", "Work", "Overlays", "Navigation"],
+        order: ["Foundations", "References", "Pages", "Work", "Overlays", "Navigation"],
       },
     },
   },

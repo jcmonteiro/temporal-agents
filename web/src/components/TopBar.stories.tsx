@@ -5,7 +5,7 @@ import { installStoryApi } from "../stories/story-api";
 import { TopBar } from "./TopBar";
 
 const meta = {
-  title: "Navigation/Notification menu",
+  title: "References/Notification menu",
   component: TopBar,
   tags: ["autodocs"],
   beforeEach: () => installStoryApi((api) => {
@@ -49,6 +49,11 @@ const meta = {
       </SessionProvider>
     ),
   ],
+  parameters: {
+    a11y: {
+      test: "error",
+    },
+  },
 } satisfies Meta<typeof TopBar>;
 
 export default meta;
@@ -64,6 +69,11 @@ export const Open: Story = {
     await expect(within(inbox).findByText("Guidance waiting")).resolves.toBeTruthy();
     await expect(within(inbox).findByText("Review finished")).resolves.toBeTruthy();
   },
+};
+
+export const OpenDark: Story = {
+  ...Open,
+  globals: { theme: "dark" },
 };
 
 export const Actions: Story = {

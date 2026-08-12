@@ -12,7 +12,7 @@ import { installStoryApi } from "../../stories/story-api";
 import { OverviewPage } from "./OverviewPage";
 
 const meta = {
-  title: "Pages/Overview/Content",
+  title: "References/Locations canvas",
   component: OverviewPage,
   tags: ["autodocs"],
   beforeEach: () => installStoryApi((api) => {
@@ -65,12 +65,17 @@ const meta = {
       </div>
     ),
   ],
+  parameters: {
+    a11y: {
+      test: "error",
+    },
+  },
 } satisfies Meta<typeof OverviewPage>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-export const ActiveWork: Story = {
+const activeWork = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const completed = await canvas.findByRole("button", {
@@ -86,4 +91,14 @@ export const ActiveWork: Story = {
     if (section === null) throw new Error("Selected section missing");
     await expect(within(section).findByText("Review tax rounding")).resolves.toBeTruthy();
   },
+} satisfies Pick<Story, "play">;
+
+export const ActiveWork: Story = {
+  ...activeWork,
+  globals: { theme: "light" },
+};
+
+export const ActiveWorkDark: Story = {
+  ...activeWork,
+  globals: { theme: "dark" },
 };
