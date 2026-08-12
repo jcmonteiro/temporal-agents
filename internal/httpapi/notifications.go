@@ -11,6 +11,7 @@ type NotificationsView interface {
 	List(ctx context.Context, principal string, limit int) ([]notification.InboxItem, error)
 	Unread(ctx context.Context, principal string) (int, error)
 	MarkRead(ctx context.Context, principal, id string) error
+	MarkAllRead(ctx context.Context, principal string) error
 	ClearRead(ctx context.Context, principal string) error
 }
 
@@ -68,6 +69,14 @@ func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleNotificationRead(w http.ResponseWriter, r *http.Request) {
 	if err := s.notifications.MarkRead(r.Context(), requestPrincipal(r), r.PathValue("id")); err != nil {
+		s.writeServiceProblem(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleNotificationsMarkAllRead(w http.ResponseWriter, r *http.Request) {
+	if err := s.notifications.MarkAllRead(r.Context(), requestPrincipal(r)); err != nil {
 		s.writeServiceProblem(w, r, err)
 		return
 	}

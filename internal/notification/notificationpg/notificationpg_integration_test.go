@@ -40,4 +40,12 @@ func TestAddressingAndReadStateArePerPrincipal(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, adaUnread)
 	require.Equal(t, 2, graceUnread, "one principal reading a broadcast must not clear it for another")
+
+	require.NoError(t, store.MarkAllRead(ctx, "ada"))
+	adaUnread, err = store.Unread(ctx, "ada")
+	require.NoError(t, err)
+	graceUnread, err = store.Unread(ctx, "grace")
+	require.NoError(t, err)
+	require.Zero(t, adaUnread)
+	require.Equal(t, 2, graceUnread, "bulk read state must remain scoped to one principal")
 }

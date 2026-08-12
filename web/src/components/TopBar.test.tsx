@@ -35,6 +35,37 @@ it("shows the unread count and requests native permission only after a gesture",
   fireEvent.click(bell);
   expect(screen.getByRole("region", { name: "Notification inbox" }).textContent).toContain("Guidance waiting");
 
-  fireEvent.click(screen.getByRole("button", { name: "Enable native notifications" }));
+  fireEvent.click(screen.getByRole("button", { name: "Notification actions" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Enable native notifications" }));
   await waitFor(() => expect(requestPermission).toHaveBeenCalledTimes(1));
+});
+
+it("marks every notification as read from the notification actions menu", async () => {
+  render(<SessionProvider><TopBar /></SessionProvider>);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Notifications, 1 unread" }));
+  fireEvent.click(screen.getByRole("button", { name: "Notification actions" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Mark all as read" }));
+
+  await waitFor(() => expect(api.notifications.every((item) => item.read)).toBe(true));
+  expect(screen.getByRole("button", { name: "Notifications, 0 unread" })).toBeTruthy();
+});
+
+it("shows only unread notifications on request with workflow state icons", async () => {
+  api.notifications.push({ id: "read-1", kind: "steering", title: "Already seen", body: "Earlier guidance", url: "/#/runs/review-2", createdAt: "2026-08-05T12:00:00Z", read: true });
+  render(<SessionProvider><TopBar /></SessionProvider>);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Notifications, 1 unread" }));
+
+  expect(screen.getByText("Already seen")).toBeTruthy();
+  expect(screen.getAllByLabelText("Workflow waiting for input")).toHaveLength(2);
+  expect(screen.queryByText("Direct")).toBeNull();
+  expect(screen.queryByText("Watching")).toBeNull();
+  expect(screen.queryByText("Give feedback")).toBeNull();
+  expect(screen.queryByText("Clear read state")).toBeNull();
+
+  fireEvent.click(screen.getByRole("switch", { name: "Only show unread" }));
+
+  expect(screen.queryByText("Already seen")).toBeNull();
+  expect(screen.getByText("Guidance waiting")).toBeTruthy();
 });

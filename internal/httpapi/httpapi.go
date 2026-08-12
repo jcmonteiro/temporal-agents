@@ -437,7 +437,10 @@ func (s *Server) resources() []resource {
 	if s.notifications != nil {
 		list = append(list,
 			resource{pattern: s.basePath + "/notifications", methods: map[string]http.HandlerFunc{http.MethodGet: s.handleNotifications}},
-			resource{pattern: s.basePath + "/notifications/read", methods: map[string]http.HandlerFunc{http.MethodDelete: s.handleNotificationClearRead}},
+			resource{pattern: s.basePath + "/notifications/read", methods: map[string]http.HandlerFunc{
+				http.MethodPost:   s.handleNotificationsMarkAllRead,
+				http.MethodDelete: s.handleNotificationClearRead,
+			}},
 			resource{pattern: s.basePath + "/notifications/{id}/read", methods: map[string]http.HandlerFunc{http.MethodPost: s.handleNotificationRead}},
 		)
 	}
