@@ -36,9 +36,9 @@ existing interaction with the keyboard, then show the narrow-screen treatment.
 
 ## Done when
 
-- [ ] Every meaningful steering state is reproducible without a live backend.
-- [ ] Run context, current steering state, input, and available decisions are clear.
-- [ ] Long and streaming content scrolls without losing essential controls or context.
-- [ ] Focus is contained and restored correctly, and keyboard interaction is complete.
-- [ ] Narrow and wide designs are intentional in both themes.
-- [ ] Storybook interaction, accessibility, and relevant frontend tests pass.
+- [x] Every meaningful steering state is reproducible without a live backend.
+- [x] Run context, current steering state, input, and available decisions are clear.
+- [x] Long and streaming content scrolls without losing essential controls or context.
+- [x] Focus is contained and restored correctly, and keyboard interaction is complete.
+- [x] Narrow and wide designs are intentional in both themes.
+- [x] Storybook interaction, accessibility, and relevant frontend tests pass.
