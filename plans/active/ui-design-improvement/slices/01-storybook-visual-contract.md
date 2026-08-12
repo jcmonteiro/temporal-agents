@@ -35,8 +35,8 @@ where those states exist.
 
 ## Done when
 
-- [ ] The visual direction is reviewable in Storybook without a live backend.
-- [ ] Shared rules form one system and do not merely catalogue unrelated styles.
-- [ ] Both quality-reference surfaces still render and behave correctly.
-- [ ] Narrow stories have no clipped essential content or accidental horizontal overflow.
-- [ ] Storybook interaction and accessibility checks pass.
+- [x] The visual direction is reviewable in Storybook without a live backend.
+- [x] Shared rules form one system and do not merely catalogue unrelated styles.
+- [x] Both quality-reference surfaces still render and behave correctly.
+- [x] Narrow stories have no clipped essential content or accidental horizontal overflow.
+- [x] Storybook interaction and accessibility checks pass.

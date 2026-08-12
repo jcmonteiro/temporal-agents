@@ -62,7 +62,7 @@ path is not sufficient.
 
 ## Design-system direction
 
-The exact design is open. The resulting system must nevertheless provide:
+The exact page composition remains open. The resulting system must provide:
 
 - a clear hierarchy from application chrome to page, section, item, and metadata;
 - a consistent family of controls and interaction states;
@@ -75,6 +75,24 @@ Existing tokens and components can be evolved, replaced, or extended. A new
 primitive is justified only when it solves a repeated presentation need. Page
 components must not duplicate a common visual rule when a shared rule is
 sufficient.
+
+### Established visual contract
+
+Slice 01 selected these shared constraints for later surface work:
+
+- Calm neutral surfaces, precise borders, orbital depth, and one blue accent
+  connect new work to the canvas and Notifications references.
+- Page intent leads the hierarchy; sections group related content; borders
+  separate layers. Strong shadows are reserved for overlays and focused,
+  transient surfaces.
+- Controls use a minimum 40-pixel target, shared priority styles, and one visible
+  focus-ring treatment. State always has a text label and never relies on color.
+- Default density is compact without crowding. Wide layouts use a bounded content
+  width, and narrow layouts collapse grids before they can cause page overflow.
+- Success, warning, and error feedback use shared semantic tokens in both themes.
+
+These rules constrain visual language and interaction quality. They do not fix a
+page composition for Settings, Runs, or steering.
 
 ## Risks and unknowns
 
@@ -90,9 +108,9 @@ sufficient.
 
 ## Open design choices
 
-The implementation agent can choose among alternatives such as compact or
-spacious density, cards or bounded sections, side or top page navigation, and
-modal or responsive full-screen steering treatment. Selection must be based on
+The implementation agent can choose among alternatives such as cards or bounded
+sections, side or top page navigation, and modal or responsive full-screen
+steering treatment. Selection must be based on
 content clarity, consistency, responsiveness, and Storybook review rather than
 on this plan prescribing one option.
 
