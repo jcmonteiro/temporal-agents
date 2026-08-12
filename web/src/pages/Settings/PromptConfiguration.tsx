@@ -7,7 +7,7 @@ import {
 } from "react";
 import type { PromptDTO } from "../../clients/api";
 import { ApiError } from "../../clients/http";
-import { loadRegisteredPlaces, type RegisteredPlace } from "../../clients/places";
+import { loadKnownPlaces, type KnownPlace } from "../../clients/places";
 import { loadPrompts, resetPrompt, savePrompt } from "../../clients/prompts";
 import "./settings.css";
 
@@ -22,7 +22,7 @@ interface Props {
 
 export function PromptConfiguration({ fixedLocation }: Props): ReactNode {
   const [locationId, setLocationId] = useState(fixedLocation?.id ?? "");
-  const [places, setPlaces] = useState<RegisteredPlace[]>([]);
+  const [places, setPlaces] = useState<KnownPlace[]>([]);
   const [catalogue, setCatalogue] = useState<PromptDTO[] | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -31,7 +31,7 @@ export function PromptConfiguration({ fixedLocation }: Props): ReactNode {
   useEffect(() => {
     if (fixedLocation !== undefined) return;
     let cancelled = false;
-    void loadRegisteredPlaces().then((result) => {
+    void loadKnownPlaces().then((result) => {
       if (!cancelled && result.ok) setPlaces(result.value);
     });
     return () => {

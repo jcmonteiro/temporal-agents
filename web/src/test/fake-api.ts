@@ -60,6 +60,8 @@ export class FakeApi {
    * no repository holds it. This is how a test drives the two refusals.
    */
   directories: Record<string, LocationResource | null> = {};
+  /** The absolute path returned by the hub host's folder picker, or null on cancel. */
+  pickedDirectory: string | null = null;
   /**
    * What was started here, by request identity. It stands in for the hub's own
    * memory of what it started, which is what makes a repeated request one run.
@@ -163,6 +165,13 @@ export class FakeApi {
       }
       if (path === "/api/v1/runs" && method === "POST") {
         return Promise.resolve(this.start(init?.body));
+      }
+      if (path === "/api/v1/places/directory-picker" && method === "POST") {
+        return Promise.resolve(
+          this.pickedDirectory === null
+            ? new Response(null, { status: 204 })
+            : this.json({ directory: this.pickedDirectory }),
+        );
       }
       if (path === "/api/v1/places") {
         return Promise.resolve(this.places(method, init?.body));
@@ -313,12 +322,7 @@ export class FakeApi {
    */
   private places(method: string, body: BodyInit | null | undefined): Response {
     if (method === "GET") {
-      return this.json({
-        items: this.registered,
-        count: this.registered.length,
-        limit: this.registered.length,
-        locations: this.registeredLocations(),
-      } satisfies LocatedCollection<PlaceDTO>);
+      return this.json(this.knownPlaces());
     }
     const directory = String(JSON.parse(String(body ?? "{}")).directory ?? "");
     if (!directory.startsWith("/")) {
@@ -392,15 +396,26 @@ export class FakeApi {
     return this.problem(405, "method-not-allowed", "method not allowed");
   }
 
-  /** The registry the places resource publishes for what it holds. */
-  private registeredLocations(): LocationResource[] {
+  /** Every registered or observed place, with registration provenance when present. */
+  private knownPlaces(): LocatedCollection<PlaceDTO> {
     const referenced = new Set(this.registered.map((place) => place.locationId));
+    for (const item of [...this.fleets, ...this.runs, ...this.schedules]) {
+      if (item.locationId !== undefined) referenced.add(item.locationId);
+    }
     for (const location of [...this.locations].reverse()) {
       if (referenced.has(location.id) && location.parentId) referenced.add(location.parentId);
     }
-    return this.locations.filter(
+    const locations = this.locations.filter(
       (location) => location.id === "unknown" || referenced.has(location.id),
     );
+    const registered = new Map(this.registered.map((place) => [place.locationId, place]));
+    const items = locations
+      .filter((location) => location.id !== "unknown")
+      .map((location) => registered.get(location.id) ?? {
+        locationId: location.id,
+        registeredAt: null,
+      });
+    return { items, count: items.length, limit: items.length, locations };
   }
 
   /** A JSON body, as the API sends one. */

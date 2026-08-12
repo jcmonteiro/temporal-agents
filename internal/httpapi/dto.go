@@ -607,8 +607,8 @@ func promptFrom(configured instruction.Configured) promptResource {
 	}
 }
 
-// placeResource is one place an operator registered: which place it is, and the
-// provenance of the registration.
+// placeResource is one place the hub knows: which place it is, and registration
+// provenance when it was explicitly registered.
 //
 // The place itself is not repeated here. It is referenced by id and published once
 // in the response's registry, exactly as a run references where it ran: a payload
@@ -616,7 +616,8 @@ func promptFrom(configured instruction.Configured) promptResource {
 type placeResource struct {
 	// LocationID references the place in this response's registry.
 	LocationID string `json:"locationId"`
-	// RegisteredAt is when the place was first registered, in UTC.
+	// RegisteredAt is when the place was first registered, in UTC, or null when
+	// recorded work is the only source.
 	RegisteredAt *string `json:"registeredAt"`
 	// RegisteredBy identifies the principal who registered it, and is absent on a
 	// deployment that authenticates nobody. It is provenance, never a filter: the hub
@@ -636,6 +637,11 @@ type placeRegistrationRequest struct {
 	Directory string `json:"directory"`
 }
 
+// directorySelection is the absolute path selected on the hub host.
+type directorySelection struct {
+	Directory string `json:"directory"`
+}
+
 // placeFrom projects a registered place onto its representation. standalone carries
 // the registry with the resource, for the response to a registration, which has no
 // collection envelope to put it in.
@@ -649,6 +655,16 @@ func placeFrom(place agenthub.RegisteredPlace, standalone bool) placeResource {
 		resource.Locations = locationsFrom(agenthub.NewLocationRegistry(place.Location))
 	}
 	return resource
+}
+
+// knownPlaceFrom retains registration provenance when present and leaves it null for
+// a place established only by recorded work.
+func knownPlaceFrom(place agenthub.KnownPlace) placeResource {
+	return placeResource{
+		LocationID:   place.Location.ID(),
+		RegisteredAt: timestamp(place.RegisteredAt),
+		RegisteredBy: place.RegisteredBy,
+	}
 }
 
 // startedWorkResource is work that has just been started.

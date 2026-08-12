@@ -74,6 +74,15 @@ type RegisteredPlace struct {
 	RegisteredBy string
 }
 
+// KnownPlace is one place the hub can name, either because an operator registered it
+// or because recorded work established it. Registration provenance is zero for an
+// observed place and retained when both sources name the same place.
+type KnownPlace struct {
+	Location     Location
+	RegisteredAt time.Time
+	RegisteredBy string
+}
+
 // PlaceStore is the driven port for the places an operator registered. It is a
 // port of its own, next to the dismissal store rather than inside any read port,
 // so the read path stays read-only by construction.
@@ -144,6 +153,49 @@ func (s *Service) RegisteredPlaces(ctx context.Context) ([]RegisteredPlace, erro
 		if err != nil {
 			return nil, err
 		}
+		places = append(places, place)
+	}
+	sort.SliceStable(places, func(i, j int) bool {
+		return places[i].Location.ID() < places[j].Location.ID()
+	})
+	return places, nil
+}
+
+// KnownPlaces returns every local or remote place the hub can name. It combines
+// explicit registrations with places established by recorded work and closes both
+// sources under ancestry, so this catalogue is the same set the overview can draw.
+func (s *Service) KnownPlaces(ctx context.Context) ([]KnownPlace, error) {
+	registered, err := s.RegisteredPlaces(ctx)
+	if err != nil {
+		return nil, err
+	}
+	observed, err := s.knownWork(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	byID := make(map[string]KnownPlace, len(observed.places)+len(registered))
+	remember := func(location Location) {
+		for current, ok := location, true; ok; current, ok = current.Parent() {
+			if _, exists := byID[current.ID()]; current.Kind() != LocationUnknown && !exists {
+				byID[current.ID()] = KnownPlace{Location: current}
+			}
+		}
+	}
+	for _, location := range observed.places {
+		remember(location)
+	}
+	for _, place := range registered {
+		remember(place.Location)
+		byID[place.Location.ID()] = KnownPlace{
+			Location:     place.Location,
+			RegisteredAt: place.RegisteredAt,
+			RegisteredBy: place.RegisteredBy,
+		}
+	}
+
+	places := make([]KnownPlace, 0, len(byID))
+	for _, place := range byID {
 		places = append(places, place)
 	}
 	sort.SliceStable(places, func(i, j int) bool {

@@ -112,8 +112,8 @@ export interface ScheduleDTO {
   dismissible: boolean;
 }
 
-// One place an operator registered: which place it is, and the provenance of
-// the registration. The place itself is published once, in the response's
+// One place the hub knows: which place it is, and registration provenance when
+// present. The place itself is published once, in the response's
 // registry, and referenced here by id.
 export interface PlaceDTO {
   locationId: string;

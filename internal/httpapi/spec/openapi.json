@@ -44,7 +44,7 @@
     },
     {
       "name": "Places",
-      "description": "Where the hub may work: the places an operator registered, before any work has run in them."
+      "description": "Where the hub may work: places explicitly registered or established by recorded work."
     },
     {
       "name": "Dismissals",
@@ -64,7 +64,7 @@
     },
     {
       "name": "Prompts",
-      "description": "Governed agent instructions, editable globally and per registered place with inheritance and reset."
+      "description": "Governed agent instructions, editable globally and per known place with inheritance and reset."
     }
   ],
   "paths": {
@@ -1110,12 +1110,12 @@
         "tags": [
           "Places"
         ],
-        "summary": "List the places the hub may work in",
-        "description": "The places an operator registered, whether or not any work has ever run in them. A place with work in it is also published in every work collection's location registry; this resource is the only one that reports a place nothing has run in yet.",
+        "summary": "List the places the hub knows",
+        "description": "The union of places an operator registered and places established by recorded work. Registration provenance is null for an observed place. The registry is closed under ancestry, so it contains the same place hierarchy as the work collections.",
         "operationId": "listPlaces",
         "responses": {
           "200": {
-            "description": "The registered places, with the registry their references resolve against.",
+            "description": "The known places, with the registry their references resolve against.",
             "headers": {
               "ETag": {
                 "$ref": "#/components/headers/ETag"
@@ -1205,6 +1205,48 @@
           },
           "504": {
             "$ref": "#/components/responses/Timeout"
+          },
+          "default": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      }
+    },
+    "/api/v1/places/directory-picker": {
+      "post": {
+        "tags": [
+          "Places"
+        ],
+        "summary": "Open the hub host's native folder picker",
+        "description": "Opens a native directory chooser on the machine that runs the hub. Selection does not register the directory; it returns the absolute path for confirmation or manual editing.",
+        "operationId": "pickPlaceDirectory",
+        "responses": {
+          "200": {
+            "description": "The selected absolute directory.",
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/DescribedBy"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectorySelection"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "The picker was closed without a selection."
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
           },
           "default": {
             "$ref": "#/components/responses/InternalError"
@@ -3189,7 +3231,7 @@
               "null"
             ],
             "format": "date-time",
-            "description": "When the place was first registered. A repeat registration does not move it."
+            "description": "When the place was first registered, or null when it is known only from recorded work. A repeat registration does not move it."
           },
           "registeredBy": {
             "type": "string",
@@ -3242,6 +3284,21 @@
             "minLength": 1,
             "maxLength": 4096,
             "description": "An absolute, cleaned path of a directory a repository holds, on the machine the work runs on. The place that is registered is the working tree the probe resolves it to."
+          }
+        }
+      },
+      "DirectorySelection": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "directory"
+        ],
+        "properties": {
+          "directory": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "description": "The absolute directory selected by the native picker on the hub host."
           }
         }
       },

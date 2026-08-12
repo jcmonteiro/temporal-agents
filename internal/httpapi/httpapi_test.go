@@ -194,7 +194,8 @@ func newTestServer(t *testing.T, view WorkView, mutate ...func(*Options)) *Serve
 		Start: &starterStub{},
 		// The same reasoning applies to the place registry: a deployment that can be
 		// worked in publishes it, so the default test server does too.
-		Places: &placesStub{},
+		Places:          &placesStub{},
+		DirectoryPicker: &directoryPickerStub{},
 		// A production hub publishes the rounds that wait for an operator. Keep that
 		// optional route in the default contract server, with an empty real service.
 		Steering:      defaultSteeringView(t),
@@ -1761,6 +1762,7 @@ func (f fixedSettings) Settings(context.Context) (setting.Resolution, error) {
 // registration — so the transport's tests assert on resources rather than on calls.
 type placesStub struct {
 	places []agenthub.RegisteredPlace
+	known  []agenthub.KnownPlace
 	// missing and unversioned are the directories that stand in for the two machine
 	// refusals.
 	missing     []string
@@ -1768,8 +1770,15 @@ type placesStub struct {
 	err         error
 }
 
-func (p *placesStub) RegisteredPlaces(context.Context) ([]agenthub.RegisteredPlace, error) {
-	return p.places, p.err
+func (p *placesStub) KnownPlaces(context.Context) ([]agenthub.KnownPlace, error) {
+	places := append([]agenthub.KnownPlace(nil), p.known...)
+	places = slices.Grow(places, len(p.places))
+	for _, place := range p.places {
+		places = append(places, agenthub.KnownPlace{
+			Location: place.Location, RegisteredAt: place.RegisteredAt, RegisteredBy: place.RegisteredBy,
+		})
+	}
+	return places, p.err
 }
 
 func (p *placesStub) RegisterPlace(_ context.Context, directory, by string) (agenthub.RegisteredPlace, error) {

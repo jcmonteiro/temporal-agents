@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -64,6 +65,57 @@ func TestARegisteredPlaceIsPublishedWithTheRegistryItsReferenceResolvesAgainst(t
 		if location.ID == place.LocationID && location.Label != "pricing" {
 			t.Errorf("label = %q, want the server's own label", location.Label)
 		}
+	}
+}
+
+func TestAPlaceEstablishedByRecordedWorkIsPublishedWithoutRegistrationProvenance(t *testing.T) {
+	location, err := (agenthub.RecordedPlace{Directory: "/srv/repos/pricing"}).Location()
+	if err != nil {
+		t.Fatalf("make location: %v", err)
+	}
+	server := newTestServer(t, &viewStub{}, func(options *Options) {
+		options.Places = &placesStub{known: []agenthub.KnownPlace{{Location: location}}}
+	})
+
+	response := request(t, server, http.MethodGet, BasePath+"/places", nil)
+
+	var document locatedCollection[placeResource]
+	decodeResponse(t, response, &document)
+	if document.Count != 1 || document.Items[0].LocationID != location.ID() {
+		t.Fatalf("places = %+v, want the observed place", document.Items)
+	}
+	if document.Items[0].RegisteredAt != nil || document.Items[0].RegisteredBy != "" {
+		t.Errorf("place = %+v, must not invent registration provenance", document.Items[0])
+	}
+	if !containsLocation(document.Locations, location.ID()) {
+		t.Errorf("locations = %+v, want the observed place", document.Locations)
+	}
+}
+
+func TestTheHostFolderPickerReturnsTheSelectedDirectoryWithoutRegisteringIt(t *testing.T) {
+	picker := &directoryPickerStub{directory: "/srv/repos/pricing", selected: true}
+	server := newTestServer(t, &viewStub{}, func(options *Options) {
+		options.DirectoryPicker = picker
+	})
+	req := newRequest(http.MethodPost, BasePath+"/places/directory-picker", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, req)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("pick directory = %d: %s", response.Code, response.Body.String())
+	}
+	var selection directorySelection
+	decodeResponse(t, response, &selection)
+	if selection.Directory != "/srv/repos/pricing" {
+		t.Errorf("directory = %q, want the selected folder", selection.Directory)
+	}
+	listed := request(t, server, http.MethodGet, BasePath+"/places", nil)
+	var document locatedCollection[placeResource]
+	decodeResponse(t, listed, &document)
+	if document.Count != 0 {
+		t.Errorf("places = %d, want none before registration", document.Count)
 	}
 }
 
@@ -195,6 +247,16 @@ func TestAPlaceRegistryThatCannotAnswerIsADependencyFailure(t *testing.T) {
 		http.StatusServiceUnavailable, codeDependencyUnavailable)
 	requireProblem(t, registerPlace(t, server, "/srv/repos/pricing"),
 		http.StatusServiceUnavailable, codeDependencyUnavailable)
+}
+
+type directoryPickerStub struct {
+	directory string
+	selected  bool
+	err       error
+}
+
+func (p *directoryPickerStub) PickDirectory(context.Context) (string, bool, error) {
+	return p.directory, p.selected, p.err
 }
 
 // containsLocation reports whether a registry publishes the referenced place.

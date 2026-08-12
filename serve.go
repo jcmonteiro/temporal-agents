@@ -23,6 +23,7 @@ import (
 	"temporal-agents/internal/agenthub/hubrecords"
 	"temporal-agents/internal/agenthub/hubtemporal"
 	"temporal-agents/internal/gitcli"
+	"temporal-agents/internal/hostpicker"
 	"temporal-agents/internal/httpapi"
 	"temporal-agents/internal/identity"
 	"temporal-agents/internal/instruction"
@@ -495,6 +496,7 @@ func runAPIServer(options serveOptions) error {
 		WebDir:               options.webDir,
 		Start:                service,
 		Places:               service,
+		DirectoryPicker:      hostpicker.Picker{},
 		Settings:             settings,
 		Prompts:              prompts,
 		Steering:             steeringService,

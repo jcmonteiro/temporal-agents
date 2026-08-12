@@ -47,10 +47,9 @@
   top: 0;
   display: flex;
   min-width: 0;
-  overflow-x: auto;
+  overflow: hidden;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-bg);
-  scrollbar-width: thin;
 }
 
 .settings-category-nav a {
@@ -604,8 +603,27 @@
   gap: var(--space-3);
 }
 
+.settings-register__directory {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+}
+
+.settings-register__picker {
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+
+.settings-register__picker svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linejoin: round;
+  stroke-width: 1.75;
+}
+
 .settings-register__button {
-  margin-bottom: 26px;
   white-space: nowrap;
 }
 
@@ -680,7 +698,6 @@
 
   .settings-register__button {
     width: 100%;
-    margin-bottom: 0;
   }
 }
 
@@ -695,6 +712,14 @@
   }
 
   .settings-place__identity {
+    width: 100%;
+  }
+
+  .settings-register__directory {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-register__picker {
     width: 100%;
   }
 

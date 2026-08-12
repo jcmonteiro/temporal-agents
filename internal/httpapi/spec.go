@@ -55,6 +55,7 @@ const (
 	modelPlace                     = "place.v1"
 	modelPlaceCollection           = "place-collection.v1"
 	modelPlaceRequest              = "place-request.v1"
+	modelDirectorySelection        = "directory-selection.v1"
 	modelSetting                   = "setting.v1"
 	modelSettingCollection         = "setting-collection.v1"
 	modelPrompt                    = "prompt.v1"
@@ -91,6 +92,7 @@ var modelSchemas = map[string]string{
 	modelPlace:                     "Place",
 	modelPlaceCollection:           "PlaceCollection",
 	modelPlaceRequest:              "PlaceRegistrationRequest",
+	modelDirectorySelection:        "DirectorySelection",
 	modelSetting:                   "Setting",
 	modelSettingCollection:         "SettingCollection",
 	modelPrompt:                    "Prompt",
@@ -412,6 +414,7 @@ func (s *Server) handleServiceDescription(w http.ResponseWriter, r *http.Request
 			{Name: "schedules", Href: s.basePath + "/schedules", Methods: []string{"GET"}, Schema: s.schemaURI(modelScheduleCollection)},
 			{Name: "dismissals", Href: s.basePath + "/dismissals", Methods: []string{"GET", "POST"}, Schema: s.schemaURI(modelDismissalCollection)},
 			{Name: "places", Href: s.basePath + "/places", Methods: []string{"GET", "POST"}, Schema: s.schemaURI(modelPlaceCollection)},
+			{Name: "directory-picker", Href: s.basePath + "/places/directory-picker", Methods: []string{"POST"}, Schema: s.schemaURI(modelDirectorySelection)},
 			{Name: "settings", Href: s.basePath + "/settings", Methods: []string{"GET"}, Schema: s.schemaURI(modelSettingCollection)},
 			{Name: "prompts", Href: s.basePath + "/prompts", Methods: []string{"GET"}, Schema: s.schemaURI(modelPromptCollection)},
 			{Name: "steering-sessions", Href: s.basePath + "/steering/sessions", Methods: []string{"GET"}, Schema: s.schemaURI(modelSteeringSessionCollection)},

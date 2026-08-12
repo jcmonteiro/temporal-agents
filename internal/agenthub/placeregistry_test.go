@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -33,6 +34,21 @@ func TestAPlaceWithNoWorkInItIsKnownOnceItIsRegistered(t *testing.T) {
 	require.Len(t, places, 1)
 	require.Equal(t, registered.Location.ID(), places[0].Location.ID(),
 		"a registered place must be known even though nothing has ever run in it")
+}
+
+func TestKnownPlacesIncludeAPlaceObservedFromRecordedWork(t *testing.T) {
+	recorded := agenthubtest.Run("develop-observed", "earlier work", agenthub.OutcomeSucceeded, now.Add(-time.Hour))
+	recorded.Place = agenthub.RecordedPlace{Directory: "/srv/repos/pricing"}
+	service := newService(t, agenthubtest.New().WithRecorded(recorded))
+
+	places, err := service.KnownPlaces(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, places, 1)
+	directory, hasDirectory := places[0].Location.Directory()
+	require.True(t, hasDirectory)
+	require.Equal(t, "/srv/repos/pricing", directory)
+	require.True(t, places[0].RegisteredAt.IsZero(), "an observed place must not claim it was registered")
 }
 
 func TestRegisteringTheSamePlaceAgainChangesNothing(t *testing.T) {

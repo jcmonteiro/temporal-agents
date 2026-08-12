@@ -97,10 +97,11 @@ func (s *Server) recoverPanics(next http.Handler) http.Handler {
 // running after the answer is gone.
 func (s *Server) withTimeout(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Event streams are bounded by authentication, concurrency, and the caller's
-		// connection lifetime. Applying the ordinary request budget would cut every
-		// healthy stream off after 30 seconds.
-		if strings.HasSuffix(r.URL.Path, "/events") {
+		// Event streams and a native picker are bounded by the caller's connection
+		// lifetime. Applying the ordinary request budget would cut a healthy stream or
+		// close a dialog while the operator is still choosing.
+		if strings.HasSuffix(r.URL.Path, "/events") ||
+			r.URL.Path == s.basePath+"/places/directory-picker" {
 			next.ServeHTTP(w, r)
 			return
 		}

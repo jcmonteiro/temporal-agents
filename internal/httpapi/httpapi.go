@@ -98,10 +98,16 @@ type WorkView interface {
 // routes.
 //
 // *agenthub.Service implements it.
+type DirectoryPicker interface {
+	// PickDirectory opens the native folder picker on the hub host. Selected is
+	// false when the operator closes it without choosing a folder.
+	PickDirectory(ctx context.Context) (directory string, selected bool, err error)
+}
+
 type PlaceView interface {
-	// RegisteredPlaces returns the places an operator registered, whether or not any
-	// work has ever run in them.
-	RegisteredPlaces(ctx context.Context) ([]agenthub.RegisteredPlace, error)
+	// KnownPlaces returns the union of explicitly registered places and places
+	// established by recorded work.
+	KnownPlaces(ctx context.Context) ([]agenthub.KnownPlace, error)
 	// RegisterPlace records that the hub may work in a directory, and returns the
 	// place it registered. It is idempotent on the place the directory resolves to.
 	RegisterPlace(ctx context.Context, directory, by string) (agenthub.RegisteredPlace, error)
@@ -206,6 +212,9 @@ type Options struct {
 	// it. It is nil for a deployment that publishes no registry, which then serves no
 	// places resource.
 	Places PlaceView
+	// DirectoryPicker opens a native folder chooser on the hub host. It is nil when
+	// the host cannot offer graphical selection; manual registration remains usable.
+	DirectoryPicker DirectoryPicker
 	// Settings is the read of what the tool is configured to do. It is nil for a
 	// deployment that publishes no configuration, which then serves no settings
 	// resource, exactly as a deployment with no identity provider serves no sign-in
@@ -252,6 +261,7 @@ type Server struct {
 	webDir          string
 	start           WorkStarter
 	places          PlaceView
+	directoryPicker DirectoryPicker
 	settings        SettingsView
 	prompts         PromptConfiguration
 	steering        SteeringView
@@ -295,6 +305,7 @@ func New(view WorkView, options Options) (*Server, error) {
 		webDir:          options.WebDir,
 		start:           options.Start,
 		places:          options.Places,
+		directoryPicker: options.DirectoryPicker,
 		settings:        options.Settings,
 		prompts:         options.Prompts,
 		steering:        options.Steering,
@@ -412,6 +423,12 @@ func (s *Server) resources() []resource {
 				http.MethodPost: s.handleRegisterPlace,
 			},
 		})
+		if s.directoryPicker != nil {
+			list = append(list, resource{
+				pattern: s.basePath + "/places/directory-picker",
+				methods: map[string]http.HandlerFunc{http.MethodPost: s.handlePickDirectory},
+			})
+		}
 	}
 	if s.settings != nil {
 		list = append(list, resource{
@@ -740,14 +757,14 @@ func (s *Server) handleUndismiss(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handlePlaces answers where the hub may work: the places an operator registered,
-// whether or not anything has ever run in them.
+// handlePlaces answers where the hub may work: both explicit registrations and
+// places established by recorded work.
 //
 // The registry is the whole point of the read, so it carries the same registry every
 // work collection does: a consumer resolves a place's label, its path and its parent
 // the one way, wherever it read the reference.
 func (s *Server) handlePlaces(w http.ResponseWriter, r *http.Request) {
-	places, err := s.places.RegisteredPlaces(r.Context())
+	places, err := s.places.KnownPlaces(r.Context())
 	if err != nil {
 		s.writeServiceProblem(w, r, err)
 		return
@@ -755,7 +772,7 @@ func (s *Server) handlePlaces(w http.ResponseWriter, r *http.Request) {
 	items := make([]placeResource, 0, len(places))
 	locations := make([]agenthub.Location, 0, len(places))
 	for _, place := range places {
-		items = append(items, placeFrom(place, false))
+		items = append(items, knownPlaceFrom(place))
 		locations = append(locations, place.Location)
 	}
 	s.writeJSON(w, r, http.StatusOK, modelPlaceCollection,
@@ -783,6 +800,33 @@ func (s *Server) handleRegisterPlace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, r, http.StatusCreated, modelPlace, placeFrom(place, true))
+}
+
+// handlePickDirectory opens the host-native folder chooser. Selection and
+// registration stay separate so cancelling changes nothing and the editable field
+// remains the operator's final request.
+func (s *Server) handlePickDirectory(w http.ResponseWriter, r *http.Request) {
+	// The HTTP server's ordinary write deadline is for machine-speed requests. A
+	// native dialog stays open at human speed and is cancelled by the connection.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	directory, selected, err := s.directoryPicker.PickDirectory(r.Context())
+	if err != nil {
+		s.logger.ErrorContext(r.Context(), "native directory picker failed", "error", err)
+		s.writeProblem(w, r, codeDependencyUnavailable,
+			"The native folder picker is unavailable on this hub.")
+		return
+	}
+	if !selected {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := agenthub.ValidatePlaceDirectory(directory); err != nil {
+		s.logger.ErrorContext(r.Context(), "native directory picker returned an invalid path", "error", err)
+		s.writeProblem(w, r, codeInternal, "")
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, modelDirectorySelection,
+		directorySelection{Directory: directory})
 }
 
 // handleSettings answers what the tool is configured to do, and where each answer

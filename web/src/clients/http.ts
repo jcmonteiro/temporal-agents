@@ -102,8 +102,12 @@ export async function fetchJSON<T>(path: string): Promise<Result<T, Error>> {
 }
 
 /** POSTs a JSON document and reads the created resource back. */
-export async function postJSON<T>(path: string, body: unknown): Promise<Result<T, Error>> {
-  const res = await request(path, { method: "POST", body });
+export async function postJSON<T>(
+  path: string,
+  body: unknown,
+  timeoutMs: number | null = DEFAULT_TIMEOUT_MS,
+): Promise<Result<T, Error>> {
+  const res = await request(path, { method: "POST", body, timeoutMs });
   if (!res.ok) return err(res.error);
   if (res.value.status === 204) return ok(undefined as T);
   try {
@@ -139,10 +143,11 @@ export async function send(
  */
 async function request(
   path: string,
-  init: { method: string; body?: unknown },
+  init: { method: string; body?: unknown; timeoutMs?: number | null },
 ): Promise<Result<Response, Error>> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  const timeoutMs = init.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : init.timeoutMs;
+  const timer = timeoutMs === null ? undefined : setTimeout(() => controller.abort(), timeoutMs);
   try {
     const headers: Record<string, string> = { Accept: "application/json" };
     // A body makes the request one a browser will not send cross-site without
@@ -174,7 +179,7 @@ async function request(
   } catch (e) {
     return err(e instanceof Error ? e : new Error(String(e)));
   } finally {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
-  loadRegisteredPlaces,
+  loadKnownPlaces,
+  pickPlaceDirectory,
   registerPlace,
-  type RegisteredPlace,
+  type KnownPlace,
 } from "../../clients/places";
 import { ApiError } from "../../clients/http";
 import {
@@ -56,7 +57,7 @@ export function SettingsPage({
 // The list and the failure of the last read stay separate. A failed refresh
 // reports itself without emptying a list the operator is reading.
 interface State {
-  places: RegisteredPlace[] | null;
+  places: KnownPlace[] | null;
   error: string | null;
 }
 
@@ -65,7 +66,7 @@ export function Places(): ReactNode {
   const [state, setState] = useState<State>({ places: null, error: null });
 
   const refresh = useCallback(async (): Promise<void> => {
-    const result = await loadRegisteredPlaces();
+    const result = await loadKnownPlaces();
     setState((previous) =>
       result.ok
         ? { places: result.value, error: null }
@@ -112,7 +113,7 @@ export function Places(): ReactNode {
         {places !== null &&
           (places.length === 0 ? (
             <div className="settings-empty" role="status">
-              <strong>No place is registered yet</strong>
+              <strong>No place is known yet</strong>
               <span>Register the repository where the next run should start.</span>
             </div>
           ) : (
@@ -129,8 +130,8 @@ export function Places(): ReactNode {
   );
 }
 
-/** One registered place: what it is, where it is, and the way to its page. */
-function PlaceRow({ registered }: { registered: RegisteredPlace }): ReactNode {
+/** One known place: what it is, where it is, and the way to its page. */
+function PlaceRow({ registered }: { registered: KnownPlace }): ReactNode {
   const { place } = registered;
   return (
     <li className="settings-place">
@@ -141,7 +142,15 @@ function PlaceRow({ registered }: { registered: RegisteredPlace }): ReactNode {
           <span>{place.directory ?? place.ref ?? "Repository location unavailable"}</span>
         </div>
       </div>
-      <span className="settings-state settings-state--registered">Registered</span>
+      <span
+        className={`settings-state ${
+          registered.registeredAt === null
+            ? "settings-state--observed"
+            : "settings-state--registered"
+        }`}
+      >
+        {registered.registeredAt === null ? "Observed" : "Registered"}
+      </span>
     </li>
   );
 }
@@ -150,11 +159,28 @@ function PlaceRow({ registered }: { registered: RegisteredPlace }): ReactNode {
 function RegisterAPlace({ onRegistered }: { onRegistered: () => Promise<void> }): ReactNode {
   const [directory, setDirectory] = useState("");
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [selectionFailure, setSelectionFailure] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<string | null>(null);
   const [registering, setRegistering] = useState(false);
+  const [picking, setPicking] = useState(false);
+
+  const chooseDirectory = async (): Promise<void> => {
+    if (picking || registering) return;
+    setPicking(true);
+    setRefusal(null);
+    setSelectionFailure(null);
+    setConfirmation(null);
+    const result = await pickPlaceDirectory();
+    if (result.ok) {
+      if (result.value !== null) setDirectory(result.value);
+    } else {
+      setSelectionFailure(messageOf(result.error));
+    }
+    setPicking(false);
+  };
 
   const submit = async (): Promise<void> => {
-    if (registering) return;
+    if (registering || picking) return;
     const requestedDirectory = directory.trim();
     setRegistering(true);
     setRefusal(null);
@@ -173,7 +199,7 @@ function RegisterAPlace({ onRegistered }: { onRegistered: () => Promise<void> })
   return (
     <form
       className="settings-register"
-      aria-busy={registering}
+      aria-busy={registering || picking}
       onSubmit={(event) => {
         event.preventDefault();
         void submit();
@@ -186,25 +212,44 @@ function RegisterAPlace({ onRegistered }: { onRegistered: () => Promise<void> })
       <div className="settings-register__controls">
         <div className="ui-field">
           <label htmlFor="place-directory">Directory</label>
-          <input
-            id="place-directory"
-            name="directory"
-            value={directory}
-            onChange={(event) => {
-              setDirectory(event.target.value);
-              setRefusal(null);
-              setConfirmation(null);
-            }}
-            placeholder="/srv/repos/pricing"
-            aria-invalid={refusal !== null}
-            aria-describedby={refusal === null ? "place-directory-hint" : "place-refusal"}
-          />
-          <small id="place-directory-hint">For example, /srv/repos/pricing</small>
+          <div className="settings-register__directory">
+            <input
+              id="place-directory"
+              name="directory"
+              value={directory}
+              onChange={(event) => {
+                setDirectory(event.target.value);
+                setRefusal(null);
+                setSelectionFailure(null);
+                setConfirmation(null);
+              }}
+              placeholder="/srv/repos/pricing"
+              aria-invalid={refusal !== null || selectionFailure !== null}
+              aria-describedby={
+                refusal !== null
+                  ? "place-refusal"
+                  : selectionFailure !== null
+                    ? "place-selection-failure"
+                    : undefined
+              }
+            />
+            <button
+              className="ui-button ui-button--secondary settings-register__picker"
+              type="button"
+              disabled={picking || registering}
+              onClick={() => void chooseDirectory()}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3.5 6.5h6l2 2h9v9.5H3.5z" />
+              </svg>
+              {picking ? "Choosing…" : "Choose folder"}
+            </button>
+          </div>
         </div>
         <button
           className="ui-button ui-button--primary settings-register__button"
           type="submit"
-          disabled={registering || directory.trim() === ""}
+          disabled={registering || picking || directory.trim() === ""}
         >
           {registering ? "Registering…" : "Register"}
         </button>
@@ -213,6 +258,16 @@ function RegisterAPlace({ onRegistered }: { onRegistered: () => Promise<void> })
         <div className="ui-feedback ui-feedback--success" role="status">
           <strong>Repository registered</strong>
           <span>{confirmation}</span>
+        </div>
+      )}
+      {selectionFailure !== null && (
+        <div
+          id="place-selection-failure"
+          className="ui-feedback ui-feedback--error"
+          role="alert"
+        >
+          <strong>Folder not selected</strong>
+          <span>{selectionFailure} Enter the path manually.</span>
         </div>
       )}
       {refusal !== null && (

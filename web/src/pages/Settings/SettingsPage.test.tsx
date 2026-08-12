@@ -55,12 +55,56 @@ it("shows one selected settings category at a time", () => {
   expect(screen.queryByText("Reading the places…")).toBeNull();
 });
 
-it("says no place is registered, and offers to register one", async () => {
+it("says no place is known, and offers to register one", async () => {
   await openTheSettings();
 
-  expect(screen.getByText(/no place is registered yet/i)).toBeTruthy();
+  expect(screen.getByText(/no place is known yet/i)).toBeTruthy();
   expect(screen.getByLabelText("Directory")).toBeTruthy();
   expect(screen.queryByRole("heading", { name: "Instructions" })).toBeNull();
+});
+
+it("shows a repository already known from recorded work", async () => {
+  const observed = aDirectoryPlace({
+    id: "dir-pricing",
+    label: "pricing",
+    directory: "/srv/repos/pricing",
+  });
+  api.locations = [...api.locations, observed];
+  api.runs = [{
+    id: "develop-observed",
+    kind: "run",
+    type: "develop",
+    label: "Earlier work",
+    status: "done",
+    locationId: observed.id,
+    startedAt: "2026-08-06T12:00:00Z",
+    endedAt: "2026-08-06T12:05:00Z",
+    iterations: 1,
+    tokens: 100,
+    dismissible: true,
+  }];
+
+  await openTheSettings();
+
+  expect(screen.getByRole("link", { name: "pricing" })).toBeTruthy();
+  expect(screen.getByText("/srv/repos/pricing")).toBeTruthy();
+  expect(screen.getByText("Observed")).toBeTruthy();
+  expect(screen.queryByText(/no place is known yet/i)).toBeNull();
+});
+
+it("fills the editable directory field from the native folder picker", async () => {
+  api.pickedDirectory = "/srv/repos/pricing";
+  await openTheSettings();
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Choose folder" }));
+  });
+
+  const directory = screen.getByLabelText("Directory") as HTMLInputElement;
+  expect(directory.value).toBe("/srv/repos/pricing");
+  fireEvent.change(directory, { target: { value: "/srv/repos/checkout" } });
+  expect(directory.value).toBe("/srv/repos/checkout");
+  expect(screen.queryByText(/for example/i)).toBeNull();
 });
 
 it("registers a repository that has never run anything", async () => {
@@ -79,7 +123,7 @@ it("registers a repository that has never run anything", async () => {
   const places = within(placesSection).getByRole("list");
   expect(within(places).getByRole("link", { name: "pricing" })).toBeTruthy();
   expect(within(places).getByText("/srv/repos/pricing")).toBeTruthy();
-  expect(screen.queryByText(/no place is registered yet/i)).toBeNull();
+  expect(screen.queryByText(/no place is known yet/i)).toBeNull();
   expect(within(placesSection).getByRole("status").textContent).toMatch(
     /repository registered/i,
   );
@@ -115,7 +159,7 @@ it("shows the server's own reason where the directory was typed", async () => {
     await register(directory);
 
     expect(screen.getByRole("alert").textContent).toMatch(says);
-    expect(screen.getByText(/no place is registered yet/i)).toBeTruthy();
+    expect(screen.getByText(/no place is known yet/i)).toBeTruthy();
     // The typed directory stays, so the operator corrects it instead of retyping.
     expect((screen.getByLabelText("Directory") as HTMLInputElement).value).toBe(directory);
   }
@@ -142,5 +186,5 @@ it("says the places could not be read rather than that there are none", async ()
 
   const places = screen.getByRole("heading", { name: "Places" }).closest("section") as HTMLElement;
   expect(within(places).getByRole("status").textContent).toMatch(/could not be read/i);
-  expect(within(places).queryByText(/no place is registered yet/i)).toBeNull();
+  expect(within(places).queryByText(/no place is known yet/i)).toBeNull();
 });
