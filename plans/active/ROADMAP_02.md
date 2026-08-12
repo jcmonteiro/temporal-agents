@@ -12,7 +12,7 @@ shipping order and cross-slice design decisions.
 | 1 | DONE | Establish the visual contract | [`01-storybook-visual-contract`](./ui-design-improvement/slices/01-storybook-visual-contract.md) | one reviewable design direction connects the strong existing surfaces to all later work | — |
 | 2 | DONE | Improve `/settings` | [`02-settings`](./ui-design-improvement/slices/02-settings.md) | settings become clear, calm, and consistent across forms and states | 1 |
 | 3 | DONE | Improve `/runs` pages | [`03-runs`](./ui-design-improvement/slices/03-runs.md) | run information and actions become easy to scan and understand | 1, 2 |
-| 4 | TODO | Improve the steering modal | [`04-steering-modal`](./ui-design-improvement/slices/04-steering-modal.md) | steering feels focused, trustworthy, and part of the run experience | 1, 3 |
+| 4 | IN-PROGRESS | Improve the steering modal | [`04-steering-modal`](./ui-design-improvement/slices/04-steering-modal.md) | steering feels focused, trustworthy, and part of the run experience | 1, 3 |
 | 5 | TODO | Validate the cohesive experience | [`05-cohesive-validation`](./ui-design-improvement/slices/05-cohesive-validation.md) | the redesigned and existing strong surfaces work as one responsive, accessible product | 2, 3, 4 |
 
 ## Why this order is required
