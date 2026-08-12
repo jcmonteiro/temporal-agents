@@ -11,6 +11,7 @@
 }
 
 .steering-modal {
+  --steering-font-size-xs: 12px;
   display: flex;
   width: min(900px, 100%);
   max-height: min(920px, calc(100dvh - 2 * var(--space-5)));
@@ -20,6 +21,11 @@
   background:
     radial-gradient(circle at 92% 0, var(--color-accent-soft), transparent 22rem),
     var(--color-surface);
+}
+
+.steering-modal--material-expanded {
+  width: min(var(--content-width-wide), 100%);
+  height: min(920px, calc(100dvh - 2 * var(--space-5)));
 }
 
 .steering-modal__header {
@@ -99,8 +105,8 @@
 
 .steering-modal__close {
   display: grid;
-  width: var(--control-height);
-  height: var(--control-height);
+  width: 44px;
+  height: 44px;
   flex: 0 0 auto;
   padding: 0;
   place-items: center;
@@ -144,7 +150,7 @@
   color: var(--color-text-muted);
   background: color-mix(in srgb, var(--color-surface) 94%, transparent);
   box-shadow: var(--shadow-sm);
-  font-size: var(--font-size-xs);
+  font-size: var(--steering-font-size-xs);
   backdrop-filter: blur(12px);
 }
 
@@ -183,9 +189,9 @@
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  color: var(--color-text-subtle);
+  color: var(--color-text-muted);
   background: var(--color-surface-2);
-  font-size: var(--font-size-xs);
+  font-size: var(--steering-font-size-xs);
 }
 
 .steering-steps li > span {
@@ -256,8 +262,8 @@
 
 .steering-section__count {
   flex: 0 0 auto;
-  color: var(--color-text-subtle);
-  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-size: var(--steering-font-size-xs);
   font-weight: var(--font-weight-semibold);
 }
 
@@ -272,7 +278,7 @@
 
 .steering-section__maximize {
   display: inline-flex;
-  min-height: 32px;
+  min-height: var(--control-height);
   align-items: center;
   gap: var(--space-2);
   padding: 0 var(--space-3);
@@ -280,7 +286,7 @@
   border-radius: var(--radius-sm);
   color: var(--color-text-muted);
   background: var(--color-surface);
-  font-size: var(--font-size-xs);
+  font-size: var(--steering-font-size-xs);
   font-weight: var(--font-weight-semibold);
 }
 
@@ -334,6 +340,7 @@
   max-height: none;
   flex: 1 1 auto;
   padding: var(--space-6);
+  font-size: var(--font-size-md);
 }
 
 .steering-outcome,
@@ -354,6 +361,22 @@
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-semibold);
   letter-spacing: -0.01em;
+}
+
+.steering-step-intro__title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.steering-step-intro__title > span {
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-full);
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  font-size: var(--steering-font-size-xs);
+  font-weight: var(--font-weight-semibold);
 }
 
 .steering-outcome > div:first-child > p:last-child,
@@ -402,31 +425,43 @@
 
 .steering-outcome__choices button span {
   color: var(--color-text-muted);
-  font-size: var(--font-size-xs);
+  font-size: var(--steering-font-size-xs);
   line-height: var(--line-height-body);
+}
+
+.steering-outcome__choices .steering-outcome__danger {
+  border-color: var(--color-danger-border);
+  background: linear-gradient(145deg, var(--color-surface), var(--color-danger-soft));
+}
+
+.steering-outcome__choices .steering-outcome__danger strong {
+  color: var(--color-danger-text);
 }
 
 .steering-outcome__choices .steering-outcome__danger:hover,
 .steering-outcome__choices .steering-outcome__danger:focus-visible {
-  border-color: var(--status-error);
+  border-color: var(--status-failed);
 }
 
-.steering-step-intro details {
+.steering-material-disclosure {
   margin-top: var(--space-2);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface-2);
 }
 
-.steering-step-intro summary {
-  padding: var(--space-3) var(--space-4);
+.steering-material-disclosure summary {
+  display: flex;
+  min-height: var(--control-height);
+  align-items: center;
+  padding: var(--space-2) var(--space-4);
   color: var(--color-text-muted);
   cursor: pointer;
-  font-size: var(--font-size-xs);
+  font-size: var(--steering-font-size-xs);
   font-weight: var(--font-weight-semibold);
 }
 
-.steering-step-intro details pre {
+.steering-material-disclosure pre {
   max-height: 180px;
   margin: 0;
   padding: var(--space-4);
@@ -483,7 +518,7 @@
 
 .steering-message__author {
   color: var(--color-text);
-  font-size: var(--font-size-xs);
+  font-size: var(--steering-font-size-xs);
   font-weight: var(--font-weight-semibold);
 }
 
@@ -496,12 +531,13 @@
 }
 
 .steering-message__use {
+  min-height: 36px;
   justify-self: start;
   margin-top: var(--space-1);
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
   color: var(--color-text);
-  font-size: var(--font-size-xs);
+  font-size: var(--steering-font-size-xs);
   font-weight: var(--font-weight-semibold);
   text-decoration: underline;
   text-decoration-color: var(--color-accent);
@@ -520,9 +556,9 @@
   gap: var(--space-2) var(--space-4);
   padding: var(--space-3) var(--space-5);
   border-top: 1px solid var(--color-border);
-  color: var(--color-text-subtle);
+  color: var(--color-text-muted);
   background: var(--color-surface-2);
-  font-size: var(--font-size-xs);
+  font-size: var(--steering-font-size-xs);
 }
 
 .steering-guidance__field {
@@ -570,7 +606,7 @@
 .steering-question > p {
   margin: 0 0 var(--space-3);
   color: var(--color-text-muted);
-  font-size: var(--font-size-xs);
+  font-size: var(--steering-font-size-xs);
   line-height: var(--line-height-body);
 }
 
@@ -615,8 +651,8 @@
 }
 
 .steering-review__summary dt {
-  color: var(--color-text-subtle);
-  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-size: var(--steering-font-size-xs);
   font-weight: var(--font-weight-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -677,7 +713,7 @@
 
 .steering-progress > div > span {
   color: var(--color-text-muted);
-  font-size: var(--font-size-xs);
+  font-size: var(--steering-font-size-xs);
 }
 
 .steering-decisions {
@@ -821,6 +857,10 @@
   border-radius: 0;
 }
 
+.steering-story-frame--narrow .steering-modal--material-expanded {
+  height: 760px;
+}
+
 .steering-story-frame--narrow .steering-modal__header,
 .steering-story-frame--narrow .steering-modal__body,
 .steering-story-frame--narrow .steering-modal__footer {
@@ -868,6 +908,10 @@
   justify-content: space-between;
 }
 
+.steering-story-frame--narrow .steering-outcome__choices button {
+  min-height: 96px;
+}
+
 .steering-story-frame--narrow .steering-question__controls .ui-button,
 .steering-story-frame--narrow .steering-decisions .ui-button {
   width: 100%;
@@ -909,6 +953,10 @@
     max-height: 100dvh;
     border-inline: 0;
     border-radius: 0;
+  }
+
+  .steering-modal--material-expanded {
+    height: 100dvh;
   }
 
   .steering-modal__header,
@@ -956,6 +1004,10 @@
   .steering-decision__actions {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .steering-outcome__choices button {
+    min-height: 96px;
   }
 
   .steering-question__controls .ui-button,

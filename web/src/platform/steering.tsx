@@ -16,30 +16,24 @@ import {
   questionSteeringSession,
 } from "../clients/steering";
 import { connectConversation, connectHubEvents } from "../clients/streams";
+import {
+  CONFIRM_LABELS,
+  DECISION_CONSEQUENCES,
+  DECISION_LABELS,
+  DecisionMaterialDisclosure,
+  OutcomeChoices,
+  PASS_LIMIT_OUTCOMES,
+  REVIEW_OUTCOMES,
+  SteeringProgress,
+  stepsFor,
+  type SteeringDecision,
+  type SteeringStep,
+} from "./steering-modal-view";
 import { waitingFor } from "./waiting-time";
 import "./steering.css";
 
 const GUIDANCE_LIMIT = 8 * 1024;
 const REFRESH_INTERVAL_MS = 5_000;
-
-type SteeringDecision = "guide" | "skip" | "stop" | "continue" | "accept";
-type SteeringStep = "outcome" | "clarify" | "guidance" | "review";
-
-const DECISION_LABELS: Record<SteeringDecision, string> = {
-  guide: "Build with guidance",
-  skip: "Proceed without guidance",
-  stop: "Stop the loop",
-  continue: "Continue with a fresh pass budget",
-  accept: "Accept the work as finished",
-};
-
-const DECISION_CONSEQUENCES: Record<SteeringDecision, string> = {
-  guide: "Implementation resumes with the guidance below.",
-  skip: "Implementation resumes without operator guidance.",
-  stop: "The review loop stops without another implementation pass.",
-  continue: "The review loop receives a fresh pass budget.",
-  accept: "The current work is accepted as finished.",
-};
 
 interface SteeringContextValue {
   sessions: SteeringSessionDTO[];
@@ -266,16 +260,8 @@ function SteeringModal({
 
   const passLimit = session?.round === "pass-limit";
   const messages = session?.messages ?? [];
-  const visibleSteps: SteeringStep[] = passLimit || (choice !== null && choice !== "guide")
-    ? ["outcome", "review"]
-    : ["outcome", "clarify", "guidance", "review"];
-  const currentStepIndex = visibleSteps.indexOf(step);
-  const stepLabels: Record<SteeringStep, string> = {
-    outcome: "Outcome",
-    clarify: "Clarify",
-    guidance: "Guidance",
-    review: "Review",
-  };
+  const visibleSteps = stepsFor(choice, passLimit);
+  const outcomes = passLimit ? PASS_LIMIT_OUTCOMES : REVIEW_OUTCOMES;
 
   return (
     <div
@@ -284,7 +270,7 @@ function SteeringModal({
       onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
     >
       <section
-        className="steering-modal ui-surface ui-surface--raised"
+        className={`steering-modal ui-surface ui-surface--raised${materialExpanded ? " steering-modal--material-expanded" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="steering-title"
@@ -339,21 +325,7 @@ function SteeringModal({
                 </div>
               )}
 
-              {!materialExpanded && <nav className="steering-steps" aria-label="Steering progress">
-                <ol>
-                  {visibleSteps.map((item, index) => (
-                    <li
-                      key={item}
-                      aria-current={item === step ? "step" : undefined}
-                      data-complete={index < currentStepIndex || undefined}
-                    >
-                      <span>{index + 1}</span>
-                      <strong>{stepLabels[item]}</strong>
-                      {item === "clarify" && <small>Optional</small>}
-                    </li>
-                  ))}
-                </ol>
-              </nav>}
+              {!materialExpanded && <SteeringProgress current={step} steps={visibleSteps} />}
 
               {step === "outcome" && (
                 <>
@@ -387,59 +359,27 @@ function SteeringModal({
                     <pre id="steering-review-outcome">{session.material || "No review material was supplied for this round."}</pre>
                   </section>
 
-                  {!materialExpanded && <section className="steering-outcome" aria-labelledby="steering-outcome-heading">
-                    <div>
-                      <p className="ui-kicker">Step 1</p>
-                      <h3 id="steering-outcome-heading">Choose what happens next</h3>
-                      <p>The selected outcome determines which details are needed before confirmation.</p>
-                    </div>
-                    <div className="steering-outcome__choices">
-                      {passLimit ? (
-                        <>
-                          <button ref={outcomeRef} type="button" aria-label="Continue with a fresh pass budget" onClick={() => choose("continue")}>
-                            <strong>Continue with a fresh pass budget</strong>
-                            <span>Allow another bounded review pass.</span>
-                          </button>
-                          <button type="button" aria-label="Accept the work as finished" onClick={() => choose("accept")}>
-                            <strong>Accept the work as finished</strong>
-                            <span>Finish with the current implementation.</span>
-                          </button>
-                          <button className="steering-outcome__danger" type="button" aria-label="Stop the loop" onClick={() => choose("stop")}>
-                            <strong>Stop the loop</strong>
-                            <span>End the review without another pass.</span>
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button ref={outcomeRef} type="button" aria-label="Build with guidance" onClick={() => choose("guide")}>
-                            <strong>Build with guidance</strong>
-                            <span>Clarify if needed, then prepare implementation direction.</span>
-                          </button>
-                          <button type="button" aria-label="Proceed without guidance" onClick={() => choose("skip")}>
-                            <strong>Proceed without guidance</strong>
-                            <span>Resume implementation without operator direction.</span>
-                          </button>
-                          <button className="steering-outcome__danger" type="button" aria-label="Stop the loop" onClick={() => choose("stop")}>
-                            <strong>Stop the loop</strong>
-                            <span>End the review without another implementation pass.</span>
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </section>}
+                  {!materialExpanded && (
+                    <section className="steering-outcome" aria-labelledby="steering-outcome-heading">
+                      <div>
+                        <h3 id="steering-outcome-heading">Choose what happens next</h3>
+                        <p>The selected outcome determines which details are needed before confirmation.</p>
+                      </div>
+                      <OutcomeChoices firstRef={outcomeRef} onChoose={choose} options={outcomes} />
+                    </section>
+                  )}
                 </>
               )}
 
               {step === "clarify" && (
                 <>
                   <section className="steering-step-intro" aria-labelledby="steering-clarify-heading">
-                    <p className="ui-kicker">Optional step</p>
-                    <h3 id="steering-clarify-heading">Clarify the direction</h3>
+                    <div className="steering-step-intro__title">
+                      <h3 id="steering-clarify-heading">Clarify the direction</h3>
+                      <span>Optional</span>
+                    </div>
                     <p>Ask questions about the review material before writing implementation guidance.</p>
-                    <details>
-                      <summary>Review the decision material</summary>
-                      <pre>{session.material || "No review material was supplied for this round."}</pre>
-                    </details>
+                    <DecisionMaterialDisclosure material={session.material} />
                   </section>
 
                   <section
@@ -518,13 +458,9 @@ function SteeringModal({
               {step === "guidance" && (
                 <>
                   <section className="steering-step-intro" aria-labelledby="steering-guidance-step-heading">
-                    <p className="ui-kicker">Step 3</p>
                     <h3 id="steering-guidance-step-heading">Prepare implementation guidance</h3>
                     <p>Give the implementing agent a clear direction. Guidance is required for this outcome.</p>
-                    <details>
-                      <summary>Review the decision material</summary>
-                      <pre>{session.material || "No review material was supplied for this round."}</pre>
-                    </details>
+                    <DecisionMaterialDisclosure material={session.material} />
                   </section>
                   <section className="steering-section steering-guidance" aria-labelledby="steering-guidance-heading">
                     <div className="steering-section__heading">
@@ -557,7 +493,6 @@ function SteeringModal({
               {step === "review" && choice !== null && (
                 <section className="steering-review" aria-labelledby="steering-review-heading">
                   <div className="steering-step-intro">
-                    <p className="ui-kicker">Final step</p>
                     <h3 id="steering-review-heading">Review the decision</h3>
                     <p>No terminal decision has been submitted. Confirm the summary below to continue.</p>
                   </div>
@@ -629,15 +564,7 @@ function SteeringModal({
                   disabled={busy}
                   onClick={() => void decide(choice)}
                 >
-                  {choice === "guide"
-                    ? "Confirm and build"
-                    : choice === "skip"
-                      ? "Confirm and proceed"
-                      : choice === "stop"
-                        ? "Confirm stop"
-                        : choice === "continue"
-                          ? "Confirm fresh pass budget"
-                          : "Confirm as finished"}
+                  {CONFIRM_LABELS[choice]}
                 </button>
               </div>
             )}
