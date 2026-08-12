@@ -21,8 +21,10 @@ feature in hand adds noise, not accuracy.
 | Plan | Covers | Status |
 |---|---|---|
 | [`active/steering`](./active/steering/) | a review round waits for the operator, who guides it | all slices delivered |
+| [`active/ui-design-improvement`](./active/ui-design-improvement/) | a cohesive redesign of Settings, Runs, and steering | planned |
 
-Order and dependencies live in `ROADMAP.md`.
+The UI improvement order and cross-feature decisions live in
+[`active/ROADMAP_02.md`](./active/ROADMAP_02.md).
 
 ## Archived plans
 
