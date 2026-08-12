@@ -7,7 +7,9 @@ import { Icon } from "./Icon";
 export function TopBar(): ReactNode {
   return (
     <header
+      className="top-bar"
       style={{
+        minWidth: 0,
         height: 56,
         display: "flex",
         alignItems: "center",
@@ -18,6 +20,7 @@ export function TopBar(): ReactNode {
       }}
     >
       <div
+        className="top-bar__brand"
         style={{
           display: "flex",
           alignItems: "center",
@@ -48,7 +51,7 @@ export function TopBar(): ReactNode {
         <strong style={{ fontSize: "var(--font-size-lg)" }}>Agent Hub</strong>
       </div>
 
-      <div style={{ flex: 1, display: "flex", justifyContent: "center" }}>
+      <div className="top-bar__search" style={{ flex: 1, display: "flex", justifyContent: "center" }}>
         <div
           style={{
             width: "min(560px, 60%)",
@@ -71,7 +74,7 @@ export function TopBar(): ReactNode {
         </div>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+      <div className="top-bar__actions" style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
         <Inbox />
         <SignedIn />
       </div>
@@ -271,8 +274,9 @@ function SignedIn(): ReactNode {
   const { state, signOut } = useSession();
   if (state.status !== "signed-in") return null;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+    <div className="top-bar__identity" style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
       <span
+        className="top-bar__identity-name"
         style={{
           fontSize: "var(--font-size-sm)",
           color: "var(--color-text-muted)",

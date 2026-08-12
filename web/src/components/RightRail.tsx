@@ -296,7 +296,9 @@ export function RightRail({
   const filtering = visibleStatuses.size > 0;
   return (
     <aside
+      className="right-rail"
       style={{
+        minWidth: 0,
         width: 280,
         padding: "var(--space-4)",
         borderLeft: "1px solid var(--color-border)",

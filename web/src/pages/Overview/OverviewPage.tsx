@@ -129,8 +129,9 @@ export function OverviewPage(): ReactNode {
   const clearFilter = (): void => setVisibleStatuses(new Set());
 
   return (
-    <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+    <div className="overview-page" style={{ display: "flex", flex: 1, minWidth: 0, minHeight: 0 }}>
       <main
+        className="overview-page__canvas"
         style={{
           flex: 1,
           position: "relative",

@@ -29,8 +29,10 @@ export function LeftNav(): ReactNode {
   const active = navigationKeyOf(useRoute());
   return (
     <nav
+      className="left-nav"
       aria-label="Sections"
       style={{
+        minWidth: 0,
         width: 220,
         borderRight: "1px solid var(--color-border)",
         background: "var(--color-surface)",
@@ -77,8 +79,9 @@ export function LeftNav(): ReactNode {
           </a>
         );
       })}
-      <div style={{ flex: 1 }} />
+      <div className="left-nav__spacer" style={{ flex: 1 }} />
       <button
+        className="left-nav__help"
         type="button"
         disabled
         title="Help is not built yet"

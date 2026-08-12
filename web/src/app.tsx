@@ -25,16 +25,19 @@ function Shell(): ReactNode {
   const { state } = useSession();
   return (
     <div
+      className="app-shell"
       style={{
         display: "flex",
         flexDirection: "column",
+        width: "100%",
         height: "100vh",
+        minWidth: 0,
         background: "var(--color-bg)",
         color: "var(--color-text)",
       }}
     >
       <TopBar />
-      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+      <div className="app-shell__body" style={{ display: "flex", flex: 1, minHeight: 0 }}>
         {state.status === "signed-out" ? (
           <SignInPage />
         ) : state.status === "unavailable" ? (
