@@ -42,7 +42,7 @@ export function Router(): ReactNode {
 function pageOf(route: Route): ReactNode {
   switch (route.name) {
     case "place":
-      return <PlacePage placeId={route.placeId} />;
+      return <PlacePage placeId={route.placeId} category={route.category} />;
     case "run":
       return <RunPage runId={route.runId} />;
     case "fleet":

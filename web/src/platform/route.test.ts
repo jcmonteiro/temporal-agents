@@ -9,12 +9,20 @@ import {
 } from "./route";
 
 describe("the address of a route", () => {
-  it("names a place by its id", () => {
-    expect(addressOf({ name: "place", placeId: "abc123" })).toBe("#/places/abc123");
+  it("names each category of a place", () => {
+    expect(addressOf({ name: "place", placeId: "abc123", category: "overview" })).toBe(
+      "#/places/abc123",
+    );
+    expect(addressOf({ name: "place", placeId: "abc123", category: "start" })).toBe(
+      "#/places/abc123/start",
+    );
+    expect(
+      addressOf({ name: "place", placeId: "abc123", category: "instructions" }),
+    ).toBe("#/places/abc123/instructions");
   });
 
   it("escapes an id that would otherwise break the address", () => {
-    expect(addressOf({ name: "place", placeId: "a/b c" })).toBe(
+    expect(addressOf({ name: "place", placeId: "a/b c", category: "overview" })).toBe(
       "#/places/a%2Fb%20c",
     );
   });
@@ -32,10 +40,21 @@ describe("the address of a route", () => {
 });
 
 describe("the route an address names", () => {
-  it("reads a place address", () => {
+  it("reads each category of a place", () => {
     expect(routeOf("#/places/abc123")).toEqual({
       name: "place",
       placeId: "abc123",
+      category: "overview",
+    });
+    expect(routeOf("#/places/abc123/start")).toEqual({
+      name: "place",
+      placeId: "abc123",
+      category: "start",
+    });
+    expect(routeOf("#/places/abc123/instructions")).toEqual({
+      name: "place",
+      placeId: "abc123",
+      category: "instructions",
     });
   });
 
@@ -43,6 +62,7 @@ describe("the route an address names", () => {
     expect(routeOf("#/places/a%2Fb%20c")).toEqual({
       name: "place",
       placeId: "a/b c",
+      category: "overview",
     });
   });
 
@@ -58,7 +78,11 @@ describe("the route an address names", () => {
   });
 
   it("reads back every address it writes", () => {
-    const route = { name: "place", placeId: "dir:/srv/checkout" } as const;
+    const route = {
+      name: "place",
+      placeId: "dir:/srv/checkout",
+      category: "overview",
+    } as const;
 
     expect(routeOf(addressOf(route))).toEqual(route);
   });
@@ -80,7 +104,9 @@ describe("the route an address names", () => {
 describe("the navigation entry a route belongs under", () => {
   it("puts a place under the overview, because it is the overview close up", () => {
     expect(navigationKeyOf(OVERVIEW)).toBe("overview");
-    expect(navigationKeyOf({ name: "place", placeId: "dir-1" })).toBe("overview");
+    expect(
+      navigationKeyOf({ name: "place", placeId: "dir-1", category: "instructions" }),
+    ).toBe("overview");
   });
 
   it("puts a fleet under the fleets, and every settings category under settings", () => {

@@ -190,7 +190,7 @@ export const Empty: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.findByText("No configurable instructions")).resolves.toBeVisible();
-    await expect(canvas.queryByText("No place is registered yet")).not.toBeInTheDocument();
+    await expect(canvas.queryByText("No place is known yet")).not.toBeInTheDocument();
   },
 };
 
@@ -199,7 +199,7 @@ export const EmptyPlaces: Story = {
   parameters: { settingsScenario: "empty" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.findByText("No place is registered yet")).resolves.toBeVisible();
+    await expect(canvas.findByText("No place is known yet")).resolves.toBeVisible();
     await expect(canvas.getByRole("button", { name: "Register" })).toBeDisabled();
   },
 };
@@ -241,7 +241,7 @@ export const ReadFailurePlaces: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.findByText("Places unavailable")).resolves.toBeVisible();
-    await expect(canvas.queryByText("No place is registered yet")).not.toBeInTheDocument();
+    await expect(canvas.queryByText("No place is known yet")).not.toBeInTheDocument();
   },
 };
 

@@ -31,7 +31,7 @@ afterEach(() => {
 
 /** Opens the place page and waits for the first read. */
 async function showPlace(): Promise<void> {
-  render(<PlacePage placeId="repo" />);
+  render(<PlacePage placeId="repo" category="start" />);
   await waitFor(() =>
     expect(screen.queryByText("Loading this place…")).not.toBeTruthy(),
   );
@@ -168,11 +168,11 @@ it("asks for something else under an identity of its own", async () => {
   expect(window.location.hash).toBe(`#/runs/${started[0].id}`);
 });
 
-it("keeps the launcher out of the way of the work the place already holds", async () => {
+it("keeps existing work out of the launcher category", async () => {
   api.runs = [aRun({ id: "run-1", label: "Fix the flaky test", locationId: "repo" })];
 
   await showPlace();
 
-  expect(screen.getByRole("button", { name: /Fix the flaky test/ })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Fix the flaky test/ })).toBeNull();
   expect(screen.getByRole("region", { name: "Start work here" })).toBeTruthy();
 });

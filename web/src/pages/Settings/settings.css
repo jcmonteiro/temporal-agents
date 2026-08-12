@@ -41,56 +41,6 @@
   line-height: var(--line-height-body);
 }
 
-.settings-category-nav {
-  position: sticky;
-  z-index: 2;
-  top: 0;
-  display: flex;
-  min-width: 0;
-  overflow: hidden;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-bg);
-}
-
-.settings-category-nav a {
-  position: relative;
-  display: flex;
-  min-width: max-content;
-  min-height: 48px;
-  align-items: center;
-  padding: 0 var(--space-4);
-  color: var(--color-text-muted);
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-semibold);
-  text-decoration: none;
-  transition:
-    color var(--motion-fast) ease,
-    background var(--motion-fast) ease;
-}
-
-.settings-category-nav a::after {
-  position: absolute;
-  right: var(--space-4);
-  bottom: -1px;
-  left: var(--space-4);
-  height: 2px;
-  background: transparent;
-  content: "";
-}
-
-.settings-category-nav a:hover {
-  color: var(--color-text);
-  background: var(--color-surface-2);
-}
-
-.settings-category-nav a[aria-current="page"] {
-  color: var(--color-accent-hover);
-}
-
-.settings-category-nav a[aria-current="page"]::after {
-  background: var(--color-accent);
-}
-
 .settings-section {
   min-width: 0;
   overflow: hidden;
@@ -537,18 +487,6 @@
   display: grid;
   min-width: 0;
   gap: var(--space-1);
-}
-
-.settings-place__mark {
-  width: 34px;
-  height: 34px;
-  flex: 0 0 auto;
-  border: 1px solid var(--color-border-strong);
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at center, var(--color-accent) 0 3px, transparent 4px),
-    radial-gradient(circle at center, transparent 0 10px, var(--orbit-ring) 11px 12px, transparent 13px),
-    var(--color-surface-2);
 }
 
 .settings-place a {

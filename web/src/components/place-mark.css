@@ -1,0 +1,29 @@
+.place-mark {
+  position: relative;
+  display: block;
+  width: 50px;
+  height: 50px;
+  flex: 0 0 auto;
+  border: 1px dashed var(--orbit-ring);
+  border-radius: 50%;
+}
+
+.place-mark::before {
+  position: absolute;
+  inset: 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, var(--planet-glow), var(--color-surface-2));
+  content: "";
+}
+
+.place-mark > span {
+  position: absolute;
+  top: 0;
+  right: 3px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--color-surface);
+  border-radius: 50%;
+  background: var(--color-accent);
+}

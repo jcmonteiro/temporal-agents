@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { loadPlace, type PlaceView } from "../../clients/work-items";
 import { Icon } from "../../components/Icon";
+import { PlaceMark } from "../../components/PlaceMark";
 import { StatusDot } from "../../components/StatusDot";
 import { WorkItemDetail } from "../../components/WorkItemDetail";
 import type { Place } from "../../domain/place";
@@ -13,7 +14,7 @@ import {
   type WorkItemId,
   type WorkItemStatus,
 } from "../../domain/work-item";
-import { addressOf, OVERVIEW } from "../../platform/route";
+import { addressOf, OVERVIEW, type PlaceCategory } from "../../platform/route";
 import { useSteering } from "../../platform/steering";
 import { waitingFor } from "../../platform/waiting-time";
 import { PromptConfiguration } from "../Settings/PromptConfiguration";
@@ -29,7 +30,13 @@ interface State {
   error: string | null;
 }
 
-export function PlacePage({ placeId }: { placeId: string }): ReactNode {
+export function PlacePage({
+  placeId,
+  category = "overview",
+}: {
+  placeId: string;
+  category?: PlaceCategory;
+}): ReactNode {
   const steering = useSteering();
   const [state, setState] = useState<State>({ view: null, error: null });
   const [selectedId, setSelectedId] = useState<WorkItemId | null>(null);
@@ -62,7 +69,13 @@ export function PlacePage({ placeId }: { placeId: string }): ReactNode {
 
   return (
     <main className="place-page">
-      <div className="place-page__frame">
+      <div
+        className={
+          category === "overview"
+            ? "place-page__frame"
+            : "place-page__frame place-page__frame--wide"
+        }
+      >
         <a className="place-page__back" href={addressOf(OVERVIEW)}>
           <span>←</span> Back to the overview
         </a>
@@ -104,6 +117,7 @@ export function PlacePage({ placeId }: { placeId: string }): ReactNode {
           {view?.found === true && (
             <PlaceReport
               place={view.place}
+              category={category}
               ancestry={view.ancestry}
               placesHere={view.children}
               items={view.items}
@@ -113,29 +127,31 @@ export function PlacePage({ placeId }: { placeId: string }): ReactNode {
           )}
         </div>
 
-        <aside
-          className="place-selection ui-surface"
-          aria-labelledby="place-selection-heading"
-        >
-          <header className="place-selection__header">
-            <div>
-              <p className="ui-kicker">Inspection rail</p>
-              <h2 id="place-selection-heading">Selected</h2>
-            </div>
-            {selected !== null && <span className="place-selection__active">Active</span>}
-          </header>
-          <div className="place-selection__body">
-            {selected ? (
-              <WorkItemDetail item={selected} />
-            ) : (
-              <div className="place-selection__empty">
-                <span className="place-selection__orbit" aria-hidden="true" />
-                <strong>No work selected</strong>
-                <span>Select a piece of work to see its details.</span>
+        {category === "overview" && (
+          <aside
+            className="place-selection ui-surface"
+            aria-labelledby="place-selection-heading"
+          >
+            <header className="place-selection__header">
+              <div>
+                <p className="ui-kicker">Inspection rail</p>
+                <h2 id="place-selection-heading">Selected</h2>
               </div>
-            )}
-          </div>
-        </aside>
+              {selected !== null && <span className="place-selection__active">Active</span>}
+            </header>
+            <div className="place-selection__body">
+              {selected ? (
+                <WorkItemDetail item={selected} />
+              ) : (
+                <div className="place-selection__empty">
+                  <span className="place-selection__orbit" aria-hidden="true" />
+                  <strong>No work selected</strong>
+                  <span>Select a piece of work to see its details.</span>
+                </div>
+              )}
+            </div>
+          </aside>
+        )}
       </div>
     </main>
   );
@@ -173,6 +189,7 @@ function NotFound({ placeId }: { placeId: string }): ReactNode {
 
 function PlaceReport({
   place,
+  category,
   ancestry,
   placesHere,
   items,
@@ -180,6 +197,7 @@ function PlaceReport({
   onSelect,
 }: {
   place: Place;
+  category: PlaceCategory;
   ancestry: Place[];
   placesHere: Place[];
   items: WorkItem[];
@@ -194,14 +212,20 @@ function PlaceReport({
     <article className="place-report">
       <header className="place-hero ui-surface">
         <div className="place-hero__identity">
-          <span className="place-hero__orbit" aria-hidden="true"><span /></span>
+          <PlaceMark />
           <div>
             <p className="ui-eyebrow">Place workspace</p>
             {above.length > 0 && (
               <nav className="place-hero__ancestry" aria-label="Places above this one">
                 {above.map((ancestor) => (
                   <span key={ancestor.id}>
-                    <a href={addressOf({ name: "place", placeId: ancestor.id })}>
+                    <a
+                      href={addressOf({
+                        name: "place",
+                        placeId: ancestor.id,
+                        category: "overview",
+                      })}
+                    >
                       {ancestor.label}
                     </a>
                     <span aria-hidden="true">›</span>
@@ -229,82 +253,115 @@ function PlaceReport({
         </dl>
       </header>
 
-      <div className="place-report__overview">
-        <section
-          className="place-section place-section--hierarchy ui-surface"
-          aria-labelledby="places-here-heading"
+      <nav className="ui-category-nav" aria-label="Place categories">
+        <a
+          href={addressOf({ name: "place", placeId: place.id, category: "overview" })}
+          aria-current={category === "overview" ? "page" : undefined}
         >
-          <header className="place-section__header">
-            <div>
-              <p className="ui-kicker">Hierarchy</p>
-              <h2 id="places-here-heading">Places here</h2>
-            </div>
-            <span className="place-section__count">{placesHere.length}</span>
-          </header>
-          <div className="place-section__body">
-            {placesHere.length === 0 ? (
-              <div className="place-empty">
-                <strong>No nested places</strong>
-                <span>This is the last known place in this branch.</span>
-              </div>
-            ) : (
-              <ul className="place-children">
-                {placesHere.map((child) => (
-                  <li key={child.id}>
-                    <a
-                      href={addressOf({ name: "place", placeId: child.id })}
-                      aria-label={child.label}
-                    >
-                      <span className="place-children__mark" aria-hidden="true" />
-                      <span>
-                        <strong>{child.label}</strong>
-                        <small>{child.directory ?? child.ref ?? child.kind}</small>
-                      </span>
-                      <span aria-hidden="true">→</span>
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </section>
-
-        <section
-          className="place-section place-section--work ui-surface"
-          aria-labelledby="work-here-heading"
+          Overview
+        </a>
+        <a
+          href={addressOf({ name: "place", placeId: place.id, category: "start" })}
+          aria-current={category === "start" ? "page" : undefined}
         >
-          <header className="place-section__header">
-            <div>
-              <p className="ui-kicker">Current activity</p>
-              <h2 id="work-here-heading">Work here</h2>
-            </div>
-            <span className="place-section__count">{items.length}</span>
-          </header>
-          <div className="place-section__body place-work">
-            {items.length === 0 ? (
-              <div className="place-empty">
-                <strong>This place is idle</strong>
-                <span>Nothing runs here at the moment.</span>
-              </div>
-            ) : (
-              STATUS_ORDER.filter((status) =>
-                items.some((item) => item.status === status),
-              ).map((status) => (
-                <WorkOfStatus
-                  key={status}
-                  status={status}
-                  items={items.filter((item) => item.status === status)}
-                  selected={selected}
-                  onSelect={onSelect}
-                />
-              ))
-            )}
-          </div>
-        </section>
-      </div>
+          Start work
+        </a>
+        <a
+          href={addressOf({
+            name: "place",
+            placeId: place.id,
+            category: "instructions",
+          })}
+          aria-current={category === "instructions" ? "page" : undefined}
+        >
+          Instructions
+        </a>
+      </nav>
 
-      <Launcher place={place} />
-      <PromptConfiguration fixedLocation={{ id: place.id, label: place.label }} />
+      {category === "overview" && (
+        <div className="place-report__overview">
+          <section
+            className="place-section place-section--hierarchy ui-surface"
+            aria-labelledby="places-here-heading"
+          >
+            <header className="place-section__header">
+              <div>
+                <p className="ui-kicker">Hierarchy</p>
+                <h2 id="places-here-heading">Places here</h2>
+              </div>
+              <span className="place-section__count">{placesHere.length}</span>
+            </header>
+            <div className="place-section__body">
+              {placesHere.length === 0 ? (
+                <div className="place-empty">
+                  <strong>No nested places</strong>
+                  <span>This is the last known place in this branch.</span>
+                </div>
+              ) : (
+                <ul className="place-children">
+                  {placesHere.map((child) => (
+                    <li key={child.id}>
+                      <a
+                        href={addressOf({
+                          name: "place",
+                          placeId: child.id,
+                          category: "overview",
+                        })}
+                        aria-label={child.label}
+                      >
+                        <span className="place-children__mark" aria-hidden="true" />
+                        <span>
+                          <strong>{child.label}</strong>
+                          <small>{child.directory ?? child.ref ?? child.kind}</small>
+                        </span>
+                        <span aria-hidden="true">→</span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </section>
+
+          <section
+            className="place-section place-section--work ui-surface"
+            aria-labelledby="work-here-heading"
+          >
+            <header className="place-section__header">
+              <div>
+                <p className="ui-kicker">Current activity</p>
+                <h2 id="work-here-heading">Work here</h2>
+              </div>
+              <span className="place-section__count">{items.length}</span>
+            </header>
+            <div className="place-section__body place-work">
+              {items.length === 0 ? (
+                <div className="place-empty">
+                  <strong>This place is idle</strong>
+                  <span>Nothing runs here at the moment.</span>
+                </div>
+              ) : (
+                STATUS_ORDER.filter((status) =>
+                  items.some((item) => item.status === status),
+                ).map((status) => (
+                  <WorkOfStatus
+                    key={status}
+                    status={status}
+                    items={items.filter((item) => item.status === status)}
+                    selected={selected}
+                    onSelect={onSelect}
+                  />
+                ))
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+
+      {category === "start" && <Launcher place={place} />}
+      {category === "instructions" && (
+        <PromptConfiguration fixedLocation={{ id: place.id, label: place.label }} />
+      )}
     </article>
   );
 }

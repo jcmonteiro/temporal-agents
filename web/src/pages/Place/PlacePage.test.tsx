@@ -9,6 +9,7 @@ import {
   FakeApi,
   theUnknownPlace,
 } from "../../test/fake-api";
+import type { PlaceCategory } from "../../platform/route";
 import { PlacePage } from "./PlacePage";
 
 let api: FakeApi;
@@ -39,8 +40,11 @@ afterEach(() => {
 });
 
 /** Renders the page of one place and waits for the first read to arrive. */
-async function showPlace(placeId: string): Promise<void> {
-  render(<PlacePage placeId={placeId} />);
+async function showPlace(
+  placeId: string,
+  category: PlaceCategory = "overview",
+): Promise<void> {
+  render(<PlacePage placeId={placeId} category={category} />);
   await waitFor(() =>
     expect(screen.queryByText("Loading this place…")).not.toBeTruthy(),
   );
@@ -102,8 +106,23 @@ describe("the page of one place", () => {
     expect(screen.getByText("Nothing runs here at the moment.")).toBeTruthy();
   });
 
+  it("shows one place category at a time", async () => {
+    render(<PlacePage placeId="repo" category="start" />);
+    await waitFor(() =>
+      expect(screen.queryByText("Loading this place…")).not.toBeTruthy(),
+    );
+
+    const categories = screen.getByRole("navigation", { name: "Place categories" });
+    expect(within(categories).getByRole("link", { name: "Start work" }).getAttribute(
+      "aria-current",
+    )).toBe("page");
+    expect(screen.getByRole("heading", { name: "Start work here" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Work here" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Instructions" })).toBeNull();
+  });
+
   it("reaches instruction configuration in the place scope", async () => {
-    await showPlace("tree");
+    await showPlace("tree", "instructions");
 
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "Instructions" })).toBeTruthy(),

@@ -21,7 +21,7 @@ const meta = {
   title: "Pages/Place/Place page",
   component: PlacePage,
   tags: ["autodocs"],
-  args: { placeId },
+  args: { placeId, category: "overview" },
   beforeEach: ({ parameters }) =>
     installStoryApi((api) => {
       configureApi(api, (parameters.placeScenario ?? "active") as Scenario);
@@ -171,15 +171,24 @@ async function showsActivePlace(canvasElement: HTMLElement): Promise<void> {
   await expect(
     canvas.findByRole("heading", { name: "checkout-reliability", level: 1 }),
   ).resolves.toBeVisible();
-  await expect(canvas.findByRole("heading", { name: "Start work here" })).resolves.toBeVisible();
-  await expect(canvas.findByRole("heading", { name: "Instructions" })).resolves.toBeVisible();
+  const categories = await canvas.findByRole("navigation", {
+    name: "Place categories",
+  });
+  await expect(within(categories).getByRole("link", { name: "Overview" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
 
   const work = await canvas.findByRole("button", {
     name: /Preserve the original provider failure/,
   });
   await userEvent.click(work);
   const detail = canvas.getByRole("complementary");
-  await expect(within(detail).getByText("Preserve the original provider failure across bounded retries")).toBeVisible();
+  await expect(
+    within(detail).getByText(
+      "Preserve the original provider failure across bounded retries",
+    ),
+  ).toBeVisible();
   await expect(within(detail).getByRole("link", { name: "View details" })).toBeVisible();
 }
 
@@ -212,6 +221,32 @@ export const ActiveNarrowLight: Story = {
 export const ActiveNarrowDark: Story = {
   ...ActiveNarrowLight,
   globals: { theme: "dark" },
+};
+
+export const StartWork: Story = {
+  args: { category: "start" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      canvas.findByRole("heading", { name: "Start work here" }),
+    ).resolves.toBeVisible();
+    await expect(
+      canvas.queryByRole("heading", { name: "Work here" }),
+    ).not.toBeInTheDocument();
+  },
+};
+
+export const Instructions: Story = {
+  args: { category: "instructions" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      canvas.findByRole("heading", { name: "Instructions" }),
+    ).resolves.toBeVisible();
+    await expect(
+      canvas.queryByRole("heading", { name: "Work here" }),
+    ).not.toBeInTheDocument();
+  },
 };
 
 export const WaitingForGuidance: Story = {

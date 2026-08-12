@@ -9,11 +9,12 @@
 
 import { useEffect, useState } from "react";
 
+export type PlaceCategory = "overview" | "start" | "instructions";
 export type SettingsCategory = "instructions" | "places";
 
 export type Route =
   | { name: "overview" }
-  | { name: "place"; placeId: string }
+  | { name: "place"; placeId: string; category: PlaceCategory }
   | { name: "run"; runId: string }
   | { name: "fleet"; fleetId: string }
   | { name: "settings"; category: SettingsCategory };
@@ -25,8 +26,10 @@ export const SETTINGS_PLACES: Route = { name: "settings", category: "places" };
 /** The address of a route, fragment included. */
 export function addressOf(route: Route): string {
   switch (route.name) {
-    case "place":
-      return `#/places/${encodeURIComponent(route.placeId)}`;
+    case "place": {
+      const place = `#/places/${encodeURIComponent(route.placeId)}`;
+      return route.category === "overview" ? place : `${place}/${route.category}`;
+    }
     case "run":
       return `#/runs/${encodeURIComponent(route.runId)}`;
     case "fleet":
@@ -46,8 +49,20 @@ export function routeOf(address: string): Route {
   const fragment = address.startsWith("#") ? address.slice(1) : address;
   const path = fragment.replace(/^\/+/, "").replace(/\/+$/, "");
   const [section, ...rest] = path.split("/");
+  const placeCategory =
+    rest.length === 1
+      ? "overview"
+      : rest.length === 2 && (rest[1] === "start" || rest[1] === "instructions")
+        ? rest[1]
+        : null;
+  if (section === "places" && rest[0] !== "" && placeCategory !== null) {
+    return {
+      name: "place",
+      placeId: decodeURIComponent(rest[0]),
+      category: placeCategory,
+    };
+  }
   const id = rest.length === 1 && rest[0] !== "" ? decodeURIComponent(rest[0]) : null;
-  if (section === "places" && id !== null) return { name: "place", placeId: id };
   if (section === "runs" && id !== null) return { name: "run", runId: id };
   if (section === "fleets" && id !== null) return { name: "fleet", fleetId: id };
   if (section === "settings" && rest.length === 0) return SETTINGS;

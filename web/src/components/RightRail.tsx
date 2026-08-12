@@ -227,7 +227,7 @@ function SelectedPlace({
         )}
       </div>
       <a
-        href={addressOf({ name: "place", placeId: place.id })}
+        href={addressOf({ name: "place", placeId: place.id, category: "overview" })}
         style={{
           marginTop: 4,
           padding: "8px 12px",

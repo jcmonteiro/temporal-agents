@@ -6,6 +6,7 @@ import {
   type KnownPlace,
 } from "../../clients/places";
 import { ApiError } from "../../clients/http";
+import { PlaceMark } from "../../components/PlaceMark";
 import {
   addressOf,
   SETTINGS,
@@ -33,7 +34,7 @@ export function SettingsPage({
           </p>
         </header>
 
-        <nav className="settings-category-nav" aria-label="Settings categories">
+        <nav className="ui-category-nav" aria-label="Settings categories">
           <a
             href={addressOf(SETTINGS)}
             aria-current={category === "instructions" ? "page" : undefined}
@@ -136,9 +137,11 @@ function PlaceRow({ registered }: { registered: KnownPlace }): ReactNode {
   return (
     <li className="settings-place">
       <div className="settings-place__identity">
-        <span className="settings-place__mark" aria-hidden="true" />
+        <PlaceMark />
         <div>
-          <a href={addressOf({ name: "place", placeId: place.id })}>{place.label}</a>
+          <a href={addressOf({ name: "place", placeId: place.id, category: "overview" })}>
+            {place.label}
+          </a>
           <span>{place.directory ?? place.ref ?? "Repository location unavailable"}</span>
         </div>
       </div>

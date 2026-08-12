@@ -163,7 +163,9 @@ function Report({
         <div className="run-hero__summary" aria-label="Run summary">
           <SummaryItem label="Place">
             {place ? (
-              <a href={addressOf({ name: "place", placeId: place.id })}>{place.label}</a>
+              <a href={addressOf({ name: "place", placeId: place.id, category: "overview" })}>
+                  {place.label}
+                </a>
             ) : (
               "Not recorded"
             )}
