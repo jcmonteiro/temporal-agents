@@ -31,9 +31,9 @@ at desktop and mobile widths and in both themes.
 
 ## Done when
 
-- [ ] Existing Settings capabilities and meaningful states have stories.
-- [ ] Page purpose, sections, labels, current values, and primary actions are easy to scan.
-- [ ] Save, reset, disabled, loading, and error feedback is consistent and unambiguous.
-- [ ] Keyboard order, focus, labels, and contrast pass accessibility review.
-- [ ] No narrow-viewport clipping or accidental horizontal overflow remains.
-- [ ] Storybook tests and relevant frontend tests pass.
+- [x] Existing Settings capabilities and meaningful states have stories.
+- [x] Page purpose, sections, labels, current values, and primary actions are easy to scan.
+- [x] Save, reset, disabled, loading, and error feedback is consistent and unambiguous.
+- [x] Keyboard order, focus, labels, and contrast pass accessibility review.
+- [x] No narrow-viewport clipping or accidental horizontal overflow remains.
+- [x] Storybook tests and relevant frontend tests pass.
