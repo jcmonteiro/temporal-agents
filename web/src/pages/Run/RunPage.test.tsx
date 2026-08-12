@@ -57,6 +57,26 @@ it("reports what the run is, where it runs and how it stands", async () => {
   expect(screen.getByText("2")).toBeTruthy();
 });
 
+it("organizes run state, operational details, and available actions for scanning", async () => {
+  api.runs = [
+    aRun({
+      id: "develop-1",
+      type: "develop",
+      label: "Fix the flaky test",
+      status: "in-progress",
+      locationId: "repo",
+    }),
+  ];
+
+  await showRun("develop-1");
+
+  expect(screen.getByRole("status", { name: "Run status: In Progress" })).toBeTruthy();
+  expect(screen.getByRole("region", { name: "Operational details" })).toBeTruthy();
+  const actions = screen.getByRole("region", { name: "Available actions" });
+  expect(actions.textContent).toContain("Run this again");
+  expect(screen.getByRole("link", { name: "Back to overview" })).toBeTruthy();
+});
+
 it("says a run that has only just been started is starting, not missing", async () => {
   // The operator has just landed here from the launcher. The orchestrator has
   // accepted the work and the read path does not list it yet.

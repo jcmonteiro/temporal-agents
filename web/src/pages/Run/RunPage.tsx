@@ -7,6 +7,7 @@ import { StatusDot } from "../../components/StatusDot";
 import { Icon } from "../../components/Icon";
 import { addressOf, goTo, OVERVIEW } from "../../platform/route";
 import { SteeringButton } from "../../platform/steering";
+import "./run.css";
 
 // A run is live while it runs, so the page polls on the same cadence as the rest
 // of the hub.
@@ -28,9 +29,7 @@ interface State {
   waitedMs: number;
 }
 
-/**
- * One run: what it is, where it runs, and how it stands.
- */
+/** One run: what it is, where it runs, and how it stands. */
 export function RunPage({ runId }: { runId: string }): ReactNode {
   const [state, setState] = useState<State>({ view: null, error: null, waitedMs: 0 });
 
@@ -59,62 +58,56 @@ export function RunPage({ runId }: { runId: string }): ReactNode {
 
   const { view, error, waitedMs } = state;
   return (
-    <main
-      style={{
-        flex: 1,
-        minWidth: 0,
-        overflowY: "auto",
-        padding: "var(--space-5)",
-        display: "flex",
-        flexDirection: "column",
-        gap: "var(--space-4)",
-      }}
-    >
-      <a
-        href={addressOf(OVERVIEW)}
-        style={{
-          color: "var(--color-text-muted)",
-          fontSize: "var(--font-size-sm)",
-          textDecoration: "none",
-        }}
-      >
-        ← Back to the overview
-      </a>
+    <main className="run-page">
+      <div className="run-page__content">
+        <nav className="run-page__breadcrumb" aria-label="Breadcrumb">
+          <a href={addressOf(OVERVIEW)}>
+            <span aria-hidden="true">←</span> Back to overview
+          </a>
+        </nav>
 
-      {error !== null && (
-        <p role="status" style={{ margin: 0, color: "var(--status-failed)" }}>
-          The Agent Hub API could not be reached: {error}
-        </p>
-      )}
-      {view === null && error === null && (
-        <p role="status" style={{ margin: 0, color: "var(--color-text-muted)" }}>
-          Loading this run…
-        </p>
-      )}
-      {view?.known === false &&
-        (waitedMs < STARTING_GRACE_MS ? <Starting runId={runId} /> : <Missing runId={runId} />)}
-      {view?.known === true && <Report runId={runId} view={view} />}
+        {error !== null && (
+          <div className="ui-feedback ui-feedback--error run-page__feedback" role="status">
+            <strong>Run information unavailable</strong>
+            <span>The Agent Hub API could not be reached: {error}</span>
+          </div>
+        )}
+        {view === null && error === null && <Loading />}
+        {view?.known === false &&
+          (waitedMs < STARTING_GRACE_MS ? <Starting runId={runId} /> : <Missing runId={runId} />)}
+        {view?.known === true && <Report runId={runId} view={view} />}
+      </div>
     </main>
   );
 }
 
-/**
- * The run has been started and the hub has not seen it yet.
- *
- * This is emphatically not an error: the operator has just started this work,
- * and telling them it does not exist is telling them their click failed.
- */
+function Loading(): ReactNode {
+  return (
+    <div className="run-state ui-surface" role="status">
+      <span className="run-state__spinner" aria-hidden="true" />
+      <div>
+        <p className="ui-kicker">Run details</p>
+        <h1>Loading this run…</h1>
+        <p>Reading its current state and operational record.</p>
+      </div>
+    </div>
+  );
+}
+
+/** The run has been started and the hub has not seen it yet. */
 function Starting({ runId }: { runId: string }): ReactNode {
   return (
-    <div role="status" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <h1 style={{ margin: 0, fontSize: "var(--font-size-xl)", fontWeight: 600 }}>
-        Starting…
-      </h1>
-      <p style={{ margin: 0, color: "var(--color-text-muted)" }}>
-        The work has been submitted. It appears here as soon as the orchestrator
-        reports it.
-      </p>
-      <code style={{ color: "var(--color-text-subtle)" }}>{runId}</code>
+    <div className="run-state ui-surface" role="status">
+      <span className="run-state__orbit" aria-hidden="true" />
+      <div>
+        <p className="ui-kicker">Submission accepted</p>
+        <h1>Starting…</h1>
+        <p>
+          The work has been submitted. It appears here as soon as the orchestrator
+          reports it.
+        </p>
+        <code>{runId}</code>
+      </div>
     </div>
   );
 }
@@ -122,14 +115,16 @@ function Starting({ runId }: { runId: string }): ReactNode {
 /** The hub does not know this run, and has waited long enough to say so. */
 function Missing({ runId }: { runId: string }): ReactNode {
   return (
-    <div role="status" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <h1 style={{ margin: 0, fontSize: "var(--font-size-xl)", fontWeight: 600 }}>
-        No such run
-      </h1>
-      <p style={{ margin: 0, color: "var(--color-text-muted)" }}>
-        The hub knows no run {runId}. It never started, or the orchestrator no
-        longer keeps it and nothing was recorded for it.
-      </p>
+    <div className="run-state run-state--missing ui-surface" role="status">
+      <span className="run-state__mark" aria-hidden="true">?</span>
+      <div>
+        <p className="ui-kicker">Unavailable</p>
+        <h1>No such run</h1>
+        <p>
+          The hub knows no run <code>{runId}</code>. It never started, or the
+          orchestrator no longer keeps it and nothing was recorded for it.
+        </p>
+      </div>
     </div>
   );
 }
@@ -143,121 +138,141 @@ function Report({
   view: Extract<RunView, { known: true }>;
 }): ReactNode {
   const { run, place } = view;
+  const statusLabel = STATUS_LABEL[run.status];
   return (
-    <>
-      <header style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <Icon name={run.icon} size={20} />
-          <h1 style={{ margin: 0, fontSize: "var(--font-size-xl)", fontWeight: 600 }}>
-            {run.label}
-          </h1>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <StatusDot status={run.status} />
-          <span
-            style={{ color: "var(--color-text-muted)", fontSize: "var(--font-size-sm)" }}
-          >
-            {STATUS_LABEL[run.status]}
+    <article className="run-report">
+      <header className="run-hero ui-surface">
+        <div className="run-hero__identity">
+          <span className="run-hero__icon" aria-hidden="true">
+            <Icon name={run.icon} size={22} />
           </span>
+          <div>
+            <p className="ui-eyebrow">{run.runType ?? "Run"} run</p>
+            <h1>{run.label || "Untitled run"}</h1>
+            <code className="run-hero__id">{runId}</code>
+          </div>
+        </div>
+        <div
+          className={`ui-status ui-status--${run.status} run-hero__status`}
+          role="status"
+          aria-label={`Run status: ${statusLabel}`}
+        >
+          <StatusDot status={run.status} size={8} filled />
+          {statusLabel}
+        </div>
+        <div className="run-hero__summary" aria-label="Run summary">
+          <SummaryItem label="Place">
+            {place ? (
+              <a href={addressOf({ name: "place", placeId: place.id })}>{place.label}</a>
+            ) : (
+              "Not recorded"
+            )}
+          </SummaryItem>
+          <SummaryItem label="Started">{view.startedAt ?? "Not recorded"}</SummaryItem>
+          <SummaryItem label="Ended">{view.endedAt ?? "Still running"}</SummaryItem>
         </div>
       </header>
 
-      <dl
-        style={{
-          margin: 0,
-          display: "grid",
-          gridTemplateColumns: "auto 1fr",
-          columnGap: 16,
-          rowGap: 8,
-          fontSize: "var(--font-size-sm)",
-          color: "var(--color-text-muted)",
-        }}
-      >
-        <dt>Run</dt>
-        <dd style={{ margin: 0, color: "var(--color-text)" }}>{runId}</dd>
-        <dt>Type</dt>
-        <dd style={{ margin: 0, color: "var(--color-text)" }}>{run.runType ?? "run"}</dd>
-        <dt>Place</dt>
-        <dd style={{ margin: 0, color: "var(--color-text)" }}>
-          {place ? (
-            <a
-              href={addressOf({ name: "place", placeId: place.id })}
-              style={{ color: "inherit" }}
-            >
-              {place.label}
-            </a>
-          ) : (
-            "Where this work runs was not recorded"
-          )}
-        </dd>
-        <dt>Started</dt>
-        <dd style={{ margin: 0, color: "var(--color-text)" }}>
-          {view.startedAt ?? "—"}
-        </dd>
-        <dt>Ended</dt>
-        <dd style={{ margin: 0, color: "var(--color-text)" }}>
-          {view.endedAt ?? "Still running"}
-        </dd>
-        <dt>Started by</dt>
-        <dd style={{ margin: 0, color: "var(--color-text)" }}>
-          {view.startedBy ?? "Not started from the hub"}
-        </dd>
-        {typeof run.iterations === "number" && (
-          <>
-            <dt>Iterations</dt>
-            <dd style={{ margin: 0, color: "var(--color-text)" }}>{run.iterations}</dd>
-          </>
-        )}
-        {typeof view.tokens === "number" && view.tokens > 0 && (
-          <>
-            <dt>Tokens</dt>
-            <dd style={{ margin: 0, color: "var(--color-text)" }}>{view.tokens}</dd>
-          </>
-        )}
-      </dl>
+      <div className="run-report__layout">
+        <div className="run-report__main">
+          <section
+            className="run-section ui-surface"
+            aria-labelledby="operational-details-heading"
+          >
+            <SectionHeader
+              kicker="Execution record"
+              heading="Operational details"
+              id="operational-details-heading"
+            />
+            <dl className="run-details">
+              <Detail label="Run"><code>{runId}</code></Detail>
+              <Detail label="Type">{run.runType ?? "run"}</Detail>
+              <Detail label="Started by">{view.startedBy ?? "Not started from the hub"}</Detail>
+              {typeof run.iterations === "number" && (
+                <Detail label="Iterations">{run.iterations}</Detail>
+              )}
+              {typeof view.tokens === "number" && view.tokens > 0 && (
+                <Detail label="Tokens">{view.tokens}</Detail>
+              )}
+            </dl>
+          </section>
 
-      <SteeringButton itemId={runId} />
-      <Instructions view={view} />
-      <Repeat view={view} />
-    </>
+          <Instructions view={view} />
+        </div>
+
+        <section
+          className="run-actions ui-surface"
+          aria-labelledby="available-actions-heading"
+        >
+          <SectionHeader
+            kicker="Next step"
+            heading="Available actions"
+            id="available-actions-heading"
+          />
+          <p className="run-actions__intro">
+            Guide work that needs input or start another run from this record.
+          </p>
+          <div className="run-actions__steering">
+            <SteeringButton itemId={runId} />
+          </div>
+          <Repeat view={view} />
+        </section>
+      </div>
+    </article>
   );
 }
 
-/**
- * Which stored instruction the run resolved for each governed key.
- *
- * The text is not here because it is not published: the version is named, so a
- * page cannot show an instruction that has since been edited as though it were
- * the one that ran.
- */
+function SummaryItem({ label, children }: { label: string; children: ReactNode }): ReactNode {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{children}</strong>
+    </div>
+  );
+}
+
+function SectionHeader({
+  kicker,
+  heading,
+  id,
+}: {
+  kicker: string;
+  heading: string;
+  id: string;
+}): ReactNode {
+  return (
+    <header className="run-section__header">
+      <p className="ui-kicker">{kicker}</p>
+      <h2 id={id}>{heading}</h2>
+    </header>
+  );
+}
+
+function Detail({ label, children }: { label: string; children: ReactNode }): ReactNode {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{children}</dd>
+    </div>
+  );
+}
+
+/** Which stored instruction the run resolved for each governed key. */
 function Instructions({ view }: { view: Extract<RunView, { known: true }> }): ReactNode {
   if (view.instructions.length === 0) return null;
   return (
-    <section
-      aria-labelledby="instructions-heading"
-      style={{ display: "flex", flexDirection: "column", gap: 6 }}
-    >
-      <h2
+    <section className="run-section ui-surface" aria-labelledby="instructions-heading">
+      <SectionHeader
+        kicker="Governance"
+        heading="Instructions it ran under"
         id="instructions-heading"
-        style={{
-          margin: 0,
-          fontSize: "var(--font-size-xs)",
-          letterSpacing: "0.08em",
-          color: "var(--color-text-subtle)",
-          textTransform: "uppercase",
-          fontWeight: 600,
-        }}
-      >
-        Instructions it ran under
-      </h2>
-      <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 4 }}>
+      />
+      <ul className="run-instructions">
         {view.instructions.map((used) => (
-          <li
-            key={`${used.key}:${used.scope}:${used.version}`}
-            style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-muted)" }}
-          >
-            <span style={{ color: "var(--color-text)" }}>{used.key}</span> · {used.scope} ·
-            version {used.version}
+          <li key={`${used.key}:${used.scope}:${used.version}`}>
+            <strong>{used.key}</strong>
+            <span>{used.scope}</span>
+            <span>version {used.version}</span>
           </li>
         ))}
       </ul>
@@ -265,15 +280,7 @@ function Instructions({ view }: { view: Extract<RunView, { known: true }> }): Re
   );
 }
 
-/**
- * Running this run again.
- *
- * A repeat asks for exactly what the record holds — the same kind of pass, the
- * same instruction, the same place — and it invents nothing: a run whose place
- * was never recorded, or a develop pass whose instruction the record does not
- * hold, cannot be repeated, and is said so rather than started somewhere else or
- * with something else.
- */
+/** Running this run again. */
 function Repeat({ view }: { view: Extract<RunView, { known: true }> }): ReactNode {
   const [repeating, setRepeating] = useState(false);
   const [refusal, setRefusal] = useState<ApiError | Error | null>(null);
@@ -305,55 +312,35 @@ function Repeat({ view }: { view: Extract<RunView, { known: true }> }): ReactNod
   };
 
   return (
-    <section style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
+    <div className="run-repeat" aria-busy={repeating}>
       <button
+        className="ui-button ui-button--secondary"
         type="button"
         onClick={() => void submit()}
         disabled={repeating || why !== null}
         title={why ?? "Start the same work again"}
-        style={{
-          padding: "8px 14px",
-          borderRadius: "var(--radius-sm)",
-          border: "1px solid var(--color-border-strong)",
-          background: "var(--color-surface-2)",
-          color: "var(--color-text)",
-          fontSize: "var(--font-size-sm)",
-          opacity: repeating || why !== null ? 0.5 : 1,
-        }}
       >
         {repeating ? "Starting…" : "Run this again"}
       </button>
       {why !== null && (
-        <p
-          role="status"
-          style={{ margin: 0, color: "var(--color-text-subtle)", fontSize: "var(--font-size-sm)" }}
-        >
+        <p className="run-repeat__note" role="status">
           {why}
         </p>
       )}
       {refusal !== null && (
-        <p
-          role="alert"
-          style={{
-            margin: 0,
-            display: "flex",
-            gap: 8,
-            color: "var(--status-failed)",
-            fontSize: "var(--font-size-sm)",
-          }}
-        >
-          {refusal instanceof ApiError && refusal.detail !== "" ? refusal.detail : refusal.message}
+        <div className="ui-feedback ui-feedback--error" role="alert">
+          <strong>Run not started</strong>
+          <span>
+            {refusal instanceof ApiError && refusal.detail !== "" ? refusal.detail : refusal.message}
+          </span>
           {refusal instanceof ApiError && refusal.conflictingRunId !== "" && (
-            <a
-              href={addressOf({ name: "run", runId: refusal.conflictingRunId })}
-              style={{ color: "inherit" }}
-            >
+            <a href={addressOf({ name: "run", runId: refusal.conflictingRunId })}>
               Show the run in the way
             </a>
           )}
-        </p>
+        </div>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -363,11 +350,7 @@ function repeatableKind(runType: string | undefined): StartKind | null {
   return null;
 }
 
-/**
- * Why this run cannot be repeated, or nothing. Each answer names a fact the
- * record does not hold, because that is the only reason a repeat is refused
- * here — everything else is the server's to refuse.
- */
+/** Why this run cannot be repeated, or nothing. */
 function whyNotRepeatable(
   view: Extract<RunView, { known: true }>,
   kind: StartKind | null,
