@@ -35,6 +35,7 @@
   --color-surface-overlay: rgba(11, 13, 18, 0.82);
   --color-border: #262c38;
   --color-border-strong: #364052;
+  --color-shadow: rgba(0, 0, 0, 0.48);
 
   /* Text */
   --color-text: #e6eaf2;
@@ -43,6 +44,7 @@
 
   /* Accent */
   --color-accent: #7aa2ff;
+  --color-on-accent: #0b0d12;
 
   /* Status colors (one per status; consumed by legend + orbit dots) */
   --status-todo: #6b7280;
@@ -75,6 +77,7 @@
   --color-surface-overlay: rgba(255, 255, 255, 0.88);
   --color-border: #e2e6ee;
   --color-border-strong: #c3cad8;
+  --color-shadow: rgba(9, 30, 66, 0.22);
 
   /* Text */
   --color-text: #1b2130;
@@ -83,6 +86,7 @@
 
   /* Accent */
   --color-accent: #3b6fe0;
+  --color-on-accent: #ffffff;
 
   /* Status colors — slightly deeper for contrast on white. */
   --status-todo: #6b7280;

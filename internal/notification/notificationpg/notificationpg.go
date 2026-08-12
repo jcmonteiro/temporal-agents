@@ -117,6 +117,14 @@ ON CONFLICT DO NOTHING`, principal, id)
 	return nil
 }
 
+func (s *Store) MarkAllRead(ctx context.Context, principal string) error {
+	_, err := s.pool.Exec(ctx, `
+INSERT INTO notification_reads (notification_id,principal,read_at)
+SELECT id,$1,now() FROM notifications WHERE recipient='' OR recipient=$1
+ON CONFLICT DO NOTHING`, principal)
+	return err
+}
+
 func (s *Store) ClearRead(ctx context.Context, principal string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM notification_reads WHERE principal=$1`, principal)
 	return err

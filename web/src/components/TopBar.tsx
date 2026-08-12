@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSession } from "../platform/session";
-import type { NotificationDTO } from "../clients/api";
-import { clearNotificationReadState, loadNotifications, markNotificationRead } from "../clients/notifications";
+import type { NotificationCollectionDTO, NotificationDTO } from "../clients/api";
+import { loadNotifications, markAllNotificationsRead, markNotificationRead } from "../clients/notifications";
+import { Icon } from "./Icon";
 
 export function TopBar(): ReactNode {
   return (
@@ -83,8 +84,16 @@ function Inbox(): ReactNode {
   const [items, setItems] = useState<NotificationDTO[]>([]);
   const [unread, setUnread] = useState(0);
   const [open, setOpen] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [onlyUnread, setOnlyUnread] = useState(false);
+  const [markingAll, setMarkingAll] = useState(false);
   const [nativeEnabled, setNativeEnabled] = useState(false);
   const seen = useRef(new Set<string>());
+
+  const accept = (notifications: NotificationCollectionDTO): void => {
+    setItems(notifications.items);
+    setUnread(notifications.unread);
+  };
 
   useEffect(() => {
     if (state.status !== "signed-in") return;
@@ -92,8 +101,7 @@ function Inbox(): ReactNode {
     const refresh = async (): Promise<void> => {
       const result = await loadNotifications();
       if (cancelled || !result.ok) return;
-      setItems(result.value.items);
-      setUnread(result.value.unread);
+      accept(result.value);
       if (nativeEnabled && typeof Notification !== "undefined" && Notification.permission === "granted") {
         for (const item of result.value.items) {
           if (!item.read && !seen.current.has(item.id)) new Notification(item.title, { body: item.body });
@@ -107,42 +115,148 @@ function Inbox(): ReactNode {
   }, [state.status, nativeEnabled]);
 
   const read = async (item: NotificationDTO): Promise<void> => {
-    await markNotificationRead(item.id);
+    const result = await markNotificationRead(item.id);
+    if (!result.ok) return;
     setItems((current) => current.map((candidate) => candidate.id === item.id ? { ...candidate, read: true } : candidate));
     setUnread((count) => Math.max(0, count - (item.read ? 0 : 1)));
   };
+
+  const markAllRead = async (): Promise<void> => {
+    setMarkingAll(true);
+    const result = await markAllNotificationsRead();
+    if (result.ok) {
+      const refreshed = await loadNotifications();
+      if (refreshed.ok) {
+        accept(refreshed.value);
+      } else {
+        setItems((current) => current.map((item) => ({ ...item, read: true })));
+        setUnread(0);
+      }
+    }
+    setMarkingAll(false);
+    setActionsOpen(false);
+  };
+
   const enableNative = async (): Promise<void> => {
     if (typeof Notification === "undefined") return;
     const permission = await Notification.requestPermission();
     setNativeEnabled(permission === "granted");
+    setActionsOpen(false);
   };
 
+  const visibleItems = onlyUnread ? items.filter((item) => !item.read) : items;
+
   return (
-    <div style={{ position: "relative" }}>
-      <button aria-label={`Notifications, ${unread} unread`} onClick={() => setOpen((value) => !value)} style={{ width: 32, height: 32, position: "relative" }}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <div className="notification-inbox">
+      <button
+        type="button"
+        aria-label={`Notifications, ${unread} unread`}
+        aria-expanded={open}
+        onClick={() => { setOpen((value) => !value); setActionsOpen(false); }}
+        className="notification-trigger"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2H4.5z" /><path d="M10 20a2 2 0 0 0 4 0" />
         </svg>
-        {unread > 0 && <span aria-hidden="true" style={{ position: "absolute", top: -4, right: -4 }}>{unread}</span>}
+        {unread > 0 && <span aria-hidden="true" className="notification-count">{unread}</span>}
       </button>
       {open && (
-        <section aria-label="Notification inbox" style={{ position: "absolute", right: 0, top: 38, zIndex: 90, width: 360, maxHeight: 480, overflowY: "auto", background: "var(--color-surface)", border: "1px solid var(--color-border)", padding: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <strong>Notifications</strong>
-            <button type="button" onClick={() => void enableNative()}>Enable native notifications</button>
+        <section aria-label="Notification inbox" className="notification-panel">
+          <div className="notification-panel-header">
+            <h2>Notifications</h2>
+            <div className="notification-toolbar">
+              <span id="only-unread-label">Only show unread</span>
+              <button
+                type="button"
+                role="switch"
+                aria-labelledby="only-unread-label"
+                aria-checked={onlyUnread}
+                onClick={() => setOnlyUnread((value) => !value)}
+                className="notification-switch"
+              >
+                <span aria-hidden="true" />
+              </button>
+              <div className="notification-actions">
+                <button
+                  type="button"
+                  aria-label="Notification actions"
+                  aria-haspopup="menu"
+                  aria-expanded={actionsOpen}
+                  onClick={() => setActionsOpen((value) => !value)}
+                  className="notification-actions-trigger"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <circle cx="12" cy="5" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="12" cy="19" r="1.6" />
+                  </svg>
+                </button>
+                {actionsOpen && (
+                  <div role="menu" aria-label="Notification actions" className="notification-actions-menu">
+                    <button type="button" role="menuitem" disabled={unread === 0 || markingAll} onClick={() => void markAllRead()}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true">
+                        <circle cx="12" cy="12" r="8.5" /><path d="M8.5 12l2.5 2.5L15.5 10" />
+                      </svg>
+                      {markingAll ? "Marking as read…" : "Mark all as read"}
+                    </button>
+                    <button type="button" role="menuitem" disabled={nativeEnabled} onClick={() => void enableNative()}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true">
+                        <path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2H4.5z" /><path d="M10 20a2 2 0 0 0 4 0" />
+                      </svg>
+                      {nativeEnabled ? "Native notifications enabled" : "Enable native notifications"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
-          {items.length === 0 ? <p>No notifications.</p> : items.map((item) => (
-            <article key={item.id} style={{ opacity: item.read ? .65 : 1, borderTop: "1px solid var(--color-border)", padding: "10px 0" }}>
-              <a href={item.url} onClick={() => void read(item)}><strong>{item.title}</strong></a>
-              <p style={{ margin: "4px 0" }}>{item.body}</p>
-              <small>{item.createdAt ?? "Time unknown"}</small>
-            </article>
-          ))}
-          <button type="button" onClick={() => void clearNotificationReadState().then(() => { setItems((current) => current.map((item) => ({ ...item, read: false }))); setUnread(items.length); })}>Clear read state</button>
+          <div className="notification-list">
+            <h3>Latest</h3>
+            {visibleItems.length === 0 ? (
+              <p className="notification-empty">{onlyUnread ? "No unread notifications." : "No notifications."}</p>
+            ) : visibleItems.map((item) => (
+              <article key={item.id} className="notification-item" data-read={item.read || undefined}>
+                <a href={item.url} onClick={() => void read(item)}>
+                  <span className="notification-state-icon" aria-label={item.kind === "steering" ? "Workflow waiting for input" : "Workflow completed"}>
+                    <Icon
+                      name={item.kind === "steering" ? "users" : "check"}
+                      size={22}
+                      color={item.kind === "steering" ? "var(--status-waiting-input)" : "var(--status-done)"}
+                    />
+                  </span>
+                  <span className="notification-copy">
+                    <strong>{item.title}</strong>
+                    <span>{item.body}</span>
+                    <time dateTime={item.createdAt ?? undefined}>{ageOf(item.createdAt)}</time>
+                  </span>
+                  {!item.read && <span aria-label="Unread" className="notification-unread-dot" />}
+                </a>
+              </article>
+            ))}
+          </div>
         </section>
       )}
     </div>
   );
+}
+
+function ageOf(createdAt: string | null): string {
+  if (createdAt === null) return "Time unknown";
+  const elapsed = Math.max(0, Date.now() - Date.parse(createdAt));
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (elapsed >= day) {
+    const days = Math.floor(elapsed / day);
+    return `${days} ${days === 1 ? "day" : "days"} ago`;
+  }
+  if (elapsed >= hour) {
+    const hours = Math.floor(elapsed / hour);
+    return `${hours} ${hours === 1 ? "hour" : "hours"} ago`;
+  }
+  if (elapsed >= minute) {
+    const minutes = Math.floor(elapsed / minute);
+    return `${minutes} ${minutes === 1 ? "minute" : "minutes"} ago`;
+  }
+  return "Just now";
 }
 
 /**

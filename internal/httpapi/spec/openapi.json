@@ -1635,6 +1635,30 @@
       }
     },
     "/api/v1/notifications/read": {
+      "post": {
+        "tags": [
+          "Notifications"
+        ],
+        "summary": "Mark every notification read for the current principal",
+        "operationId": "markAllNotificationsRead",
+        "responses": {
+          "204": {
+            "description": "All notifications marked read."
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthenticationRequired"
+          },
+          "429": {
+            "$ref": "#/components/responses/TooManyRequests"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "default": {
+            "$ref": "#/components/responses/InternalError"
+          }
+        }
+      },
       "delete": {
         "tags": [
           "Notifications"

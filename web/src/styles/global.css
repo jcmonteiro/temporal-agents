@@ -21,6 +21,258 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: default;
+}
+
+.notification-inbox {
+  position: relative;
+}
+
+.notification-trigger {
+  position: relative;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border-radius: var(--radius-sm);
+}
+
+.notification-trigger:hover,
+.notification-trigger[aria-expanded="true"] {
+  background: var(--color-surface-2);
+}
+
+.notification-count {
+  position: absolute;
+  top: -5px;
+  right: -7px;
+  display: grid;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 var(--space-1);
+  place-items: center;
+  border: 2px solid var(--color-surface);
+  border-radius: 999px;
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.notification-panel {
+  position: absolute;
+  z-index: 90;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  display: flex;
+  width: min(460px, calc(100vw - 2 * var(--space-4)));
+  max-height: min(620px, calc(100vh - 80px));
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: 0 8px 28px var(--color-shadow);
+}
+
+.notification-panel-header {
+  display: flex;
+  min-height: 72px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.notification-panel-header h2 {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  line-height: 1.2;
+}
+
+.notification-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+
+.notification-switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.notification-switch span {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  transition: transform 120ms ease, background 120ms ease;
+}
+
+.notification-switch[aria-checked="true"] {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+
+.notification-switch[aria-checked="true"] span {
+  transform: translateX(16px);
+  background: var(--color-on-accent);
+}
+
+.notification-actions {
+  position: relative;
+  margin-left: var(--space-1);
+}
+
+.notification-actions-trigger {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border-radius: var(--radius-sm);
+}
+
+.notification-actions-trigger:hover,
+.notification-actions-trigger[aria-expanded="true"] {
+  color: var(--color-accent);
+  background: var(--color-surface-2);
+}
+
+.notification-actions-menu {
+  position: absolute;
+  z-index: 1;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  width: 250px;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: 0 8px 28px var(--color-shadow);
+}
+
+.notification-actions-menu button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+
+.notification-actions-menu button:hover:not(:disabled) {
+  background: var(--color-surface-2);
+}
+
+.notification-actions-menu button:disabled {
+  color: var(--color-text-subtle);
+}
+
+.notification-list {
+  overflow-y: auto;
+}
+
+.notification-list h3 {
+  margin: 0;
+  padding: var(--space-4) var(--space-5) var(--space-2);
+  font-size: var(--font-size-md);
+}
+
+.notification-empty {
+  margin: 0;
+  padding: var(--space-5);
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.notification-item {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.notification-item:last-child {
+  border-bottom: 0;
+}
+
+.notification-item > a {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 8px;
+  align-items: start;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  color: inherit;
+  text-decoration: none;
+}
+
+.notification-item > a:hover {
+  background: var(--color-surface-2);
+}
+
+.notification-item[data-read] .notification-copy strong {
+  font-weight: 500;
+}
+
+.notification-state-icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  background: var(--color-surface-2);
+}
+
+.notification-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.notification-copy strong {
+  font-size: var(--font-size-md);
+  line-height: 1.35;
+}
+
+.notification-copy > span {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notification-copy time {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-xs);
+}
+
+.notification-unread-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: var(--space-2);
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+
 /* Satellites are focusable <g> elements. Suppress the browser's default
    rectangular focus box and show a circular ring only for keyboard focus. */
 .satellite {

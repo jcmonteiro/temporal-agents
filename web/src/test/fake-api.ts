@@ -114,6 +114,10 @@ export class FakeApi {
       if (path === "/api/v1/notifications" && method === "GET") {
         return Promise.resolve(this.json({ items: this.notifications, count: this.notifications.length, limit: 100, unread: this.notifications.filter((item) => !item.read).length }));
       }
+      if (path === "/api/v1/notifications/read" && method === "POST") {
+        this.notifications = this.notifications.map((item) => ({ ...item, read: true }));
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
       if (path.startsWith("/api/v1/notifications/") && path.endsWith("/read") && method === "POST") {
         const id = decodeURIComponent(path.slice("/api/v1/notifications/".length, -"/read".length));
         this.notifications = this.notifications.map((item) => item.id === id ? { ...item, read: true } : item);

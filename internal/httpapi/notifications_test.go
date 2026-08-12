@@ -29,6 +29,12 @@ func (s *notificationsStub) MarkRead(_ context.Context, _ string, id string) err
 	}
 	return nil
 }
+func (s *notificationsStub) MarkAllRead(context.Context, string) error {
+	for n := range s.items {
+		s.items[n].Read = true
+	}
+	return nil
+}
 func (s *notificationsStub) ClearRead(context.Context, string) error {
 	for n := range s.items {
 		s.items[n].Read = false
@@ -49,5 +55,21 @@ func TestNotificationInboxCountMatchesUnreadItems(t *testing.T) {
 	decodeResponse(t, response, &body)
 	if body.Unread != 1 || body.Count != 2 {
 		t.Fatalf("inbox = %+v", body)
+	}
+}
+
+func TestMarkAllNotificationsRead(t *testing.T) {
+	inbox := &notificationsStub{items: []notification.InboxItem{{ID: "one"}, {ID: "two", Read: true}}}
+	server := newTestServer(t, &viewStub{}, func(options *Options) { options.Notifications = inbox })
+
+	response := request(t, server, "POST", BasePath+"/notifications/read", nil)
+
+	if response.Code != 204 {
+		t.Fatalf("status %d: %s", response.Code, response.Body.String())
+	}
+	for _, item := range inbox.items {
+		if !item.Read {
+			t.Fatalf("notification %q remains unread", item.ID)
+		}
 	}
 }

@@ -25,6 +25,7 @@ type InboxStore interface {
 	List(ctx context.Context, principal string, limit int) ([]InboxItem, error)
 	Unread(ctx context.Context, principal string) (int, error)
 	MarkRead(ctx context.Context, principal, id string) error
+	MarkAllRead(ctx context.Context, principal string) error
 	ClearRead(ctx context.Context, principal string) error
 }
 
@@ -41,6 +42,9 @@ func (i *Inbox) Unread(ctx context.Context, principal string) (int, error) {
 }
 func (i *Inbox) MarkRead(ctx context.Context, principal, id string) error {
 	return i.Store.MarkRead(ctx, principal, id)
+}
+func (i *Inbox) MarkAllRead(ctx context.Context, principal string) error {
+	return i.Store.MarkAllRead(ctx, principal)
 }
 func (i *Inbox) ClearRead(ctx context.Context, principal string) error {
 	return i.Store.ClearRead(ctx, principal)

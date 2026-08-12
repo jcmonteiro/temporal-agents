@@ -9,6 +9,6 @@ export function markNotificationRead(id: string) {
   return send(`/notifications/${encodeURIComponent(id)}/read`, "POST");
 }
 
-export function clearNotificationReadState() {
-  return send("/notifications/read", "DELETE");
+export function markAllNotificationsRead() {
+  return send("/notifications/read", "POST");
 }
