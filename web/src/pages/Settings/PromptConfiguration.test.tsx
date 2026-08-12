@@ -96,6 +96,20 @@ it("shows a diff against the server-provided inherited value before saving", asy
   expect(screen.getByText(/applies to every place that inherits/i)).toBeTruthy();
 });
 
+it("confirms that an instruction override was saved", async () => {
+  api.promptCatalogues.global = [aPrompt({ effective: "Review the branch" })];
+  await openConfiguration();
+  fireEvent.change(screen.getByLabelText("Instruction text"), {
+    target: { value: "Review the branch and its tests" },
+  });
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Save override" }));
+  });
+
+  expect(screen.getByRole("status").textContent).toMatch(/override saved/i);
+});
+
 it("shows a validation refusal against the instruction field", async () => {
   api.promptCatalogues.global = [
     aPrompt({

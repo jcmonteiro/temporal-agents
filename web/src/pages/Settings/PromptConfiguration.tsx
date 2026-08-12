@@ -25,6 +25,7 @@ export function PromptConfiguration({ fixedLocation }: Props): ReactNode {
   const [catalogue, setCatalogue] = useState<PromptDTO[] | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [confirmation, setConfirmation] = useState<string | null>(null);
 
   useEffect(() => {
     if (fixedLocation !== undefined) return;
@@ -103,7 +104,10 @@ export function PromptConfiguration({ fixedLocation }: Props): ReactNode {
             <select
               aria-label="Configuration scope"
               value={locationId}
-              onChange={(event) => setLocationId(event.target.value)}
+              onChange={(event) => {
+                setConfirmation(null);
+                setLocationId(event.target.value);
+              }}
               style={fieldStyle}
             >
               <option value="">Global</option>
@@ -120,6 +124,11 @@ export function PromptConfiguration({ fixedLocation }: Props): ReactNode {
       <div style={{ color: "var(--color-text-subtle)", fontSize: "var(--font-size-xs)" }}>
         Scope: {scopeLabel}
       </div>
+      {confirmation !== null && (
+        <p role="status" style={{ margin: 0, color: "var(--color-success-text)" }}>
+          {confirmation}
+        </p>
+      )}
       {readError !== null && (
         <p role="status" style={{ margin: 0, color: "var(--status-failed)" }}>
           The instructions could not be read: {readError}
@@ -147,14 +156,20 @@ export function PromptConfiguration({ fixedLocation }: Props): ReactNode {
           <PromptList
             prompts={catalogue}
             selectedKey={selectedKey}
-            onSelect={setSelectedKey}
+            onSelect={(key) => {
+              setConfirmation(null);
+              setSelectedKey(key);
+            }}
           />
           {selected !== null && (
             <PromptEditor
               key={`${locationId}:${selected.key}:${selected.version}:${selected.overridden}`}
               prompt={selected}
               locationId={locationId}
-              onChanged={refresh}
+              onChanged={async (message) => {
+                await refresh();
+                setConfirmation(message);
+              }}
             />
           )}
         </div>
@@ -227,7 +242,7 @@ function PromptEditor({
 }: {
   prompt: PromptDTO;
   locationId: string;
-  onChanged: () => Promise<void>;
+  onChanged: (message: string) => Promise<void>;
 }): ReactNode {
   const [draft, setDraft] = useState(prompt.effective);
   const [saving, setSaving] = useState(false);
@@ -243,7 +258,7 @@ function PromptEditor({
     setSaving(true);
     setRefusal(null);
     const result = await savePrompt(prompt.key, draft, locationId);
-    if (result.ok) await onChanged();
+    if (result.ok) await onChanged(`Override saved for ${prompt.key}.`);
     else setRefusal(messageOf(result.error));
     setSaving(false);
   };
@@ -254,8 +269,11 @@ function PromptEditor({
     setSaving(true);
     setRefusal(null);
     const result = await resetPrompt(prompt.key, locationId);
-    if (result.ok) await onChanged();
-    else setRefusal(messageOf(result.error));
+    if (result.ok) {
+      await onChanged(
+        `${prompt.key} returned to ${locationId === "" ? "the shipped default" : "the inherited value"}.`,
+      );
+    } else setRefusal(messageOf(result.error));
     setSaving(false);
   };
 
