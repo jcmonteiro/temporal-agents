@@ -1,7 +1,4 @@
-/* Design tokens. IB §2: all color/spacing/typography values are CSS custom
-   properties on a single root scope, never hard-coded in components. Switching
-   theme is a matter of toggling the [data-theme] attribute — no component
-   changes. */
+/* Application-wide design tokens. Theme changes require no component changes. */
 
 /* Non-color tokens shared by every theme. */
 :root {
@@ -12,6 +9,8 @@
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
 
   /* Typography */
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -20,10 +19,23 @@
   --font-size-md: 14px;
   --font-size-lg: 16px;
   --font-size-xl: 20px;
+  --font-size-2xl: 28px;
+  --font-weight-regular: 400;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --line-height-tight: 1.2;
+  --line-height-body: 1.55;
 
+  /* Shape, control, focus, and motion */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
+  --radius-full: 999px;
+  --control-height: 40px;
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --motion-fast: 120ms;
+  --content-width-wide: 1120px;
 }
 
 :root[data-theme="dark"] {
@@ -40,11 +52,29 @@
   /* Text */
   --color-text: #e6eaf2;
   --color-text-muted: #9099ad;
-  --color-text-subtle: #626b80;
+  --color-text-subtle: #7d879c;
 
   /* Accent */
   --color-accent: #7aa2ff;
+  --color-accent-hover: #96b6ff;
+  --color-accent-soft: rgba(122, 162, 255, 0.13);
   --color-on-accent: #0b0d12;
+  --color-focus-ring: #b7ccff;
+
+  /* Semantic feedback */
+  --color-success-text: #86efac;
+  --color-success-border: rgba(34, 197, 94, 0.48);
+  --color-success-soft: rgba(34, 197, 94, 0.1);
+  --color-warning-text: #fcd34d;
+  --color-warning-border: rgba(245, 158, 11, 0.5);
+  --color-warning-soft: rgba(245, 158, 11, 0.1);
+  --color-danger-text: #fca5a5;
+  --color-danger-border: rgba(239, 68, 68, 0.5);
+  --color-danger-soft: rgba(239, 68, 68, 0.1);
+
+  /* Elevation */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.24);
+  --shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.42);
 
   /* Status colors (one per status; consumed by legend + orbit dots) */
   --status-todo: #6b7280;
@@ -82,11 +112,29 @@
   /* Text */
   --color-text: #1b2130;
   --color-text-muted: #5a6478;
-  --color-text-subtle: #8b93a5;
+  --color-text-subtle: #6b7280;
 
   /* Accent */
   --color-accent: #3b6fe0;
+  --color-accent-hover: #2d5fc6;
+  --color-accent-soft: #eaf0ff;
   --color-on-accent: #ffffff;
+  --color-focus-ring: #1d4ed8;
+
+  /* Semantic feedback */
+  --color-success-text: #166534;
+  --color-success-border: rgba(22, 163, 74, 0.42);
+  --color-success-soft: #f0fdf4;
+  --color-warning-text: #92400e;
+  --color-warning-border: rgba(217, 119, 6, 0.42);
+  --color-warning-soft: #fffbeb;
+  --color-danger-text: #b91c1c;
+  --color-danger-border: rgba(220, 38, 38, 0.42);
+  --color-danger-soft: #fef2f2;
+
+  /* Elevation */
+  --shadow-sm: 0 2px 8px rgba(9, 30, 66, 0.12);
+  --shadow-lg: 0 18px 48px rgba(9, 30, 66, 0.18);
 
   /* Status colors — slightly deeper for contrast on white. */
   --status-todo: #6b7280;
