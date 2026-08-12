@@ -33,6 +33,8 @@ export class FakeApi {
   locations: LocationResource[] = [theUnknownPlace()];
   /** While true, every request answers 503. */
   down = false;
+  /** Optional edge latency for loading and in-progress UI scenarios. */
+  latencyMs = 0;
   /**
    * Who the API says the request is made by, or null for a browser whose
    * credential the API refuses. A refused credential closes the whole API, not
@@ -96,7 +98,10 @@ export class FakeApi {
 
   install(): void {
     this.original = globalThis.fetch;
-    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (this.latencyMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, this.latencyMs));
+      }
       const url = new URL(String(input), "http://test.local");
       const path = url.pathname;
       const method = init?.method ?? "GET";

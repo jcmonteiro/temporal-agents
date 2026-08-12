@@ -1,4 +1,5 @@
 .settings-page {
+  container-type: inline-size;
   flex: 1;
   min-width: 0;
   overflow-x: hidden;
@@ -100,7 +101,7 @@
 
 .settings-state--override {
   border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
-  color: var(--color-accent);
+  color: var(--color-accent-hover);
   background: var(--color-accent-soft);
 }
 
@@ -155,6 +156,10 @@
 .settings-empty span {
   font-size: var(--font-size-sm);
   line-height: var(--line-height-body);
+}
+
+.prompt-configuration {
+  container-type: inline-size;
 }
 
 .prompt-configuration__header {
@@ -268,7 +273,7 @@
 }
 
 .prompt-option__preview {
-  color: var(--color-text-subtle);
+  color: var(--color-text-muted);
 }
 
 .prompt-editor {
@@ -553,7 +558,7 @@
   white-space: nowrap;
 }
 
-@media (max-width: 760px) {
+@container (max-width: 760px) {
   .settings-page__content {
     padding: var(--space-4);
     gap: var(--space-4);
@@ -628,7 +633,7 @@
   }
 }
 
-@media (max-width: 440px) {
+@container (max-width: 440px) {
   .settings-page__content {
     padding: var(--space-3);
   }
