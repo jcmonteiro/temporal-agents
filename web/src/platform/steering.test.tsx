@@ -46,6 +46,7 @@ function Surface() {
 async function openModal(): Promise<HTMLElement> {
   render(<SteeringProvider><Surface /></SteeringProvider>);
   const open = await screen.findByRole("button", { name: "Open guidance" });
+  open.focus();
   fireEvent.click(open);
   const dialog = await screen.findByRole("dialog", { name: "Guide this review round" });
   await waitFor(() => expect(within(dialog).queryByText("Loading the waiting round…")).toBeNull());
@@ -72,6 +73,31 @@ it("cannot build with empty guidance and manages keyboard focus", async () => {
 
   fireEvent.keyDown(window, { key: "Escape" });
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("returns keyboard focus to the action that opened steering", async () => {
+  const dialog = await openModal();
+  const opener = screen.getByRole("button", { name: "Open guidance" });
+  await waitFor(() => expect(document.activeElement).toBe(
+    within(dialog).getByLabelText("Guidance for the implementing agent"),
+  ));
+
+  fireEvent.keyDown(window, { key: "Escape" });
+
+  expect(document.activeElement).toBe(opener);
+});
+
+it("keeps keyboard focus inside the steering dialog", async () => {
+  const dialog = await openModal();
+  const close = within(dialog).getByRole("button", { name: "Close steering" });
+  const stop = within(dialog).getByRole("button", { name: "Stop the loop" });
+  stop.focus();
+
+  fireEvent.keyDown(dialog, { key: "Tab" });
+
+  expect(document.activeElement).toBe(close);
+  fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+  expect(document.activeElement).toBe(stop);
 });
 
 it("sends one decision for a burst of clicks", async () => {

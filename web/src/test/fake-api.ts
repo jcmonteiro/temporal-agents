@@ -87,6 +87,12 @@ export class FakeApi {
   steeringSessions: Record<string, SteeringSessionDTO> = {};
   /** How many decision writes arrived, for burst-idempotency tests. */
   steeringDecisions = 0;
+  /** Optional steering-detail latency for loading-state stories. */
+  steeringDetailLatencyMs = 0;
+  /** Keeps steering commands open so pending-state stories remain reviewable. */
+  pendingSteeringCommands = false;
+  /** Refuses steering detail reads while leaving the waiting collection available. */
+  steeringDetailDown = false;
   notifications: NotificationDTO[] = [];
   /** Prompt catalogues exactly as the server resolved them, keyed by location id. */
   promptCatalogues: Record<string, PromptDTO[]> = { global: [] };
@@ -141,6 +147,15 @@ export class FakeApi {
         }));
       }
       if (path.startsWith("/api/v1/steering/sessions/")) {
+        if (this.steeringDetailLatencyMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, this.steeringDetailLatencyMs));
+        }
+        if (this.steeringDetailDown) {
+          return Promise.resolve(this.problem(503, "unavailable", "steering could not be loaded"));
+        }
+        if (this.pendingSteeringCommands && method === "POST") {
+          return new Promise<Response>(() => undefined);
+        }
         return Promise.resolve(this.steering(path, method, init?.body));
       }
       if (path.startsWith("/api/v1/runs/")) {
