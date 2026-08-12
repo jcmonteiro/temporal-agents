@@ -5,12 +5,21 @@ import {
   type RegisteredPlace,
 } from "../../clients/places";
 import { ApiError } from "../../clients/http";
-import { addressOf } from "../../platform/route";
+import {
+  addressOf,
+  SETTINGS,
+  SETTINGS_PLACES,
+  type SettingsCategory,
+} from "../../platform/route";
 import { PromptConfiguration } from "./PromptConfiguration";
 import "./settings.css";
 
-/** The hub configuration available to an operator. */
-export function SettingsPage(): ReactNode {
+/** The hub configuration available to an operator, one category at a time. */
+export function SettingsPage({
+  category = "instructions",
+}: {
+  category?: SettingsCategory;
+}): ReactNode {
   return (
     <main className="settings-page">
       <div className="settings-page__content">
@@ -22,8 +31,23 @@ export function SettingsPage(): ReactNode {
             instructions.
           </p>
         </header>
-        <PromptConfiguration />
-        <Places />
+
+        <nav className="settings-category-nav" aria-label="Settings categories">
+          <a
+            href={addressOf(SETTINGS)}
+            aria-current={category === "instructions" ? "page" : undefined}
+          >
+            Instructions
+          </a>
+          <a
+            href={addressOf(SETTINGS_PLACES)}
+            aria-current={category === "places" ? "page" : undefined}
+          >
+            Places
+          </a>
+        </nav>
+
+        {category === "instructions" ? <PromptConfiguration /> : <Places />}
       </div>
     </main>
   );

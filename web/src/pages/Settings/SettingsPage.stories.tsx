@@ -113,6 +113,10 @@ function configureApi(api: FakeApi, scenario: Scenario): void {
 async function showsConfiguredInteraction(canvasElement: HTMLElement): Promise<void> {
   const canvas = within(canvasElement);
   await expect(canvas.findByRole("heading", { name: "Settings" })).resolves.toBeTruthy();
+  await expect(
+    canvas.getByRole("link", { name: "Instructions" }),
+  ).toHaveAttribute("aria-current", "page");
+  await expect(canvas.queryByRole("heading", { name: "Places" })).not.toBeInTheDocument();
   const instruction = await canvas.findByLabelText("Instruction text");
   const save = canvas.getByRole("button", { name: "Save override" });
   await expect(save).toBeDisabled();
@@ -148,6 +152,22 @@ export const WideDark: Story = {
   globals: { theme: "dark" },
 };
 
+export const PlacesWide: Story = {
+  args: { category: "places" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.findByRole("heading", { name: "Settings" })).resolves.toBeTruthy();
+    await expect(canvas.getByRole("link", { name: "Places" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await expect(canvas.findByRole("link", { name: "pricing-services" })).resolves.toBeVisible();
+    await expect(
+      canvas.queryByRole("heading", { name: "Instructions" }),
+    ).not.toBeInTheDocument();
+  },
+};
+
 export const NarrowLight: Story = {
   ...configuredStory,
   globals: { theme: "light" },
@@ -170,6 +190,15 @@ export const Empty: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.findByText("No configurable instructions")).resolves.toBeVisible();
+    await expect(canvas.queryByText("No place is registered yet")).not.toBeInTheDocument();
+  },
+};
+
+export const EmptyPlaces: Story = {
+  args: { category: "places" },
+  parameters: { settingsScenario: "empty" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
     await expect(canvas.findByText("No place is registered yet")).resolves.toBeVisible();
     await expect(canvas.getByRole("button", { name: "Register" })).toBeDisabled();
   },
@@ -181,8 +210,19 @@ export const Loading: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByText("Reading the instructions…")).toBeVisible();
-    await expect(canvas.getByText("Reading the places…")).toBeVisible();
+    await expect(canvas.queryByText("Reading the places…")).not.toBeInTheDocument();
     await expect(canvas.findByLabelText("Instruction text")).resolves.toBeVisible();
+  },
+};
+
+export const LoadingPlaces: Story = {
+  args: { category: "places" },
+  globals: { theme: "dark" },
+  parameters: { settingsScenario: "loading" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByText("Reading the places…")).toBeVisible();
+    await expect(canvas.findByRole("link", { name: "pricing-services" })).resolves.toBeVisible();
   },
 };
 
@@ -191,6 +231,15 @@ export const ReadFailure: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.findByText("Instructions unavailable")).resolves.toBeVisible();
+    await expect(canvas.queryByText("Places unavailable")).not.toBeInTheDocument();
+  },
+};
+
+export const ReadFailurePlaces: Story = {
+  args: { category: "places" },
+  parameters: { settingsScenario: "read-error" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
     await expect(canvas.findByText("Places unavailable")).resolves.toBeVisible();
     await expect(canvas.queryByText("No place is registered yet")).not.toBeInTheDocument();
   },
@@ -213,6 +262,7 @@ export const ValidationFailure: Story = {
 };
 
 export const RegistrationFailure: Story = {
+  args: { category: "places" },
   parameters: { settingsScenario: "configured", settingsViewport: "narrow" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);

@@ -9,15 +9,18 @@
 
 import { useEffect, useState } from "react";
 
+export type SettingsCategory = "instructions" | "places";
+
 export type Route =
   | { name: "overview" }
   | { name: "place"; placeId: string }
   | { name: "run"; runId: string }
   | { name: "fleet"; fleetId: string }
-  | { name: "settings" };
+  | { name: "settings"; category: SettingsCategory };
 
 export const OVERVIEW: Route = { name: "overview" };
-export const SETTINGS: Route = { name: "settings" };
+export const SETTINGS: Route = { name: "settings", category: "instructions" };
+export const SETTINGS_PLACES: Route = { name: "settings", category: "places" };
 
 /** The address of a route, fragment included. */
 export function addressOf(route: Route): string {
@@ -29,7 +32,7 @@ export function addressOf(route: Route): string {
     case "fleet":
       return `#/fleets/${encodeURIComponent(route.fleetId)}`;
     case "settings":
-      return "#/settings";
+      return route.category === "places" ? "#/settings/places" : "#/settings";
     default:
       return "#/";
   }
@@ -48,6 +51,9 @@ export function routeOf(address: string): Route {
   if (section === "runs" && id !== null) return { name: "run", runId: id };
   if (section === "fleets" && id !== null) return { name: "fleet", fleetId: id };
   if (section === "settings" && rest.length === 0) return SETTINGS;
+  if (section === "settings" && rest.length === 1 && rest[0] === "places") {
+    return SETTINGS_PLACES;
+  }
   return OVERVIEW;
 }
 

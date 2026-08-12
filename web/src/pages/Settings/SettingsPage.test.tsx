@@ -21,9 +21,9 @@ afterEach(() => {
   api.restore();
 });
 
-/** Opens the settings and waits for the first read to land. */
+/** Opens the places category and waits for the first read to land. */
 async function openTheSettings(): Promise<void> {
-  render(<SettingsPage />);
+  render(<SettingsPage category="places" />);
   await waitFor(() => expect(screen.queryByText("Reading the places…")).toBeNull());
 }
 
@@ -35,11 +35,32 @@ async function register(directory: string): Promise<void> {
   });
 }
 
+it("shows one selected settings category at a time", () => {
+  render(<SettingsPage category="instructions" />);
+
+  const categories = screen.getByRole("navigation", { name: "Settings categories" });
+  expect(
+    within(categories).getByRole("link", { name: "Instructions" }).getAttribute("href"),
+  ).toBe("#/settings");
+  expect(
+    within(categories).getByRole("link", { name: "Instructions" }).getAttribute(
+      "aria-current",
+    ),
+  ).toBe("page");
+  expect(within(categories).getByRole("link", { name: "Places" }).getAttribute("href")).toBe(
+    "#/settings/places",
+  );
+  expect(screen.getByRole("heading", { name: "Instructions" })).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "Places" })).toBeNull();
+  expect(screen.queryByText("Reading the places…")).toBeNull();
+});
+
 it("says no place is registered, and offers to register one", async () => {
   await openTheSettings();
 
   expect(screen.getByText(/no place is registered yet/i)).toBeTruthy();
   expect(screen.getByLabelText("Directory")).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "Instructions" })).toBeNull();
 });
 
 it("registers a repository that has never run anything", async () => {

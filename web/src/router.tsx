@@ -48,7 +48,7 @@ function pageOf(route: Route): ReactNode {
     case "fleet":
       return <FleetPage fleetId={route.fleetId} />;
     case "settings":
-      return <SettingsPage />;
+      return <SettingsPage key={route.category} category={route.category} />;
     default:
       return <OverviewPage />;
   }
