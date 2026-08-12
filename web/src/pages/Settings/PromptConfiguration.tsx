@@ -9,6 +9,7 @@ import type { PromptDTO } from "../../clients/api";
 import { ApiError } from "../../clients/http";
 import { loadRegisteredPlaces, type RegisteredPlace } from "../../clients/places";
 import { loadPrompts, resetPrompt, savePrompt } from "../../clients/prompts";
+import "./settings.css";
 
 interface FixedLocation {
   id: string;
@@ -55,6 +56,7 @@ export function PromptConfiguration({ fixedLocation }: Props): ReactNode {
 
   useEffect(() => {
     setCatalogue(null);
+    setConfirmation(null);
     void refresh();
   }, [refresh]);
 
@@ -67,40 +69,23 @@ export function PromptConfiguration({ fixedLocation }: Props): ReactNode {
 
   return (
     <section
+      className="settings-section ui-surface prompt-configuration"
       aria-labelledby={`prompt-configuration-${fixedLocation?.id ?? "global"}`}
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "var(--space-3)",
-        border: "1px solid var(--color-border)",
-        borderRadius: "var(--radius-md)",
-        background: "var(--color-surface)",
-        padding: "var(--space-4)",
-      }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+      <header className="settings-section__header prompt-configuration__header">
         <div>
-          <h2
-            id={`prompt-configuration-${fixedLocation?.id ?? "global"}`}
-            style={{ margin: 0, fontSize: "var(--font-size-lg)", fontWeight: 600 }}
-          >
+          <p className="ui-kicker">Agent behavior</p>
+          <h2 id={`prompt-configuration-${fixedLocation?.id ?? "global"}`}>
             Instructions
           </h2>
-          <p
-            style={{
-              margin: "4px 0 0",
-              color: "var(--color-text-muted)",
-              fontSize: "var(--font-size-sm)",
-            }}
-          >
-            Tune the governed instructions without changing their protected system blocks.
+          <p>
+            Tune governed instructions without changing protected system
+            material.
           </p>
         </div>
-        {fixedLocation === undefined && (
-          <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <span style={{ color: "var(--color-text-muted)", fontSize: "var(--font-size-xs)" }}>
-              Configuration scope
-            </span>
+        {fixedLocation === undefined ? (
+          <label className="ui-field prompt-configuration__scope">
+            Configuration scope
             <select
               aria-label="Configuration scope"
               value={locationId}
@@ -108,7 +93,6 @@ export function PromptConfiguration({ fixedLocation }: Props): ReactNode {
                 setConfirmation(null);
                 setLocationId(event.target.value);
               }}
-              style={fieldStyle}
             >
               <option value="">Global</option>
               {places.map(({ place }) => (
@@ -117,63 +101,63 @@ export function PromptConfiguration({ fixedLocation }: Props): ReactNode {
                 </option>
               ))}
             </select>
+            <small>Editing {scopeLabel} configuration</small>
           </label>
+        ) : (
+          <span className="settings-state">Scope · {scopeLabel}</span>
         )}
-      </div>
+      </header>
 
-      <div style={{ color: "var(--color-text-subtle)", fontSize: "var(--font-size-xs)" }}>
-        Scope: {scopeLabel}
-      </div>
-      {confirmation !== null && (
-        <p role="status" style={{ margin: 0, color: "var(--color-success-text)" }}>
-          {confirmation}
-        </p>
-      )}
-      {readError !== null && (
-        <p role="status" style={{ margin: 0, color: "var(--status-failed)" }}>
-          The instructions could not be read: {readError}
-        </p>
-      )}
-      {catalogue === null && readError === null && (
-        <p role="status" style={{ margin: 0, color: "var(--color-text-muted)" }}>
-          Reading the instructions…
-        </p>
-      )}
-      {catalogue !== null && catalogue.length === 0 && (
-        <p role="status" style={{ margin: 0, color: "var(--color-text-subtle)" }}>
-          This build publishes no configurable instructions.
-        </p>
-      )}
-      {catalogue !== null && catalogue.length > 0 && (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(210px, 0.8fr) minmax(320px, 2fr)",
-            gap: "var(--space-4)",
-            alignItems: "start",
-          }}
-        >
-          <PromptList
-            prompts={catalogue}
-            selectedKey={selectedKey}
-            onSelect={(key) => {
-              setConfirmation(null);
-              setSelectedKey(key);
-            }}
-          />
-          {selected !== null && (
-            <PromptEditor
-              key={`${locationId}:${selected.key}:${selected.version}:${selected.overridden}`}
-              prompt={selected}
-              locationId={locationId}
-              onChanged={async (message) => {
-                await refresh();
-                setConfirmation(message);
+      <div className="settings-section__body prompt-configuration__body">
+        {confirmation !== null && (
+          <div className="ui-feedback ui-feedback--success" role="status">
+            <strong>Configuration updated</strong>
+            <span>{confirmation}</span>
+          </div>
+        )}
+        {readError !== null && (
+          <div className="ui-feedback ui-feedback--error" role="status">
+            <strong>Instructions unavailable</strong>
+            <span>The instructions could not be read: {readError}</span>
+          </div>
+        )}
+        {catalogue === null && readError === null && (
+          <p className="settings-loading" role="status">
+            <span aria-hidden="true" />
+            Reading the instructions…
+          </p>
+        )}
+        {catalogue !== null && catalogue.length === 0 && (
+          <div className="settings-empty" role="status">
+            <strong>No configurable instructions</strong>
+            <span>This build publishes no configurable instructions.</span>
+          </div>
+        )}
+        {catalogue !== null && catalogue.length > 0 && (
+          <div className="prompt-workspace">
+            <PromptList
+              prompts={catalogue}
+              selectedKey={selectedKey}
+              onSelect={(key) => {
+                setConfirmation(null);
+                setSelectedKey(key);
               }}
             />
-          )}
-        </div>
-      )}
+            {selected !== null && (
+              <PromptEditor
+                key={`${locationId}:${selected.key}:${selected.version}:${selected.overridden}`}
+                prompt={selected}
+                locationId={locationId}
+                onEditing={() => setConfirmation(null)}
+                onChanged={async (message) => {
+                  await refresh();
+                  setConfirmation(message);
+                }}
+              />
+            )}
+          </div>
+        )}
+      </div>
     </section>
   );
 }
@@ -188,64 +172,54 @@ function PromptList({
   onSelect: (key: string) => void;
 }): ReactNode {
   return (
-    <ul
-      aria-label="Configurable instructions"
-      style={{ display: "grid", gap: 6, margin: 0, padding: 0, listStyle: "none" }}
-    >
-      {prompts.map((prompt) => (
-        <li key={prompt.key}>
-          <button
-            type="button"
-            aria-label={`${prompt.key} ${prompt.overridden ? `Overridden here · ${prompt.source}` : `Inherited · ${prompt.source}`}`}
-            aria-pressed={prompt.key === selectedKey}
-            onClick={() => onSelect(prompt.key)}
-            style={{
-              ...buttonStyle,
-              width: "100%",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "flex-start",
-              gap: 3,
-              borderColor:
-                prompt.key === selectedKey ? "var(--color-accent)" : "var(--color-border)",
-            }}
-          >
-            <strong style={{ fontWeight: 600 }}>{prompt.key}</strong>
-            <span style={{ color: "var(--color-text-muted)", fontSize: "var(--font-size-xs)" }}>
-              {prompt.overridden
-                ? `Overridden here · ${prompt.source}`
-                : `Inherited · ${prompt.source}`}
-            </span>
-            <span
-              style={{
-                width: "100%",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                color: "var(--color-text-subtle)",
-                fontSize: "var(--font-size-xs)",
-              }}
-            >
-              {prompt.effective}
-            </span>
-          </button>
-        </li>
-      ))}
-    </ul>
+    <nav className="prompt-navigation" aria-label="Instruction selection">
+      <p className="prompt-navigation__label">Available instructions</p>
+      <ul aria-label="Configurable instructions">
+        {prompts.map((prompt) => {
+          const state = prompt.overridden
+            ? `Overridden here · ${prompt.source}`
+            : `Inherited · ${prompt.source}`;
+          return (
+            <li key={prompt.key}>
+              <button
+                className="prompt-option"
+                type="button"
+                aria-label={`${prompt.key} ${state}`}
+                aria-pressed={prompt.key === selectedKey}
+                onClick={() => onSelect(prompt.key)}
+              >
+                <span className="prompt-option__heading">
+                  <strong>{prompt.key}</strong>
+                  <span
+                    className={`settings-state ${prompt.overridden ? "settings-state--override" : ""}`}
+                  >
+                    {prompt.overridden ? "Override" : "Inherited"}
+                  </span>
+                </span>
+                <span className="prompt-option__source">{state}</span>
+                <span className="prompt-option__preview">{prompt.effective}</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
   );
 }
 
 function PromptEditor({
   prompt,
   locationId,
+  onEditing,
   onChanged,
 }: {
   prompt: PromptDTO;
   locationId: string;
+  onEditing: () => void;
   onChanged: (message: string) => Promise<void>;
 }): ReactNode {
   const [draft, setDraft] = useState(prompt.effective);
-  const [saving, setSaving] = useState(false);
+  const [operation, setOperation] = useState<"save" | "reset" | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const changed = draft !== prompt.effective;
   const diff = useMemo(
@@ -254,89 +228,106 @@ function PromptEditor({
   );
 
   const save = async (): Promise<void> => {
-    if (!changed || saving) return;
-    setSaving(true);
+    if (!changed || operation !== null) return;
+    setOperation("save");
     setRefusal(null);
     const result = await savePrompt(prompt.key, draft, locationId);
     if (result.ok) await onChanged(`Override saved for ${prompt.key}.`);
     else setRefusal(messageOf(result.error));
-    setSaving(false);
+    setOperation(null);
   };
 
   const reset = async (): Promise<void> => {
     const destination = locationId === "" ? "the shipped default" : "the inherited value";
     if (!window.confirm(`Return ${prompt.key} to ${destination}?`)) return;
-    setSaving(true);
+    setOperation("reset");
     setRefusal(null);
     const result = await resetPrompt(prompt.key, locationId);
     if (result.ok) {
-      await onChanged(
-        `${prompt.key} returned to ${locationId === "" ? "the shipped default" : "the inherited value"}.`,
-      );
-    } else setRefusal(messageOf(result.error));
-    setSaving(false);
+      await onChanged(`${prompt.key} returned to ${destination}.`);
+    } else {
+      setRefusal(messageOf(result.error));
+    }
+    setOperation(null);
   };
 
   return (
     <form
+      className="prompt-editor"
+      aria-busy={operation !== null}
       onSubmit={(event) => {
         event.preventDefault();
         void save();
       }}
-      style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}
     >
-      <div>
-        <h3 style={{ margin: 0, fontSize: "var(--font-size-md)" }}>{prompt.key}</h3>
-        <p style={{ margin: "4px 0 0", color: "var(--color-text-muted)" }}>
-          {prompt.purpose}
-        </p>
-      </div>
-      {prompt.advanced && (
-        <p style={{ margin: 0, color: "var(--status-waiting-input)" }}>
-          Advanced instruction: protected machine material is appended by the system.
-        </p>
-      )}
-      <label htmlFor={`prompt-${prompt.key}`} style={{ fontSize: "var(--font-size-sm)" }}>
-        Instruction text
-      </label>
-      <textarea
-        id={`prompt-${prompt.key}`}
-        value={draft}
-        onChange={(event) => {
-          setDraft(event.target.value);
-          setRefusal(null);
-        }}
-        rows={10}
-        maxLength={prompt.maxLength}
-        aria-invalid={refusal !== null}
-        aria-describedby={refusal === null ? undefined : `prompt-refusal-${prompt.key}`}
-        style={{ ...fieldStyle, width: "100%", resize: "vertical", lineHeight: 1.5 }}
-      />
-      <div style={{ color: "var(--color-text-subtle)", fontSize: "var(--font-size-xs)" }}>
-        {draft.length} / {prompt.maxLength} characters
-      </div>
-      {refusal !== null && (
-        <p
-          id={`prompt-refusal-${prompt.key}`}
-          role="alert"
-          style={{ margin: 0, color: "var(--status-failed)" }}
+      <header className="prompt-editor__header">
+        <div>
+          <p className="ui-kicker">Selected instruction</p>
+          <h3>{prompt.key}</h3>
+          <p>{prompt.purpose}</p>
+        </div>
+        <span
+          className={`settings-state ${prompt.overridden ? "settings-state--override" : ""}`}
         >
-          {refusal}
-        </p>
+          {prompt.overridden ? `Overridden · ${prompt.source}` : `Inherited · ${prompt.source}`}
+        </span>
+      </header>
+
+      {prompt.advanced && (
+        <div className="ui-feedback ui-feedback--warning">
+          <strong>Advanced instruction</strong>
+          <span>Protected machine material is appended by the system.</span>
+        </div>
       )}
 
-      <ReadOnlyBlock title={`Inherited from ${prompt.inheritedFrom}`} text={prompt.inherited} />
-      <ReadOnlyBlock title="Read-only system block" text={prompt.systemBlock || "None"} />
+      <div className="ui-field prompt-editor__field">
+        <label htmlFor={`prompt-${prompt.key}`}>Instruction text</label>
+        <textarea
+          id={`prompt-${prompt.key}`}
+          value={draft}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setRefusal(null);
+            onEditing();
+          }}
+          rows={10}
+          maxLength={prompt.maxLength}
+          aria-invalid={refusal !== null}
+          aria-describedby={
+            refusal === null ? `prompt-count-${prompt.key}` : `prompt-refusal-${prompt.key}`
+          }
+        />
+        <small id={`prompt-count-${prompt.key}`} className="prompt-editor__count">
+          {draft.length.toLocaleString()} / {prompt.maxLength.toLocaleString()} characters
+        </small>
+      </div>
 
-      <div>
-        <strong style={{ fontSize: "var(--font-size-sm)" }}>Required inserts</strong>
+      {refusal !== null && (
+        <div
+          id={`prompt-refusal-${prompt.key}`}
+          className="ui-feedback ui-feedback--error"
+          role="alert"
+        >
+          <strong>Override not saved</strong>
+          <span>{refusal}</span>
+        </div>
+      )}
+
+      <div className="prompt-editor__references">
+        <ReadOnlyBlock title={`Inherited from ${prompt.inheritedFrom}`} text={prompt.inherited} />
+        <ReadOnlyBlock title="Read-only system block" text={prompt.systemBlock || "None"} />
+      </div>
+
+      <div className="prompt-inserts">
+        <strong>Required inserts</strong>
         {prompt.requiredInserts.length === 0 ? (
-          <p style={{ margin: "4px 0 0", color: "var(--color-text-subtle)" }}>None</p>
+          <p>None</p>
         ) : (
-          <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+          <ul>
             {prompt.requiredInserts.map((insert) => (
               <li key={insert.name}>
-                <code>{insert.action}</code> — {insert.purpose}
+                <code>{insert.action}</code>
+                <span>{insert.purpose}</span>
               </li>
             ))}
           </ul>
@@ -345,80 +336,60 @@ function PromptEditor({
 
       {diff !== null && (
         <section
+          className="prompt-diff"
           role="region"
           aria-label="Changes against inherited value"
-          style={{
-            border: "1px solid var(--color-border)",
-            borderRadius: "var(--radius-sm)",
-            overflow: "hidden",
-          }}
         >
-          <div style={{ padding: "6px 8px", color: "var(--color-text-muted)" }}>
-            Changes against inherited value
-          </div>
-          <pre style={{ margin: 0, padding: 8, whiteSpace: "pre-wrap", background: "var(--color-surface-2)" }}>
-            <span style={{ color: "var(--status-failed)" }}>- {diff.before}</span>{"\n"}
-            <span style={{ color: "var(--status-done)" }}>+ {diff.after}</span>
+          <strong>Changes against inherited value</strong>
+          <pre>
+            <span className="prompt-diff__removed">- {diff.before}</span>{"\n"}
+            <span className="prompt-diff__added">+ {diff.after}</span>
           </pre>
         </section>
       )}
 
-      <p style={{ margin: 0, color: "var(--color-text-muted)" }}>
-        {locationId === ""
-          ? "This override applies to every place that inherits global configuration."
-          : "This override applies to this place and everything inheriting from it."}
-      </p>
-      <div style={{ display: "flex", gap: 8 }}>
-        <button type="submit" disabled={!changed || saving} style={buttonStyle}>
-          Save override
-        </button>
-        {prompt.overridden && (
-          <button type="button" disabled={saving} onClick={() => void reset()} style={buttonStyle}>
-            {locationId === "" ? "Return to shipped default" : "Return to inherited"}
+      <footer className="prompt-editor__footer">
+        <p>
+          {locationId === ""
+            ? "This override applies to every place that inherits global configuration."
+            : "This override applies to this place and everything inheriting from it."}
+        </p>
+        <div className="prompt-editor__actions">
+          <button
+            className="ui-button ui-button--primary"
+            type="submit"
+            disabled={!changed || operation !== null}
+          >
+            {operation === "save" ? "Saving…" : "Save override"}
           </button>
-        )}
-      </div>
+          {prompt.overridden && (
+            <button
+              className="ui-button ui-button--secondary"
+              type="button"
+              disabled={operation !== null}
+              onClick={() => void reset()}
+            >
+              {operation === "reset"
+                ? "Resetting…"
+                : locationId === ""
+                  ? "Return to shipped default"
+                  : "Return to inherited"}
+            </button>
+          )}
+        </div>
+      </footer>
     </form>
   );
 }
 
 function ReadOnlyBlock({ title, text }: { title: string; text: string }): ReactNode {
   return (
-    <div>
-      <strong style={{ fontSize: "var(--font-size-sm)" }}>{title}</strong>
-      <pre
-        style={{
-          margin: "4px 0 0",
-          padding: 8,
-          whiteSpace: "pre-wrap",
-          borderRadius: "var(--radius-sm)",
-          background: "var(--color-surface-2)",
-          color: "var(--color-text-muted)",
-        }}
-      >
-        {text}
-      </pre>
-    </div>
+    <section className="prompt-reference">
+      <strong>{title}</strong>
+      <pre>{text}</pre>
+    </section>
   );
 }
-
-const fieldStyle = {
-  padding: "8px 10px",
-  borderRadius: "var(--radius-sm)",
-  border: "1px solid var(--color-border)",
-  background: "var(--color-surface-2)",
-  color: "var(--color-text)",
-  font: "inherit",
-} as const;
-
-const buttonStyle = {
-  padding: "8px 10px",
-  borderRadius: "var(--radius-sm)",
-  border: "1px solid var(--color-border-strong)",
-  background: "var(--color-surface-2)",
-  color: "var(--color-text)",
-  textAlign: "left",
-} as const;
 
 function messageOf(error: Error): string {
   if (error instanceof ApiError && error.detail !== "") return error.detail;

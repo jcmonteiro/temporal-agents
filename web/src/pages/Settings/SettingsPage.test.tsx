@@ -52,10 +52,16 @@ it("registers a repository that has never run anything", async () => {
 
   await register("/srv/repos/pricing");
 
-  const places = screen.getByRole("list");
+  const placesSection = screen
+    .getByRole("heading", { name: "Places" })
+    .closest("section") as HTMLElement;
+  const places = within(placesSection).getByRole("list");
   expect(within(places).getByRole("link", { name: "pricing" })).toBeTruthy();
   expect(within(places).getByText("/srv/repos/pricing")).toBeTruthy();
   expect(screen.queryByText(/no place is registered yet/i)).toBeNull();
+  expect(within(placesSection).getByRole("status").textContent).toMatch(
+    /repository registered/i,
+  );
   // The typed directory is gone, so the next registration starts from nothing.
   expect((screen.getByLabelText("Directory") as HTMLInputElement).value).toBe("");
 });
