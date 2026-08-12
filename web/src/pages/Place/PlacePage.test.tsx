@@ -72,9 +72,16 @@ describe("the page of one place", () => {
 
     await showPlace("repo");
 
-    const work = screen.getByText("Work here").closest("section") as HTMLElement;
+    const work = screen.getByRole("region", { name: "Work here" });
     expect(within(work).getByText("Waiting")).toBeTruthy();
     expect(within(work).getByText("Done")).toBeTruthy();
+  });
+
+  it("exposes the place hierarchy as a named region", async () => {
+    await showPlace("repo");
+
+    const nearbyPlaces = screen.getByRole("region", { name: "Places here" });
+    expect(within(nearbyPlaces).getByRole("link", { name: "feature" })).toBeTruthy();
   });
 
   it("names the places above and below it", async () => {

@@ -201,6 +201,12 @@ export const ActiveNarrowLight: Story = {
   ...activeStory,
   globals: { theme: "light" },
   parameters: { placeViewport: "narrow" },
+  play: async (context) => {
+    await showsActivePlace(context.canvasElement);
+    const page = context.canvasElement.querySelector<HTMLElement>(".place-page");
+    if (page === null) throw new Error("Place page missing");
+    await expect(page.scrollWidth).toBeLessThanOrEqual(page.clientWidth);
+  },
 };
 
 export const ActiveNarrowDark: Story = {

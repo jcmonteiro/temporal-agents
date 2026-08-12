@@ -1,31 +1,21 @@
 import { useRef, useState, type ReactNode } from "react";
-import { anIntentToStart, startWork, type StartKind } from "../../clients/start";
 import { ApiError } from "../../clients/http";
-import { addressOf, goTo } from "../../platform/route";
+import { anIntentToStart, startWork, type StartKind } from "../../clients/start";
 import type { Place } from "../../domain/place";
+import { addressOf, goTo } from "../../platform/route";
+import "./place.css";
 
-/**
- * Starting work in this place.
- *
- * It lives on a place page and nowhere else. The overview watches; the place is
- * where an operator has already decided *where*, so it is the only surface on
- * which the question "what shall it do here?" is answerable without asking them
- * to name a directory — which they never do here either: the directory is shown
- * as context and the request names the place.
- */
+/** Starts new work from the place the operator is already inspecting. */
 export function Launcher({ place }: { place: Place }): ReactNode {
   const [kind, setKind] = useState<StartKind>("develop");
   const [prompt, setPrompt] = useState("");
   const [worktree, setWorktree] = useState(true);
   const [starting, setStarting] = useState(false);
   const [refusal, setRefusal] = useState<ApiError | Error | null>(null);
-  // The identity of the *intent*, minted once and kept until it succeeds. A
-  // second click, or a retry after a refusal, is the same intent: it must not
-  // start a second run.
+  // One intent survives repeated clicks and retries until the start succeeds.
   const intent = useRef<string | null>(null);
 
   const change = (apply: () => void): void => {
-    // Different work is a different intent, so it gets an identity of its own.
     intent.current = null;
     setRefusal(null);
     apply();
@@ -53,157 +43,113 @@ export function Launcher({ place }: { place: Place }): ReactNode {
   };
 
   const nothingToDo = kind === "develop" && prompt.trim() === "";
+  const location = place.directory ?? place.ref ?? place.label;
+
   return (
-    <section
-      aria-labelledby="launcher-heading"
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "var(--space-3)",
-        border: "1px solid var(--color-border)",
-        borderRadius: "var(--radius-md)",
-        background: "var(--color-surface)",
-        padding: "var(--space-4)",
-      }}
-    >
-      <h2
-        id="launcher-heading"
-        style={{ margin: 0, fontSize: "var(--font-size-lg)", fontWeight: 600 }}
-      >
-        Start work here
-      </h2>
-      {/* The request names the source place rather than a path. Develop is then
-          isolated in a server-managed worktree; review stays in this place. */}
-      <p
-        style={{
-          margin: 0,
-          color: "var(--color-text-subtle)",
-          fontSize: "var(--font-size-sm)",
-        }}
-      >
-        {kind === "develop" && worktree ? "Starts from " : "In "}
-        {place.directory ?? place.ref ?? place.label}
-        {kind === "develop" && worktree && " in a fresh worktree"}
-      </p>
+    <section className="place-launcher ui-surface" aria-labelledby="launcher-heading">
+      <header className="place-launcher__header">
+        <div>
+          <p className="ui-kicker">New activity</p>
+          <h2 id="launcher-heading">Start work here</h2>
+          <p>Choose the operating mode and define the next task for this place.</p>
+        </div>
+        <span className="place-launcher__scope">Scoped to this place</span>
+      </header>
 
       <form
+        className="place-launcher__form"
+        aria-busy={starting}
         onSubmit={(event) => {
           event.preventDefault();
           void submit();
         }}
-        style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}
       >
-        <fieldset
-          style={{ border: 0, margin: 0, padding: 0, display: "flex", gap: 16 }}
-        >
-          <legend
-            style={{
-              padding: 0,
-              fontSize: "var(--font-size-sm)",
-              color: "var(--color-text-muted)",
-            }}
-          >
-            What to run
-          </legend>
-          <Choice
-            checked={kind === "develop"}
-            label="Develop"
-            says="Implement in a fresh worktree, then run local and Copilot review."
-            onChoose={() => change(() => setKind("develop"))}
-          />
-          <Choice
-            checked={kind === "review"}
-            label="Review"
-            says="Review what is already in the working tree."
-            onChoose={() => change(() => setKind("review"))}
-          />
+        <fieldset className="place-launcher__choices">
+          <legend>What to run</legend>
+          <div>
+            <Choice
+              checked={kind === "develop"}
+              label="Develop"
+              says="Implement in a fresh worktree, then run local and Copilot review."
+              onChoose={() => change(() => setKind("develop"))}
+            />
+            <Choice
+              checked={kind === "review"}
+              label="Review"
+              says="Review what is already in the working tree."
+              onChoose={() => change(() => setKind("review"))}
+            />
+          </div>
         </fieldset>
 
+        <div className="place-launcher__context">
+          <span>Execution context</span>
+          <strong>
+            {kind === "develop" && worktree ? "Starts from " : "In "}
+            {location}
+            {kind === "develop" && worktree && " in a fresh worktree"}
+          </strong>
+        </div>
+
         {kind === "develop" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <label
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                fontSize: "var(--font-size-sm)",
-                color: "var(--color-text)",
-              }}
-            >
+          <div className="place-launcher__task">
+            <label className="place-launcher__check">
               <input
                 type="checkbox"
+                aria-label="Use a fresh worktree"
                 checked={worktree}
                 onChange={(event) => {
                   const next = event.target.checked;
                   change(() => setWorktree(next));
                 }}
               />
-              Use a fresh worktree
+              <span>
+                <strong>Use a fresh worktree</strong>
+                <small>Keep implementation changes isolated from this checkout.</small>
+              </span>
             </label>
-            <label
-              htmlFor="launch-prompt"
-              style={{ fontSize: "var(--font-size-sm)", color: "var(--color-text-muted)" }}
-            >
+            <label className="ui-field" htmlFor="launch-prompt">
               What to do
+              <textarea
+                id="launch-prompt"
+                aria-label="What to do"
+                rows={4}
+                value={prompt}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  change(() => setPrompt(next));
+                }}
+                placeholder="Make the flaky checkout test pass"
+              />
+              <small>State the outcome and constraints for the development pass.</small>
             </label>
-            <textarea
-              id="launch-prompt"
-              rows={3}
-              value={prompt}
-              onChange={(event) => {
-                const next = event.target.value;
-                change(() => setPrompt(next));
-              }}
-              placeholder="Make the flaky checkout test pass"
-              style={{
-                padding: "8px 10px",
-                borderRadius: "var(--radius-sm)",
-                border: "1px solid var(--color-border)",
-                background: "var(--color-surface-2)",
-                color: "var(--color-text)",
-                fontSize: "var(--font-size-sm)",
-                resize: "vertical",
-              }}
-            />
           </div>
         )}
 
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button
-            type="submit"
-            disabled={starting || nothingToDo}
-            style={{
-              padding: "8px 14px",
-              borderRadius: "var(--radius-sm)",
-              border: "1px solid var(--color-border-strong)",
-              background: "var(--color-surface-2)",
-              color: "var(--color-text)",
-              fontSize: "var(--font-size-sm)",
-              opacity: starting || nothingToDo ? 0.5 : 1,
-            }}
-          >
-            {starting ? "Starting…" : "Start"}
-          </button>
-          {starting && (
-            <span
-              role="status"
-              style={{
-                color: "var(--color-text-muted)",
-                fontSize: "var(--font-size-sm)",
-              }}
-            >
-              Starting the work…
-            </span>
-          )}
-        </div>
-
         {refusal !== null && <Refusal refusal={refusal} />}
+
+        <footer className="place-launcher__footer">
+          <p>
+            {kind === "develop"
+              ? "Development runs local and Copilot review after implementation."
+              : "Review inspects the current working tree without creating a worktree."}
+          </p>
+          <div>
+            {starting && <span role="status">Starting the work…</span>}
+            <button
+              className="ui-button ui-button--primary"
+              type="submit"
+              disabled={starting || nothingToDo}
+            >
+              {starting ? "Starting…" : "Start"}
+            </button>
+          </div>
+        </footer>
       </form>
     </section>
   );
 }
 
-/** One of the kinds of work, with what it means. */
 function Choice({
   checked,
   label,
@@ -216,34 +162,25 @@ function Choice({
   onChoose: () => void;
 }): ReactNode {
   return (
-    <label
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-        fontSize: "var(--font-size-sm)",
-        color: "var(--color-text)",
-      }}
-      title={says}
-    >
+    <label className="place-launcher__choice">
       <input
         type="radio"
         name="kind"
+        aria-label={label}
         checked={checked}
         onChange={onChoose}
         value={label.toLowerCase()}
       />
-      {label}
+      <span className="place-launcher__choice-mark" aria-hidden="true" />
+      <span>
+        <strong>{label}</strong>
+        <small>{says}</small>
+      </span>
     </label>
   );
 }
 
-/**
- * Why the hub would not start the work.
- *
- * A refusal that collided with something says so and leads there: an operator
- * told only "that place is busy" then has to go and find what is in the way.
- */
+/** Shows a start refusal and links to the conflicting run when one exists. */
 function Refusal({ refusal }: { refusal: ApiError | Error }): ReactNode {
   const conflict = refusal instanceof ApiError ? refusal.conflictingRunId : "";
   const said =
@@ -251,22 +188,19 @@ function Refusal({ refusal }: { refusal: ApiError | Error }): ReactNode {
       ? refusal.detail
       : refusal.message;
   return (
-    <p
-      role="alert"
-      style={{
-        margin: 0,
-        display: "flex",
-        gap: 8,
-        color: "var(--status-failed)",
-        fontSize: "var(--font-size-sm)",
-      }}
-    >
-      {said}
-      {conflict !== "" && (
-        <a href={addressOf({ name: "run", runId: conflict })} style={{ color: "inherit" }}>
-          Show the run in the way
-        </a>
-      )}
-    </p>
+    <div className="ui-feedback ui-feedback--error" role="alert">
+      <strong>Work not started</strong>
+      <span>
+        {said}
+        {conflict !== "" && (
+          <>
+            {" "}
+            <a href={addressOf({ name: "run", runId: conflict })}>
+              Show the run in the way
+            </a>
+          </>
+        )}
+      </span>
+    </div>
   );
 }
