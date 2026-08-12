@@ -1,6 +1,7 @@
 /temporal-agents
 web/node_modules
 web/dist
+.playwright-cli/
 
 # macOS Finder metadata, at any depth
 .DS_Store
