@@ -102,26 +102,28 @@ func (d *Store) SchemaState(ctx context.Context) (schema.State, error) {
 	return pgmigrate.Inspect(ctx, d.pool, migrationFS, migrationDir, migrationNamespace)
 }
 
-// listDismissalsSQL reads every dismissal in force, newest first.
+// listDismissalsSQL reads one viewer's dismissals, newest first.
 const listDismissalsSQL = `
-SELECT kind, item_id, dismissed_at
+SELECT viewer, kind, item_id, state_revision, dismissed_at
 FROM dismissals
+WHERE viewer = $1
 ORDER BY dismissed_at DESC, kind, item_id`
 
 // Dismissals implements agenthub.DismissalStore.
-func (d *Store) Dismissals(ctx context.Context) ([]agenthub.Dismissal, error) {
-	rows, err := d.pool.Query(ctx, listDismissalsSQL)
+func (d *Store) Dismissals(ctx context.Context, viewer agenthub.ViewerID) ([]agenthub.Dismissal, error) {
+	rows, err := d.pool.Query(ctx, listDismissalsSQL, string(viewer))
 	if err != nil {
 		return nil, fmt.Errorf("read the dismissals: %w", err)
 	}
 	dismissals, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (agenthub.Dismissal, error) {
-		var kind, itemID string
+		var viewer, kind string
 		var dismissal agenthub.Dismissal
-		if err := row.Scan(&kind, &itemID, &dismissal.DismissedAt); err != nil {
+		if err := row.Scan(&viewer, &kind, &dismissal.ItemID,
+			&dismissal.StateRevision, &dismissal.DismissedAt); err != nil {
 			return agenthub.Dismissal{}, err
 		}
+		dismissal.Viewer = agenthub.ViewerID(viewer)
 		dismissal.Kind = agenthub.ItemKind(kind)
-		dismissal.ItemID = itemID
 		return dismissal, nil
 	})
 	if err != nil {
@@ -135,34 +137,41 @@ func (d *Store) Dismissals(ctx context.Context) ([]agenthub.Dismissal, error) {
 // same dismissal rather than a second one, and the moment the item was first hidden
 // is not rewritten.
 const dismissSQL = `
-INSERT INTO dismissals (kind, item_id, dismissed_at)
-VALUES ($1, $2, $3)
-ON CONFLICT (kind, item_id)
-DO UPDATE SET dismissed_at = dismissals.dismissed_at
-RETURNING kind, item_id, dismissed_at`
+INSERT INTO dismissals (viewer, kind, item_id, state_revision, dismissed_at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (viewer, kind, item_id)
+DO UPDATE SET
+	state_revision = EXCLUDED.state_revision,
+	dismissed_at = CASE
+		WHEN dismissals.state_revision = EXCLUDED.state_revision THEN dismissals.dismissed_at
+		ELSE EXCLUDED.dismissed_at
+	END
+RETURNING viewer, kind, item_id, state_revision, dismissed_at`
 
 // Dismiss implements agenthub.DismissalStore.
 func (d *Store) Dismiss(ctx context.Context, dismissal agenthub.Dismissal) (agenthub.Dismissal, error) {
-	var kind string
+	var viewer, kind string
 	stored := agenthub.Dismissal{}
 	err := d.pool.QueryRow(ctx, dismissSQL,
-		string(dismissal.Kind), dismissal.ItemID, dismissal.DismissedAt,
-	).Scan(&kind, &stored.ItemID, &stored.DismissedAt)
+		string(dismissal.Viewer), string(dismissal.Kind), dismissal.ItemID,
+		dismissal.StateRevision, dismissal.DismissedAt,
+	).Scan(&viewer, &kind, &stored.ItemID, &stored.StateRevision, &stored.DismissedAt)
 	if err != nil {
 		return agenthub.Dismissal{}, fmt.Errorf("record the dismissal: %w", err)
 	}
+	stored.Viewer = agenthub.ViewerID(viewer)
 	stored.Kind = agenthub.ItemKind(kind)
 	return stored, nil
 }
 
 // undismissSQL removes one dismissal.
-const undismissSQL = `DELETE FROM dismissals WHERE kind = $1 AND item_id = $2`
+const undismissSQL = `DELETE FROM dismissals WHERE viewer = $1 AND kind = $2 AND item_id = $3`
 
 // Undismiss implements agenthub.DismissalStore, reporting agenthub.ErrNotFound when
 // there was nothing to remove so the transport can tell a deletion apart from a
 // no-op.
-func (d *Store) Undismiss(ctx context.Context, kind agenthub.ItemKind, itemID string) error {
-	tag, err := d.pool.Exec(ctx, undismissSQL, string(kind), itemID)
+func (d *Store) Undismiss(ctx context.Context, viewer agenthub.ViewerID, kind agenthub.ItemKind, itemID string) error {
+	tag, err := d.pool.Exec(ctx, undismissSQL, string(viewer), string(kind), itemID)
 	if err != nil {
 		return fmt.Errorf("remove the dismissal: %w", err)
 	}

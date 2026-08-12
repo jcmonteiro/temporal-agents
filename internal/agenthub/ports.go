@@ -287,13 +287,13 @@ type ScheduleSource interface {
 // mutable state this API owns, kept in a port of its own so the read path stays
 // read-only by construction.
 type DismissalStore interface {
-	// Dismissals returns every dismissal currently in force.
-	Dismissals(ctx context.Context) ([]Dismissal, error)
+	// Dismissals returns the dismissals currently in force for one viewer.
+	Dismissals(ctx context.Context, viewer ViewerID) ([]Dismissal, error)
 	// Dismiss records d and returns the stored dismissal. It must be idempotent on
-	// the dismissal's identity (kind plus item), so a retry returns the original
-	// timestamp rather than creating or reporting a different resource.
+	// the dismissal's identity (viewer, kind, and item), so a retry returns the
+	// original timestamp rather than creating or reporting a different resource.
 	Dismiss(ctx context.Context, d Dismissal) (Dismissal, error)
-	// Undismiss removes the dismissal of one item, and reports ErrNotFound when
-	// there was none, so the transport can tell a no-op apart from a deletion.
-	Undismiss(ctx context.Context, kind ItemKind, itemID string) error
+	// Undismiss removes one viewer's dismissal of one item, and reports ErrNotFound
+	// when there was none, so the transport can tell a no-op apart from a deletion.
+	Undismiss(ctx context.Context, viewer ViewerID, kind ItemKind, itemID string) error
 }

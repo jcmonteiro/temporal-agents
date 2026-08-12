@@ -38,7 +38,7 @@ type viewStub struct {
 	err        error
 }
 
-func (v *viewStub) Fleets(context.Context, int) ([]agenthub.Fleet, error) {
+func (v *viewStub) FleetsFor(_ context.Context, viewer agenthub.ViewerID, _ int) ([]agenthub.Fleet, error) {
 	return v.fleets, v.err
 }
 
@@ -54,7 +54,9 @@ func (v *viewStub) Fleet(_ context.Context, id string) (agenthub.Fleet, error) {
 	return agenthub.Fleet{}, agenthub.ErrNotFound
 }
 
-func (v *viewStub) Runs(context.Context, int) ([]agenthub.Run, error) { return v.runs, v.err }
+func (v *viewStub) RunsFor(_ context.Context, viewer agenthub.ViewerID, _ int) ([]agenthub.Run, error) {
+	return v.runs, v.err
+}
 
 func (v *viewStub) Run(_ context.Context, id string) (agenthub.Run, error) {
 	if v.err != nil {
@@ -121,11 +123,17 @@ func activeTypeFromRun(runType agenthub.RunType) agenthub.ActiveWorkType {
 	}
 }
 
-func (v *viewStub) Dismissals(context.Context) ([]agenthub.Dismissal, error) {
-	return v.dismissals, v.err
+func (v *viewStub) DismissalsFor(_ context.Context, viewer agenthub.ViewerID) ([]agenthub.Dismissal, error) {
+	var dismissals []agenthub.Dismissal
+	for _, dismissal := range v.dismissals {
+		if dismissal.Viewer == viewer {
+			dismissals = append(dismissals, dismissal)
+		}
+	}
+	return dismissals, v.err
 }
 
-func (v *viewStub) Dismiss(_ context.Context, kind agenthub.ItemKind, itemID string) (agenthub.Dismissal, error) {
+func (v *viewStub) DismissFor(_ context.Context, viewer agenthub.ViewerID, kind agenthub.ItemKind, itemID string) (agenthub.Dismissal, error) {
 	if v.err != nil {
 		return agenthub.Dismissal{}, v.err
 	}
@@ -146,9 +154,9 @@ func (v *viewStub) Dismiss(_ context.Context, kind agenthub.ItemKind, itemID str
 	if !terminal {
 		return agenthub.Dismissal{}, agenthub.ErrNotDismissible
 	}
-	d := agenthub.Dismissal{Kind: kind, ItemID: itemID, DismissedAt: fixedNow}
+	d := agenthub.Dismissal{Viewer: viewer, Kind: kind, ItemID: itemID, StateRevision: "reviewed", DismissedAt: fixedNow}
 	for _, existing := range v.dismissals {
-		if existing.ID() == d.ID() {
+		if existing.Viewer == viewer && existing.ID() == d.ID() {
 			return existing, nil
 		}
 	}
@@ -156,13 +164,13 @@ func (v *viewStub) Dismiss(_ context.Context, kind agenthub.ItemKind, itemID str
 	return d, nil
 }
 
-func (v *viewStub) Undismiss(_ context.Context, kind agenthub.ItemKind, itemID string) error {
+func (v *viewStub) UndismissFor(_ context.Context, viewer agenthub.ViewerID, kind agenthub.ItemKind, itemID string) error {
 	if v.err != nil {
 		return v.err
 	}
 	id := agenthub.Dismissal{Kind: kind, ItemID: itemID}.ID()
 	for i, dismissal := range v.dismissals {
-		if dismissal.ID() == id {
+		if dismissal.Viewer == viewer && dismissal.ID() == id {
 			v.dismissals = append(v.dismissals[:i], v.dismissals[i+1:]...)
 			return nil
 		}

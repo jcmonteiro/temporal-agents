@@ -68,24 +68,24 @@ const (
 //
 // *agenthub.Service implements it.
 type WorkView interface {
-	// Fleets returns the fleet satellites, newest first.
-	Fleets(ctx context.Context, limit int) ([]agenthub.Fleet, error)
+	// FleetsFor returns one principal's fleet satellites, newest first.
+	FleetsFor(ctx context.Context, viewer agenthub.ViewerID, limit int) ([]agenthub.Fleet, error)
 	// Fleet returns one fleet with its node graph.
 	Fleet(ctx context.Context, id string) (agenthub.Fleet, error)
-	// Runs returns the standalone run satellites, newest first.
-	Runs(ctx context.Context, limit int) ([]agenthub.Run, error)
+	// RunsFor returns one principal's standalone run satellites, newest first.
+	RunsFor(ctx context.Context, viewer agenthub.ViewerID, limit int) ([]agenthub.Run, error)
 	// Run returns one run chain.
 	Run(ctx context.Context, id string) (agenthub.Run, error)
 	// Schedules returns the schedule satellites.
 	Schedules(ctx context.Context, limit int) ([]agenthub.Schedule, error)
 	// ActiveWork returns one bounded page of active top-level work.
 	ActiveWork(ctx context.Context, query agenthub.PageQuery) (agenthub.Page[agenthub.ActiveWorkItem], error)
-	// Dismissals returns the dismissals in force.
-	Dismissals(ctx context.Context) ([]agenthub.Dismissal, error)
-	// Dismiss hides a finished item from the overview.
-	Dismiss(ctx context.Context, kind agenthub.ItemKind, itemID string) (agenthub.Dismissal, error)
-	// Undismiss brings a dismissed item back.
-	Undismiss(ctx context.Context, kind agenthub.ItemKind, itemID string) error
+	// DismissalsFor returns one principal's dismissals in force.
+	DismissalsFor(ctx context.Context, viewer agenthub.ViewerID) ([]agenthub.Dismissal, error)
+	// DismissFor hides a finished item for one principal.
+	DismissFor(ctx context.Context, viewer agenthub.ViewerID, kind agenthub.ItemKind, itemID string) (agenthub.Dismissal, error)
+	// UndismissFor brings a dismissed item back for one principal.
+	UndismissFor(ctx context.Context, viewer agenthub.ViewerID, kind agenthub.ItemKind, itemID string) error
 }
 
 // PlaceView is the surface that answers "where may the hub work?", and the one
@@ -598,7 +598,7 @@ func (s *Server) handleFleets(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	fleets, err := s.view.Fleets(r.Context(), limit)
+	fleets, err := s.view.FleetsFor(r.Context(), agenthub.ViewerID(requestPrincipal(r)), limit)
 	if err != nil {
 		s.writeServiceProblem(w, r, err)
 		return
@@ -633,7 +633,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	runs, err := s.view.Runs(r.Context(), limit)
+	runs, err := s.view.RunsFor(r.Context(), agenthub.ViewerID(requestPrincipal(r)), limit)
 	if err != nil {
 		s.writeServiceProblem(w, r, err)
 		return
@@ -712,7 +712,7 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 
 // handleDismissals answers the dismissal collection: what the operator has hidden.
 func (s *Server) handleDismissals(w http.ResponseWriter, r *http.Request) {
-	dismissals, err := s.view.Dismissals(r.Context())
+	dismissals, err := s.view.DismissalsFor(r.Context(), agenthub.ViewerID(requestPrincipal(r)))
 	if err != nil {
 		s.writeServiceProblem(w, r, err)
 		return
@@ -734,7 +734,7 @@ func (s *Server) handleDismiss(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeJSONBody(w, r, &request) {
 		return
 	}
-	dismissal, err := s.view.Dismiss(r.Context(), request.Kind, request.ItemID)
+	dismissal, err := s.view.DismissFor(r.Context(), agenthub.ViewerID(requestPrincipal(r)), request.Kind, request.ItemID)
 	if err != nil {
 		s.writeServiceProblem(w, r, err)
 		return
@@ -750,7 +750,7 @@ func (s *Server) handleUndismiss(w http.ResponseWriter, r *http.Request) {
 		s.writeProblem(w, r, codeInvalidRequest, err.Error())
 		return
 	}
-	if err := s.view.Undismiss(r.Context(), kind, itemID); err != nil {
+	if err := s.view.UndismissFor(r.Context(), agenthub.ViewerID(requestPrincipal(r)), kind, itemID); err != nil {
 		s.writeServiceProblem(w, r, err)
 		return
 	}

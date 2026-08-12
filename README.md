@@ -94,7 +94,7 @@ is fixed: **`migrate` first, then `worker` and `serve`**.
 ```sh
 $ temporal-agents migrate
 execution-store  brought 4 migration(s) up to date  schema 0004_execution_first_run_id.sql
-agent-hub        brought 1 migration(s) up to date  schema 0001_dismissals.sql
+agent-hub        brought 4 migration(s) up to date  schema 0004_personal_state_dismissals.sql
 identity         brought 1 migration(s) up to date  schema 0001_identity.sql
 scoped-config    brought 1 migration(s) up to date  schema 0001_scoped_values.sql
 ```
@@ -240,9 +240,11 @@ run, and a start into a place something is already running in is refused naming 
 work in the way, because two loops in one working tree commit over each other.
 
 The server joins live Temporal state with the durable execution and plan record.
-Finished items remain visible until dismissed. A dismissal is Postgres-backed view
-state and never changes workflow state. Continue-as-new iterations are one run
-resource identified by workflow ID.
+Finished items remain visible until dismissed. A dismissal is Postgres-backed,
+user-specific view state and never changes workflow state. It acknowledges only the
+state the user reviewed: any later change makes the item visible again. Continue-as-new
+iterations are one run resource identified by workflow ID, and a new iteration changes
+that resource's state.
 
 Every route needs a credential, except signing in, the provider's callback and the
 health probe. A person signs in with an identity provider: the local compose stack

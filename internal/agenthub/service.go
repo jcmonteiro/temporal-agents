@@ -132,14 +132,19 @@ func NewService(deps Dependencies) (*Service, error) {
 // a finished fleet stays until it is dismissed, so nothing disappears from the
 // overview on its own.
 func (s *Service) Fleets(ctx context.Context, limit int) ([]Fleet, error) {
+	return s.FleetsFor(ctx, LocalViewerID, limit)
+}
+
+// FleetsFor returns one viewer's fleet satellites. A dismissal applies only while
+// the fleet still has the exact state that viewer acknowledged.
+func (s *Service) FleetsFor(ctx context.Context, viewer ViewerID, limit int) ([]Fleet, error) {
 	limit = resolveLimit(limit)
-	dismissed, err := s.dismissedIDs(ctx)
+	dismissed, err := s.dismissedIDs(ctx, viewer)
 	if err != nil {
 		return nil, err
 	}
 	trees, err := s.deps.Collections.FleetTrees(ctx, ChainQuery{
-		ExcludedWorkflowIDs: dismissed.ids(KindFleet),
-		Limit:               limit,
+		Limit: limit + len(dismissed),
 	})
 	if err != nil {
 		return nil, unavailable("read the recorded fleets", err)
@@ -162,26 +167,29 @@ func (s *Service) Fleets(ctx context.Context, limit int) ([]Fleet, error) {
 		return nil, err
 	}
 	parents, err := s.resolveExecutionChains(ctx, chains, live, func(e Execution) bool {
-		return isFleet(e) && !dismissed.has(KindFleet, e.WorkflowID)
+		return isFleet(e)
 	})
 	if err != nil {
 		return nil, err
-	}
-	if len(parents) > limit {
-		parents = parents[:limit]
 	}
 	plans, err := s.plansFor(ctx, parents)
 	if err != nil {
 		return nil, err
 	}
 
-	fleets := make([]Fleet, 0, len(parents))
+	fleets := make([]Fleet, 0, min(len(parents), limit))
 	for _, parent := range parents {
 		fleet, err := s.buildFleet(ctx, parent, treesByID[parent.WorkflowID], live, plans[parent.WorkflowID])
 		if err != nil {
 			return nil, err
 		}
+		if dismissed.has(KindFleet, fleet.ID, fleet.StateRevision()) {
+			continue
+		}
 		fleets = append(fleets, fleet)
+		if len(fleets) == limit {
+			break
+		}
 	}
 	return fleets, nil
 }
@@ -356,8 +364,14 @@ func (s *Service) Fleet(ctx context.Context, id string) (Fleet, error) {
 // satellite for the schedule rather than one per firing. A fleet's node is not
 // listed either: it belongs to its fleet.
 func (s *Service) Runs(ctx context.Context, limit int) ([]Run, error) {
+	return s.RunsFor(ctx, LocalViewerID, limit)
+}
+
+// RunsFor returns one viewer's run satellites. A changed run is not hidden by a
+// dismissal of an earlier state, even though the workflow identity is unchanged.
+func (s *Service) RunsFor(ctx context.Context, viewer ViewerID, limit int) ([]Run, error) {
 	limit = resolveLimit(limit)
-	dismissed, err := s.dismissedIDs(ctx)
+	dismissed, err := s.dismissedIDs(ctx, viewer)
 	if err != nil {
 		return nil, err
 	}
@@ -367,14 +381,13 @@ func (s *Service) Runs(ctx context.Context, limit int) ([]Run, error) {
 	}
 	required := make([]string, 0, len(live))
 	for workflowID, execution := range live {
-		if isRunSatellite(execution) && !dismissed.has(KindRun, workflowID) {
+		if isRunSatellite(execution) {
 			required = append(required, workflowID)
 		}
 	}
 	recorded, err := s.deps.Collections.RunChains(ctx, ChainQuery{
 		RequiredWorkflowIDs: required,
-		ExcludedWorkflowIDs: dismissed.ids(KindRun),
-		Limit:               limit,
+		Limit:               limit + len(dismissed),
 	})
 	if err != nil {
 		return nil, unavailable("read the recorded runs", err)
@@ -387,23 +400,24 @@ func (s *Service) Runs(ctx context.Context, limit int) ([]Run, error) {
 	if err != nil {
 		return nil, err
 	}
-	chains, err := s.resolveExecutionChains(ctx, recorded, live, func(e Execution) bool {
-		return isRunSatellite(e) && !dismissed.has(KindRun, e.WorkflowID)
-	})
+	chains, err := s.resolveExecutionChains(ctx, recorded, live, isRunSatellite)
 	if err != nil {
 		return nil, err
 	}
-	if len(chains) > limit {
-		chains = chains[:limit]
-	}
 
-	runs := make([]Run, 0, len(chains))
+	runs := make([]Run, 0, min(len(chains), limit))
 	for _, chain := range chains {
 		run, err := runFrom(chain)
 		if err != nil {
 			return nil, err
 		}
+		if dismissed.has(KindRun, run.ID, run.StateRevision()) {
+			continue
+		}
 		runs = append(runs, run)
+		if len(runs) == limit {
+			break
+		}
 	}
 	return runs, nil
 }
@@ -587,7 +601,12 @@ func scheduleFrom(state ScheduleState, fired []ExecutionChain, runningActions in
 // Dismissals returns every dismissal in force, newest first. It is what lets a
 // consumer show — and undo — what has been hidden.
 func (s *Service) Dismissals(ctx context.Context) ([]Dismissal, error) {
-	dismissals, err := s.deps.Dismissals.Dismissals(ctx)
+	return s.DismissalsFor(ctx, LocalViewerID)
+}
+
+// DismissalsFor returns only one viewer's dismissals.
+func (s *Service) DismissalsFor(ctx context.Context, viewer ViewerID) ([]Dismissal, error) {
+	dismissals, err := s.deps.Dismissals.Dismissals(ctx, viewer)
 	if err != nil {
 		return nil, unavailable("read the dismissals", err)
 	}
@@ -605,17 +624,25 @@ func (s *Service) Dismissals(ctx context.Context) ([]Dismissal, error) {
 // Dismissing an already-dismissed item succeeds and reports the dismissal, so a
 // client that retries a lost response is not punished for it.
 func (s *Service) Dismiss(ctx context.Context, kind ItemKind, itemID string) (Dismissal, error) {
+	return s.DismissFor(ctx, LocalViewerID, kind, itemID)
+}
+
+// DismissFor hides the exact state one viewer reviewed.
+func (s *Service) DismissFor(ctx context.Context, viewer ViewerID, kind ItemKind, itemID string) (Dismissal, error) {
 	if err := ValidateDismissalTarget(kind, itemID); err != nil {
 		return Dismissal{}, err
 	}
-	dismissible, err := s.dismissible(ctx, kind, itemID)
+	dismissible, revision, err := s.dismissible(ctx, kind, itemID)
 	if err != nil {
 		return Dismissal{}, err
 	}
 	if !dismissible {
 		return Dismissal{}, ErrNotDismissible
 	}
-	dismissal := Dismissal{Kind: kind, ItemID: itemID, DismissedAt: s.deps.Now().UTC()}
+	dismissal := Dismissal{
+		Viewer: viewer, Kind: kind, ItemID: itemID, StateRevision: revision,
+		DismissedAt: s.deps.Now().UTC(),
+	}
 	stored, err := s.deps.Dismissals.Dismiss(ctx, dismissal)
 	if err != nil {
 		return Dismissal{}, unavailable("record the dismissal", err)
@@ -626,10 +653,15 @@ func (s *Service) Dismiss(ctx context.Context, kind ItemKind, itemID string) (Di
 // Undismiss brings a dismissed item back, and reports ErrNotFound when it was not
 // dismissed.
 func (s *Service) Undismiss(ctx context.Context, kind ItemKind, itemID string) error {
+	return s.UndismissFor(ctx, LocalViewerID, kind, itemID)
+}
+
+// UndismissFor removes only one viewer's dismissal.
+func (s *Service) UndismissFor(ctx context.Context, viewer ViewerID, kind ItemKind, itemID string) error {
 	if err := ValidateDismissalTarget(kind, itemID); err != nil {
 		return err
 	}
-	err := s.deps.Dismissals.Undismiss(ctx, kind, itemID)
+	err := s.deps.Dismissals.Undismiss(ctx, viewer, kind, itemID)
 	switch {
 	case errors.Is(err, ErrNotFound):
 		return ErrNotFound
@@ -642,23 +674,23 @@ func (s *Service) Undismiss(ctx context.Context, kind ItemKind, itemID string) e
 // dismissible reports whether the item exists and has finished. A dismissed item
 // is still dismissible: the check reads the item's own status, which dismissal
 // does not change.
-func (s *Service) dismissible(ctx context.Context, kind ItemKind, itemID string) (bool, error) {
+func (s *Service) dismissible(ctx context.Context, kind ItemKind, itemID string) (bool, string, error) {
 	switch kind {
 	case KindFleet:
 		fleet, err := s.Fleet(ctx, itemID)
 		if err != nil {
-			return false, err
+			return false, "", err
 		}
-		return fleet.Dismissible(), nil
+		return fleet.Dismissible(), fleet.StateRevision(), nil
 	case KindRun:
 		run, err := s.Run(ctx, itemID)
 		if err != nil {
-			return false, err
+			return false, "", err
 		}
-		return run.Dismissible(), nil
+		return run.Dismissible(), run.StateRevision(), nil
 	default:
 		// ValidateDismissalTarget has already refused every other kind.
-		return false, ErrNotDismissible
+		return false, "", ErrNotDismissible
 	}
 }
 
@@ -1171,39 +1203,26 @@ func (s *Service) addExecutionStates(ctx context.Context, states map[string]Exec
 	return states, nil
 }
 
-// dismissalSet is the operator's dismissals indexed for lookup.
-type dismissalSet map[string]struct{}
+// dismissalSet is one viewer's dismissals indexed by item identity. The stored
+// value is the exact state that viewer acknowledged.
+type dismissalSet map[string]string
 
-// has reports whether the item is dismissed.
-func (d dismissalSet) has(kind ItemKind, itemID string) bool {
-	_, ok := d[Dismissal{Kind: kind, ItemID: itemID}.ID()]
-	return ok
+// has reports whether this exact item state is dismissed.
+func (d dismissalSet) has(kind ItemKind, itemID, revision string) bool {
+	dismissedRevision, ok := d[Dismissal{Kind: kind, ItemID: itemID}.ID()]
+	return ok && dismissedRevision == revision
 }
 
-// ids returns the dismissed item IDs of one kind for adapter-side exclusion.
-func (d dismissalSet) ids(kind ItemKind) []string {
-	prefix := string(kind) + ":"
-	ids := make([]string, 0)
-	for id := range d {
-		if len(id) > len(prefix) && id[:len(prefix)] == prefix {
-			ids = append(ids, id[len(prefix):])
-		}
-	}
-	sort.Strings(ids)
-	return ids
-}
-
-// dismissedIDs reads the dismissals. A failure is reported rather than ignored: a
-// silently empty set would put every dismissed item back on the overview, which
-// looks exactly like work reappearing.
-func (s *Service) dismissedIDs(ctx context.Context) (dismissalSet, error) {
-	dismissals, err := s.deps.Dismissals.Dismissals(ctx)
+// dismissedIDs reads one viewer's dismissals. A failure is reported rather than
+// ignored: a silently empty set would put hidden items back on the overview.
+func (s *Service) dismissedIDs(ctx context.Context, viewer ViewerID) (dismissalSet, error) {
+	dismissals, err := s.deps.Dismissals.Dismissals(ctx, viewer)
 	if err != nil {
 		return nil, unavailable("read the dismissals", err)
 	}
 	set := make(dismissalSet, len(dismissals))
 	for _, d := range dismissals {
-		set[d.ID()] = struct{}{}
+		set[d.ID()] = d.StateRevision
 	}
 	return set, nil
 }

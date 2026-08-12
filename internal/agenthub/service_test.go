@@ -606,9 +606,13 @@ func TestRunsShowLiveWorkTheRecordDoesNotHave(t *testing.T) {
 func TestDismissedItemsLeaveTheOverviewButNotTheStore(t *testing.T) {
 	kept := agenthubtest.Run("run-"+uuidLike("f"), "kept", agenthub.OutcomeSucceeded, ago(time.Hour))
 	hidden := agenthubtest.Run("run-"+uuidLike("10"), "hidden", agenthub.OutcomeSucceeded, ago(2*time.Hour))
-	source := agenthubtest.New().WithRecorded(kept, hidden).
-		WithDismissal(agenthub.KindRun, hidden.WorkflowID)
+	source := agenthubtest.New().WithRecorded(kept, hidden)
 	service := newService(t, source)
+	hiddenRun, err := service.Run(context.Background(), hidden.WorkflowID)
+	if err != nil {
+		t.Fatalf("Run(hidden): %v", err)
+	}
+	source.WithDismissal(agenthub.KindRun, hidden.WorkflowID, hiddenRun.StateRevision())
 
 	runs, err := service.Runs(context.Background(), 0)
 	if err != nil {
@@ -619,6 +623,33 @@ func TestDismissedItemsLeaveTheOverviewButNotTheStore(t *testing.T) {
 	}
 	if _, err := service.Run(context.Background(), hidden.WorkflowID); err != nil {
 		t.Fatalf("a dismissed run must still be readable by id: %v", err)
+	}
+}
+
+// TestADismissedRunReappearsWhenItsChainChanges pins that a dismissal acknowledges
+// only the state the operator reviewed. A later iteration is new work under the same
+// stable workflow ID and must therefore appear again.
+func TestADismissedRunReappearsWhenItsChainChanges(t *testing.T) {
+	id := "run-" + uuidLike("changed")
+	first := agenthubtest.Run(id, "review this", agenthub.OutcomeSucceeded, ago(2*time.Hour))
+	first.RunID = "iteration-1"
+	first.EndedAt = ago(time.Hour)
+	source := agenthubtest.New().WithRecorded(first)
+	service := newService(t, source)
+
+	if _, err := service.Dismiss(context.Background(), agenthub.KindRun, id); err != nil {
+		t.Fatalf("Dismiss: %v", err)
+	}
+	second := agenthubtest.Run(id, "review this", agenthub.OutcomeRunning, ago(time.Minute))
+	second.RunID = "iteration-2"
+	source.WithRecorded(second).WithRunning(second)
+
+	runs, err := service.Runs(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("Runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].ID != id || runs[0].Status != agenthub.StatusInProgress {
+		t.Fatalf("runs = %+v, want the changed chain visible and in progress", runs)
 	}
 }
 
@@ -687,6 +718,38 @@ func TestDismissIsIdempotentAndUndoable(t *testing.T) {
 	}
 	if err := service.Undismiss(ctx, agenthub.KindRun, id); !errors.Is(err, agenthub.ErrNotFound) {
 		t.Fatalf("Undismiss(twice) = %v, want ErrNotFound", err)
+	}
+}
+
+// TestDismissalIsPrivateToTheViewer pins that acknowledgement is personal view
+// state. One operator reviewing a run must not remove it from another operator's
+// canvas.
+func TestDismissalIsPrivateToTheViewer(t *testing.T) {
+	id := "run-" + uuidLike("private")
+	source := agenthubtest.New().WithRecorded(
+		agenthubtest.Run(id, "review this", agenthub.OutcomeSucceeded, ago(time.Hour)),
+	)
+	service := newService(t, source)
+	alice := agenthub.ViewerID("issuer|alice")
+	bob := agenthub.ViewerID("issuer|bob")
+
+	if _, err := service.DismissFor(context.Background(), alice, agenthub.KindRun, id); err != nil {
+		t.Fatalf("DismissFor(alice): %v", err)
+	}
+	aliceRuns, err := service.RunsFor(context.Background(), alice, 0)
+	if err != nil {
+		t.Fatalf("RunsFor(alice): %v", err)
+	}
+	bobRuns, err := service.RunsFor(context.Background(), bob, 0)
+	if err != nil {
+		t.Fatalf("RunsFor(bob): %v", err)
+	}
+
+	if len(aliceRuns) != 0 {
+		t.Fatalf("Alice's runs = %+v, want the reviewed run hidden", aliceRuns)
+	}
+	if len(bobRuns) != 1 || bobRuns[0].ID != id {
+		t.Fatalf("Bob's runs = %+v, want %q still visible", bobRuns, id)
 	}
 }
 
@@ -842,15 +905,24 @@ func TestAnUnavailableDependencyIsReportedAsRetryable(t *testing.T) {
 // dismissals cannot permanently hide an older visible fleet.
 func TestDismissedFleetsAreExcludedBeforeTheLimit(t *testing.T) {
 	source := agenthubtest.New()
+	var hiddenIDs []string
 	for i := 0; i < 201; i++ {
 		id := "fleet-" + uuidLike(fmt.Sprintf("%x", 0x100+i))
 		source.WithRecorded(agenthubtest.Fleet(id, agenthub.OutcomeSucceeded, now.Add(-time.Duration(i)*time.Second)))
-		source.WithDismissal(agenthub.KindFleet, id)
+		hiddenIDs = append(hiddenIDs, id)
 	}
 	visibleID := "fleet-" + uuidLike("2ff")
 	source.WithRecorded(agenthubtest.Fleet(visibleID, agenthub.OutcomeSucceeded, ago(time.Hour)))
+	service := newService(t, source)
+	for _, id := range hiddenIDs {
+		fleet, err := service.Fleet(context.Background(), id)
+		if err != nil {
+			t.Fatalf("Fleet(%s): %v", id, err)
+		}
+		source.WithDismissal(agenthub.KindFleet, id, fleet.StateRevision())
+	}
 
-	fleets, err := newService(t, source).Fleets(context.Background(), 1)
+	fleets, err := service.Fleets(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("Fleets: %v", err)
 	}

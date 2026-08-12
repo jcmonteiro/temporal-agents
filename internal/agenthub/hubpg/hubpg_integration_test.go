@@ -43,7 +43,7 @@ func TestDismissalsRoundTripNewestFirst(t *testing.T) {
 		Kind: agenthub.KindFleet, ItemID: "fleet-1", DismissedAt: newer,
 	})
 
-	got, err := store.Dismissals(ctx)
+	got, err := store.Dismissals(ctx, agenthub.LocalViewerID)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	require.Equal(t, "fleet:fleet-1", got[0].ID())
@@ -67,10 +67,36 @@ func TestDismissIsIdempotentAndKeepsTheOriginalTime(t *testing.T) {
 	})
 	require.Equal(t, storedFirst, storedSecond)
 
-	got, err := store.Dismissals(ctx)
+	got, err := store.Dismissals(ctx, agenthub.LocalViewerID)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	require.True(t, got[0].DismissedAt.Equal(first), "the original time must stand, got %v", got[0].DismissedAt)
+}
+
+// TestDismissalsAreIsolatedByViewer pins that the same item can be acknowledged by
+// two operators without either write changing the other's private view state.
+func TestDismissalsAreIsolatedByViewer(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	at := time.Now().UTC()
+
+	dismiss(t, store, ctx, agenthub.Dismissal{
+		Viewer: "issuer|alice", Kind: agenthub.KindRun, ItemID: "run-1",
+		StateRevision: "state-1", DismissedAt: at,
+	})
+	dismiss(t, store, ctx, agenthub.Dismissal{
+		Viewer: "issuer|bob", Kind: agenthub.KindRun, ItemID: "run-1",
+		StateRevision: "state-1", DismissedAt: at,
+	})
+
+	alice, err := store.Dismissals(ctx, "issuer|alice")
+	require.NoError(t, err)
+	require.Len(t, alice, 1)
+	require.Equal(t, agenthub.ViewerID("issuer|alice"), alice[0].Viewer)
+	bob, err := store.Dismissals(ctx, "issuer|bob")
+	require.NoError(t, err)
+	require.Len(t, bob, 1)
+	require.Equal(t, agenthub.ViewerID("issuer|bob"), bob[0].Viewer)
 }
 
 // TestTheSameIDUnderTwoKindsAreTwoDismissals pins that the kind is part of the
@@ -84,9 +110,29 @@ func TestTheSameIDUnderTwoKindsAreTwoDismissals(t *testing.T) {
 	dismiss(t, store, ctx, agenthub.Dismissal{Kind: agenthub.KindRun, ItemID: "x", DismissedAt: at})
 	dismiss(t, store, ctx, agenthub.Dismissal{Kind: agenthub.KindFleet, ItemID: "x", DismissedAt: at})
 
-	got, err := store.Dismissals(ctx)
+	got, err := store.Dismissals(ctx, agenthub.LocalViewerID)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
+}
+
+// TestDismissingAChangedStateReplacesTheAcknowledgement pins the state-sensitive
+// upsert: an exact retry keeps its time, while reviewing a later state records a new
+// revision and a new time.
+func TestDismissingAChangedStateReplacesTheAcknowledgement(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	first := time.Date(2026, 8, 6, 9, 0, 0, 0, time.UTC)
+	second := first.Add(time.Hour)
+
+	dismiss(t, store, ctx, agenthub.Dismissal{
+		Kind: agenthub.KindRun, ItemID: "run-1", StateRevision: "state-1", DismissedAt: first,
+	})
+	stored := dismiss(t, store, ctx, agenthub.Dismissal{
+		Kind: agenthub.KindRun, ItemID: "run-1", StateRevision: "state-2", DismissedAt: second,
+	})
+
+	require.Equal(t, "state-2", stored.StateRevision)
+	require.True(t, stored.DismissedAt.Equal(second))
 }
 
 // TestUndismissReportsWhetherItRemovedAnything pins the delete contract: undismissing
@@ -96,14 +142,14 @@ func TestUndismissReportsWhetherItRemovedAnything(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	require.ErrorIs(t, store.Undismiss(ctx, agenthub.KindRun, "run-1"), agenthub.ErrNotFound)
+	require.ErrorIs(t, store.Undismiss(ctx, agenthub.LocalViewerID, agenthub.KindRun, "run-1"), agenthub.ErrNotFound)
 
 	dismiss(t, store, ctx, agenthub.Dismissal{
 		Kind: agenthub.KindRun, ItemID: "run-1", DismissedAt: time.Now().UTC(),
 	})
-	require.NoError(t, store.Undismiss(ctx, agenthub.KindRun, "run-1"))
+	require.NoError(t, store.Undismiss(ctx, agenthub.LocalViewerID, agenthub.KindRun, "run-1"))
 
-	got, err := store.Dismissals(ctx)
+	got, err := store.Dismissals(ctx, agenthub.LocalViewerID)
 	require.NoError(t, err)
 	require.Empty(t, got)
 }
@@ -122,7 +168,7 @@ func TestTwoServersShareOneSchema(t *testing.T) {
 	dismiss(t, first, ctx, agenthub.Dismissal{
 		Kind: agenthub.KindRun, ItemID: "run-1", DismissedAt: time.Now().UTC(),
 	})
-	got, err := second.Dismissals(ctx)
+	got, err := second.Dismissals(ctx, agenthub.LocalViewerID)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 }
@@ -131,6 +177,12 @@ func TestTwoServersShareOneSchema(t *testing.T) {
 // the stored resource.
 func dismiss(t *testing.T, store *Store, ctx context.Context, d agenthub.Dismissal) agenthub.Dismissal {
 	t.Helper()
+	if d.Viewer == "" {
+		d.Viewer = agenthub.LocalViewerID
+	}
+	if d.StateRevision == "" {
+		d.StateRevision = "reviewed-state"
+	}
 	stored, err := store.Dismiss(ctx, d)
 	require.NoError(t, err)
 	return stored
