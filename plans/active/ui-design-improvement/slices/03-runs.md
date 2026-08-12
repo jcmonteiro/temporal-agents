@@ -34,9 +34,9 @@ composition adapts across themes and viewport sizes.
 
 ## Done when
 
-- [ ] Every current `/runs` page and meaningful existing state has reviewable coverage.
-- [ ] Primary state, progress, important details, and next actions have clear hierarchy.
-- [ ] Dense and long content remains readable without hiding required information.
-- [ ] Shared status and action treatments match Settings and the design system.
-- [ ] Narrow and wide compositions avoid clipping and accidental page overflow.
-- [ ] Storybook interaction, accessibility, and relevant frontend tests pass.
+- [x] Every current `/runs` page and meaningful existing state has reviewable coverage.
+- [x] Primary state, progress, important details, and next actions have clear hierarchy.
+- [x] Dense and long content remains readable without hiding required information.
+- [x] Shared status and action treatments match Settings and the design system.
+- [x] Narrow and wide compositions avoid clipping and accidental page overflow.
+- [x] Storybook interaction, accessibility, and relevant frontend tests pass.
