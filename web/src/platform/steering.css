@@ -161,6 +161,73 @@
   text-transform: uppercase;
 }
 
+.steering-steps {
+  min-width: 0;
+}
+
+.steering-steps ol {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.steering-steps li {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-subtle);
+  background: var(--color-surface-2);
+  font-size: var(--font-size-xs);
+}
+
+.steering-steps li > span {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  grid-row: 1 / span 2;
+  place-items: center;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 50%;
+  font-weight: var(--font-weight-semibold);
+}
+
+.steering-steps li > strong {
+  overflow: hidden;
+  color: inherit;
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+}
+
+.steering-steps li > small {
+  color: var(--color-text-muted);
+  line-height: var(--line-height-tight);
+}
+
+.steering-steps li[aria-current="step"] {
+  border-color: color-mix(in srgb, var(--color-accent) 50%, var(--color-border));
+  color: var(--color-text);
+  background: var(--color-accent-soft);
+}
+
+.steering-steps li[aria-current="step"] > span {
+  border-color: var(--color-accent);
+  color: var(--color-surface);
+  background: var(--color-accent);
+}
+
+.steering-steps li[data-complete="true"] > span {
+  border-color: var(--status-done);
+  color: var(--status-done);
+}
+
 .steering-section {
   min-width: 0;
   overflow: hidden;
@@ -194,6 +261,41 @@
   font-weight: var(--font-weight-semibold);
 }
 
+.steering-decision__actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.steering-section__maximize {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+.steering-section__maximize:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text);
+  background: var(--color-accent-soft);
+}
+
+.steering-section__maximize > span {
+  color: var(--color-accent);
+  font-size: var(--font-size-base);
+  line-height: 1;
+}
+
 .steering-decision pre {
   max-height: 220px;
   margin: 0;
@@ -203,6 +305,135 @@
   background:
     linear-gradient(90deg, var(--color-accent-soft), transparent 5px),
     var(--color-surface);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-body);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.steering-modal__body--material-expanded {
+  grid-template-rows: minmax(0, 1fr);
+  padding: 0;
+  overflow: hidden;
+}
+
+.steering-decision--expanded {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  border: 0;
+  border-radius: 0;
+}
+
+.steering-decision--expanded .steering-section__heading {
+  flex: 0 0 auto;
+}
+
+.steering-decision--expanded pre {
+  max-height: none;
+  flex: 1 1 auto;
+  padding: var(--space-6);
+}
+
+.steering-outcome,
+.steering-step-intro,
+.steering-review {
+  min-width: 0;
+}
+
+.steering-outcome > div:first-child,
+.steering-step-intro {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.steering-outcome h3,
+.steering-step-intro h3 {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.01em;
+}
+
+.steering-outcome > div:first-child > p:last-child,
+.steering-step-intro > p:last-of-type {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-body);
+}
+
+.steering-outcome__choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.steering-outcome__choices button {
+  display: grid;
+  min-width: 0;
+  min-height: 112px;
+  align-content: start;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  background: linear-gradient(145deg, var(--color-surface), var(--color-surface-2));
+  text-align: left;
+  transition: border-color var(--motion-fast) ease, transform var(--motion-fast) ease;
+}
+
+.steering-outcome__choices button:hover {
+  border-color: var(--color-accent);
+  transform: translateY(-1px);
+}
+
+.steering-outcome__choices button:focus-visible {
+  border-color: var(--color-accent);
+}
+
+.steering-outcome__choices button strong {
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-tight);
+}
+
+.steering-outcome__choices button span {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-body);
+}
+
+.steering-outcome__choices .steering-outcome__danger:hover,
+.steering-outcome__choices .steering-outcome__danger:focus-visible {
+  border-color: var(--status-error);
+}
+
+.steering-step-intro details {
+  margin-top: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+}
+
+.steering-step-intro summary {
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+.steering-step-intro details pre {
+  max-height: 180px;
+  margin: 0;
+  padding: var(--space-4);
+  overflow: auto;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text);
+  background: var(--color-surface);
   font-family: var(--font-sans);
   font-size: var(--font-size-sm);
   line-height: var(--line-height-body);
@@ -262,6 +493,23 @@
   color: var(--color-text);
   font-size: var(--font-size-sm);
   line-height: var(--line-height-body);
+}
+
+.steering-message__use {
+  justify-self: start;
+  margin-top: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-decoration: underline;
+  text-decoration-color: var(--color-accent);
+  text-underline-offset: 2px;
+}
+
+.steering-message__use:hover {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
 }
 
 .steering-conversation__meta {
@@ -340,6 +588,57 @@
   opacity: 0.7;
 }
 
+.steering-review {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.steering-review__summary {
+  display: grid;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.steering-review__summary > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.3fr) minmax(0, 1fr);
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.steering-review__summary > div:last-child {
+  border-bottom: 0;
+}
+
+.steering-review__summary dt {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.steering-review__summary dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-body);
+}
+
+.steering-review__guidance dd {
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  white-space: pre-wrap;
+}
+
 .steering-modal__footer {
   display: grid;
   flex: 0 0 auto;
@@ -399,6 +698,12 @@
 
 .steering-decisions .ui-button--secondary {
   order: 2;
+}
+
+.steering-decisions[aria-label="Decision confirmation"] .ui-button--danger {
+  margin-right: 0;
+  margin-left: auto;
+  order: 3;
 }
 
 .steering-loading {
@@ -544,8 +849,23 @@
   padding-inline: var(--space-4);
 }
 
-.steering-story-frame--narrow .steering-question__controls {
+.steering-story-frame--narrow .steering-question__controls,
+.steering-story-frame--narrow .steering-outcome__choices,
+.steering-story-frame--narrow .steering-review__summary > div {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.steering-story-frame--narrow .steering-steps ol {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.steering-story-frame--narrow .steering-section__heading {
+  flex-wrap: wrap;
+}
+
+.steering-story-frame--narrow .steering-decision__actions {
+  width: 100%;
+  justify-content: space-between;
 }
 
 .steering-story-frame--narrow .steering-question__controls .ui-button,
@@ -619,8 +939,23 @@
     padding-inline: var(--space-4);
   }
 
-  .steering-question__controls {
+  .steering-question__controls,
+  .steering-outcome__choices,
+  .steering-review__summary > div {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .steering-steps ol {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .steering-section__heading {
+    flex-wrap: wrap;
+  }
+
+  .steering-decision__actions {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .steering-question__controls .ui-button,
@@ -657,7 +992,8 @@
     animation: none;
   }
 
-  .steering-guidance textarea {
+  .steering-guidance textarea,
+  .steering-outcome__choices button {
     transition: none;
   }
 }

@@ -138,8 +138,22 @@ export const InitialWideLight: Story = {
   parameters: { steeringScenario: "initial" },
   play: async ({ canvasElement }) => {
     const dialog = await findDialog(canvasElement);
-    await expect(within(dialog).findByText("No questions asked yet.")).resolves.toBeVisible();
-    await expect(within(dialog).getByRole("button", { name: "Build with guidance" })).toBeDisabled();
+    const modal = within(dialog);
+    await expect(modal.findByRole("button", { name: "Build with guidance" })).resolves.toBeEnabled();
+    await expect(modal.getByRole("button", { name: "Maximize review outcome" })).toBeEnabled();
+    await expect(modal.queryByText("No questions asked yet.")).not.toBeInTheDocument();
+  },
+};
+
+export const MaximizedReviewOutcome: Story = {
+  globals: { theme: "dark" },
+  parameters: { steeringScenario: "long" },
+  play: async ({ canvasElement }) => {
+    const dialog = await findDialog(canvasElement);
+    const modal = within(dialog);
+    await userEvent.click(await modal.findByRole("button", { name: "Maximize review outcome" }));
+    await expect(modal.getByRole("button", { name: "Restore review outcome" })).toBeVisible();
+    await expect(modal.queryByRole("heading", { name: "Choose what happens next" })).not.toBeInTheDocument();
   },
 };
 
@@ -147,9 +161,12 @@ export const ActiveWideDark: Story = {
   globals: { theme: "dark" },
   play: async ({ canvasElement }) => {
     const dialog = await findDialog(canvasElement);
-    await expect(within(dialog).findByText(/retry hides the original error/i)).resolves.toBeVisible();
+    const modal = within(dialog);
+    await expect(modal.findByText(/retry hides the original error/i)).resolves.toBeVisible();
+    await userEvent.click(modal.getByRole("button", { name: "Build with guidance" }));
+    await userEvent.click(modal.getByRole("button", { name: "Continue to guidance" }));
     await expect(
-      within(dialog).getByLabelText("Guidance for the implementing agent"),
+      modal.getByLabelText("Guidance for the implementing agent"),
     ).toHaveValue("Keep the retry, but preserve the original cause.");
   },
 };
@@ -169,7 +186,9 @@ export const LongConversationNarrowLight: Story = {
   parameters: { steeringScenario: "long", steeringViewport: "narrow" },
   play: async ({ canvasElement }) => {
     const dialog = await findDialog(canvasElement);
-    const conversation = await within(dialog).findByRole("region", { name: "Questioning conversation" });
+    const modal = within(dialog);
+    await userEvent.click(await modal.findByRole("button", { name: "Build with guidance" }));
+    const conversation = await modal.findByRole("region", { name: "Questioning conversation" });
     await expect(within(conversation).getAllByRole("listitem")).toHaveLength(12);
     await expect(dialog.scrollWidth).toBeLessThanOrEqual(dialog.clientWidth);
   },
@@ -189,9 +208,10 @@ export const QuestionPending: Story = {
   play: async ({ canvasElement }) => {
     const dialog = await findDialog(canvasElement);
     const modal = within(dialog);
-    await userEvent.type(await modal.findByLabelText("Answer the questioning agent"), "Which callers inspect it?");
-    await userEvent.click(modal.getByRole("button", { name: "Ask one question" }));
-    await expect(modal.getByRole("button", { name: "Ask one question" })).toBeDisabled();
+    await userEvent.click(await modal.findByRole("button", { name: "Build with guidance" }));
+    await userEvent.type(await modal.findByLabelText("Question for the questioning agent"), "Which callers inspect it?");
+    await userEvent.click(modal.getByRole("button", { name: "Ask question" }));
+    await expect(modal.getByRole("button", { name: "Ask question" })).toBeDisabled();
     await expect(dialog).toHaveAttribute("aria-busy", "true");
     await expect(modal.getByText("Steering update in progress…")).toBeVisible();
   },

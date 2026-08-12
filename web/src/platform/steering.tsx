@@ -22,6 +22,25 @@ import "./steering.css";
 const GUIDANCE_LIMIT = 8 * 1024;
 const REFRESH_INTERVAL_MS = 5_000;
 
+type SteeringDecision = "guide" | "skip" | "stop" | "continue" | "accept";
+type SteeringStep = "outcome" | "clarify" | "guidance" | "review";
+
+const DECISION_LABELS: Record<SteeringDecision, string> = {
+  guide: "Build with guidance",
+  skip: "Proceed without guidance",
+  stop: "Stop the loop",
+  continue: "Continue with a fresh pass budget",
+  accept: "Accept the work as finished",
+};
+
+const DECISION_CONSEQUENCES: Record<SteeringDecision, string> = {
+  guide: "Implementation resumes with the guidance below.",
+  skip: "Implementation resumes without operator guidance.",
+  stop: "The review loop stops without another implementation pass.",
+  continue: "The review loop receives a fresh pass budget.",
+  accept: "The current work is accepted as finished.",
+};
+
 interface SteeringContextValue {
   sessions: SteeringSessionDTO[];
   open(sessionId: string): void;
@@ -113,9 +132,15 @@ function SteeringModal({
   const [answer, setAnswer] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [step, setStep] = useState<SteeringStep>("outcome");
+  const [choice, setChoice] = useState<SteeringDecision | null>(null);
+  const [materialExpanded, setMaterialExpanded] = useState(false);
   const submitting = useRef(false);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const outcomeRef = useRef<HTMLButtonElement>(null);
+  const answerRef = useRef<HTMLInputElement>(null);
   const guidanceRef = useRef<HTMLTextAreaElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(
     typeof document !== "undefined" && document.activeElement instanceof HTMLElement
       ? document.activeElement
@@ -154,22 +179,32 @@ function SteeringModal({
     };
   }, [sessionId]);
 
+  const loaded = session !== null;
+
   useEffect(() => {
-    if (session !== null) {
-      const narrow = typeof window.matchMedia === "function"
-        && window.matchMedia("(max-width: 620px)").matches;
-      (narrow ? closeRef.current : guidanceRef.current ?? closeRef.current)
-        ?.focus({ preventScroll: true });
-    }
-  }, [session !== null]);
+    if (!loaded) return;
+    const narrow = typeof window.matchMedia === "function"
+      && window.matchMedia("(max-width: 620px)").matches;
+    const stepTarget = step === "outcome"
+      ? outcomeRef.current
+      : step === "clarify"
+        ? answerRef.current
+        : step === "guidance"
+          ? guidanceRef.current
+          : confirmRef.current;
+    (narrow && step === "outcome" ? closeRef.current : stepTarget ?? closeRef.current)
+      ?.focus({ preventScroll: true });
+  }, [loaded, step]);
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      if (materialExpanded) setMaterialExpanded(false);
+      else onClose();
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
+  }, [materialExpanded, onClose]);
 
   const containFocus = (event: ReactKeyboardEvent<HTMLElement>): void => {
     if (event.key !== "Tab") return;
@@ -188,14 +223,13 @@ function SteeringModal({
     }
   };
 
-  const question = async (finish: boolean): Promise<void> => {
+  const question = async (): Promise<void> => {
     if (busy || answer.trim() === "") return;
     setBusy(true);
     setError("");
-    const result = await questionSteeringSession(sessionId, answer, finish);
+    const result = await questionSteeringSession(sessionId, answer, false);
     if (result.ok) {
       setSession(result.value);
-      setGuidance(result.value.guidance ?? guidance);
       setAnswer("");
     } else {
       setError(result.error.message);
@@ -203,15 +237,24 @@ function SteeringModal({
     setBusy(false);
   };
 
-  const decide = async (choice: "guide" | "skip" | "stop" | "continue" | "accept"): Promise<void> => {
-    if (submitting.current || (choice === "guide" && guidance.trim() === "")) return;
+  const choose = (decision: SteeringDecision): void => {
+    setChoice(decision);
+    setStep(decision === "guide" ? "clarify" : "review");
+  };
+
+  const backFromReview = (): void => {
+    setStep(choice === "guide" ? "guidance" : "outcome");
+  };
+
+  const decide = async (decision: SteeringDecision): Promise<void> => {
+    if (submitting.current || (decision === "guide" && guidance.trim() === "")) return;
     submitting.current = true;
     setBusy(true);
     setError("");
     const result = await decideSteeringSession(
       sessionId,
-      choice,
-      choice === "guide" ? guidance : undefined,
+      decision,
+      decision === "guide" ? guidance : undefined,
     );
     if (result.ok) onDecided();
     else {
@@ -222,6 +265,17 @@ function SteeringModal({
   };
 
   const passLimit = session?.round === "pass-limit";
+  const messages = session?.messages ?? [];
+  const visibleSteps: SteeringStep[] = passLimit || (choice !== null && choice !== "guide")
+    ? ["outcome", "review"]
+    : ["outcome", "clarify", "guidance", "review"];
+  const currentStepIndex = visibleSteps.indexOf(step);
+  const stepLabels: Record<SteeringStep, string> = {
+    outcome: "Outcome",
+    clarify: "Clarify",
+    guidance: "Guidance",
+    review: "Review",
+  };
 
   return (
     <div
@@ -249,7 +303,7 @@ function SteeringModal({
               <p id="steering-purpose">
                 {passLimit
                   ? "Choose whether this run receives another review budget or finishes here."
-                  : "Review the issue, refine the guidance, then choose how this run continues."}
+                  : "Choose an outcome, provide only the details it needs, then review the decision."}
               </p>
             </div>
           </div>
@@ -264,7 +318,7 @@ function SteeringModal({
           </button>
         </header>
 
-        <div className="steering-modal__body">
+        <div className={`steering-modal__body${materialExpanded ? " steering-modal__body--material-expanded" : ""}`}>
           {session === null && error === "" && (
             <div className="steering-loading" role="status">
               <span className="steering-loading__spinner" aria-hidden="true" />
@@ -277,125 +331,254 @@ function SteeringModal({
 
           {session !== null && (
             <>
-              <div className="steering-context-bar" aria-label="Run context">
-                <span><strong>Run</strong> {session.itemId}</span>
-                <span><strong>State</strong> Waiting for input</span>
-                <span><strong>Elapsed</strong> {waitingFor(session.waitingSince)}</span>
-              </div>
-
-              <section className="steering-section steering-decision" aria-labelledby="steering-decision-heading">
-                <div className="steering-section__heading">
-                  <div>
-                    <p className="ui-kicker">Decision context</p>
-                    <h3 id="steering-decision-heading">What needs a decision</h3>
-                  </div>
-                  <span className="ui-status ui-status--waiting-input">
-                    <span aria-hidden="true" /> Input needed
-                  </span>
+              {!materialExpanded && (
+                <div className="steering-context-bar" aria-label="Run context">
+                  <span><strong>Run</strong> {session.itemId}</span>
+                  <span><strong>State</strong> Waiting for input</span>
+                  <span><strong>Elapsed</strong> {waitingFor(session.waitingSince)}</span>
                 </div>
-                <pre>{session.material || "No review material was supplied for this round."}</pre>
-              </section>
-
-              <section
-                className="steering-section steering-conversation"
-                aria-label="Questioning conversation"
-                aria-live="polite"
-              >
-                <div className="steering-section__heading">
-                  <div>
-                    <p className="ui-kicker">Optional guidance flow</p>
-                    <h3>Conversation</h3>
-                  </div>
-                  <span className="steering-section__count">
-                    {(session.messages ?? []).length} {(session.messages ?? []).length === 1 ? "turn" : "turns"}
-                  </span>
-                </div>
-                {(session.messages ?? []).length === 0 ? (
-                  <p className="steering-conversation__empty">No questions asked yet.</p>
-                ) : (
-                  <ol
-                    className="steering-conversation__list"
-                    aria-label="Conversation turns"
-                    tabIndex={0}
-                  >
-                    {session.messages?.map((message) => (
-                      <li className={`steering-message steering-message--${message.role}`} key={message.sequence}>
-                        <span className="steering-message__author">
-                          {message.role === "agent" ? "Questioning agent" : message.author ?? "Operator"}
-                        </span>
-                        <p>{message.text}</p>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-                <div className="steering-conversation__meta">
-                  <span>{session.tokens ?? 0} questioning tokens</span>
-                  <span>Contributors: {(session.contributors ?? []).join(", ") || "none yet"}</span>
-                </div>
-              </section>
-
-              {!passLimit && (
-                <section className="steering-section steering-guidance" aria-labelledby="steering-guidance-heading">
-                  <div className="steering-section__heading">
-                    <div>
-                      <p className="ui-kicker">Implementation direction</p>
-                      <h3 id="steering-guidance-heading">Guidance</h3>
-                    </div>
-                  </div>
-                  <label className="ui-field steering-guidance__field">
-                    Guidance for the implementing agent
-                    <textarea
-                      ref={guidanceRef}
-                      aria-label="Guidance for the implementing agent"
-                      value={guidance}
-                      maxLength={GUIDANCE_LIMIT}
-                      onChange={(event) => setGuidance(event.target.value)}
-                      rows={6}
-                    />
-                    <small>
-                      {guidance.length} / {GUIDANCE_LIMIT} bytes. Build needs non-empty guidance;
-                      proceed without guidance when no direction is needed.
-                    </small>
-                  </label>
-                </section>
               )}
 
-              <fieldset className="steering-question" disabled={busy}>
-                <legend>Question the review before deciding</legend>
-                <p>Ask for one more detail, or turn the answer into implementation guidance.</p>
-                <div className="steering-question__controls">
-                  <label className="ui-field">
-                    <span className="steering-visually-hidden">Answer the questioning agent</span>
-                    <input
-                      aria-label="Answer the questioning agent"
-                      value={answer}
-                      placeholder="Add a question or clarification…"
-                      onChange={(event) => setAnswer(event.target.value)}
-                    />
-                  </label>
-                  <button
-                    className="ui-button ui-button--secondary"
-                    type="button"
-                    disabled={busy || answer.trim() === ""}
-                    onClick={() => void question(false)}
+              {!materialExpanded && <nav className="steering-steps" aria-label="Steering progress">
+                <ol>
+                  {visibleSteps.map((item, index) => (
+                    <li
+                      key={item}
+                      aria-current={item === step ? "step" : undefined}
+                      data-complete={index < currentStepIndex || undefined}
+                    >
+                      <span>{index + 1}</span>
+                      <strong>{stepLabels[item]}</strong>
+                      {item === "clarify" && <small>Optional</small>}
+                    </li>
+                  ))}
+                </ol>
+              </nav>}
+
+              {step === "outcome" && (
+                <>
+                  <section
+                    className={`steering-section steering-decision${materialExpanded ? " steering-decision--expanded" : ""}`}
+                    aria-labelledby="steering-decision-heading"
                   >
-                    Ask one question
-                  </button>
-                  <button
-                    className="ui-button ui-button--secondary"
-                    type="button"
-                    disabled={busy || answer.trim() === ""}
-                    onClick={() => void question(true)}
+                    <div className="steering-section__heading">
+                      <div>
+                        <p className="ui-kicker">Decision context</p>
+                        <h3 id="steering-decision-heading">What needs a decision</h3>
+                      </div>
+                      <div className="steering-decision__actions">
+                        {!materialExpanded && (
+                          <span className="ui-status ui-status--waiting-input">
+                            <span aria-hidden="true" /> Input needed
+                          </span>
+                        )}
+                        <button
+                          className="steering-section__maximize"
+                          type="button"
+                          aria-expanded={materialExpanded}
+                          aria-controls="steering-review-outcome"
+                          onClick={() => setMaterialExpanded((expanded) => !expanded)}
+                        >
+                          <span aria-hidden="true">{materialExpanded ? "↙" : "↗"}</span>
+                          {materialExpanded ? "Restore review outcome" : "Maximize review outcome"}
+                        </button>
+                      </div>
+                    </div>
+                    <pre id="steering-review-outcome">{session.material || "No review material was supplied for this round."}</pre>
+                  </section>
+
+                  {!materialExpanded && <section className="steering-outcome" aria-labelledby="steering-outcome-heading">
+                    <div>
+                      <p className="ui-kicker">Step 1</p>
+                      <h3 id="steering-outcome-heading">Choose what happens next</h3>
+                      <p>The selected outcome determines which details are needed before confirmation.</p>
+                    </div>
+                    <div className="steering-outcome__choices">
+                      {passLimit ? (
+                        <>
+                          <button ref={outcomeRef} type="button" aria-label="Continue with a fresh pass budget" onClick={() => choose("continue")}>
+                            <strong>Continue with a fresh pass budget</strong>
+                            <span>Allow another bounded review pass.</span>
+                          </button>
+                          <button type="button" aria-label="Accept the work as finished" onClick={() => choose("accept")}>
+                            <strong>Accept the work as finished</strong>
+                            <span>Finish with the current implementation.</span>
+                          </button>
+                          <button className="steering-outcome__danger" type="button" aria-label="Stop the loop" onClick={() => choose("stop")}>
+                            <strong>Stop the loop</strong>
+                            <span>End the review without another pass.</span>
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button ref={outcomeRef} type="button" aria-label="Build with guidance" onClick={() => choose("guide")}>
+                            <strong>Build with guidance</strong>
+                            <span>Clarify if needed, then prepare implementation direction.</span>
+                          </button>
+                          <button type="button" aria-label="Proceed without guidance" onClick={() => choose("skip")}>
+                            <strong>Proceed without guidance</strong>
+                            <span>Resume implementation without operator direction.</span>
+                          </button>
+                          <button className="steering-outcome__danger" type="button" aria-label="Stop the loop" onClick={() => choose("stop")}>
+                            <strong>Stop the loop</strong>
+                            <span>End the review without another implementation pass.</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </section>}
+                </>
+              )}
+
+              {step === "clarify" && (
+                <>
+                  <section className="steering-step-intro" aria-labelledby="steering-clarify-heading">
+                    <p className="ui-kicker">Optional step</p>
+                    <h3 id="steering-clarify-heading">Clarify the direction</h3>
+                    <p>Ask questions about the review material before writing implementation guidance.</p>
+                    <details>
+                      <summary>Review the decision material</summary>
+                      <pre>{session.material || "No review material was supplied for this round."}</pre>
+                    </details>
+                  </section>
+
+                  <section
+                    className="steering-section steering-conversation"
+                    aria-label="Questioning conversation"
+                    aria-live="polite"
                   >
-                    Finish into guidance
-                  </button>
-                </div>
-              </fieldset>
+                    <div className="steering-section__heading">
+                      <div>
+                        <p className="ui-kicker">Clarification</p>
+                        <h3>Conversation</h3>
+                      </div>
+                      <span className="steering-section__count">
+                        {messages.length} {messages.length === 1 ? "turn" : "turns"}
+                      </span>
+                    </div>
+                    {messages.length === 0 ? (
+                      <p className="steering-conversation__empty">No questions asked yet.</p>
+                    ) : (
+                      <ol className="steering-conversation__list" aria-label="Conversation turns" tabIndex={0}>
+                        {messages.map((message) => (
+                          <li className={`steering-message steering-message--${message.role}`} key={message.sequence}>
+                            <span className="steering-message__author">
+                              {message.role === "agent" ? "Questioning agent" : message.author ?? "Operator"}
+                            </span>
+                            <p>{message.text}</p>
+                            {message.role === "agent" && (
+                              <button
+                                className="steering-message__use"
+                                type="button"
+                                onClick={() => {
+                                  setGuidance(message.text);
+                                  setStep("guidance");
+                                }}
+                              >
+                                Use this answer as draft guidance
+                              </button>
+                            )}
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                    <div className="steering-conversation__meta">
+                      <span>{session.tokens ?? 0} questioning tokens</span>
+                      <span>Contributors: {(session.contributors ?? []).join(", ") || "none yet"}</span>
+                    </div>
+                  </section>
+
+                  <fieldset className="steering-question" disabled={busy}>
+                    <legend>Ask the questioning agent</legend>
+                    <p>Each answer is recorded immediately. The final steering decision is not submitted yet.</p>
+                    <div className="steering-question__controls">
+                      <label className="ui-field">
+                        <span className="steering-visually-hidden">Question for the questioning agent</span>
+                        <input
+                          ref={answerRef}
+                          aria-label="Question for the questioning agent"
+                          value={answer}
+                          placeholder="Ask for one detail…"
+                          onChange={(event) => setAnswer(event.target.value)}
+                        />
+                      </label>
+                      <button
+                        className="ui-button ui-button--secondary"
+                        type="button"
+                        disabled={busy || answer.trim() === ""}
+                        onClick={() => void question()}
+                      >
+                        Ask question
+                      </button>
+                    </div>
+                  </fieldset>
+                </>
+              )}
+
+              {step === "guidance" && (
+                <>
+                  <section className="steering-step-intro" aria-labelledby="steering-guidance-step-heading">
+                    <p className="ui-kicker">Step 3</p>
+                    <h3 id="steering-guidance-step-heading">Prepare implementation guidance</h3>
+                    <p>Give the implementing agent a clear direction. Guidance is required for this outcome.</p>
+                    <details>
+                      <summary>Review the decision material</summary>
+                      <pre>{session.material || "No review material was supplied for this round."}</pre>
+                    </details>
+                  </section>
+                  <section className="steering-section steering-guidance" aria-labelledby="steering-guidance-heading">
+                    <div className="steering-section__heading">
+                      <div>
+                        <p className="ui-kicker">Implementation direction</p>
+                        <h3 id="steering-guidance-heading">Guidance</h3>
+                      </div>
+                      {messages.length > 0 && (
+                        <span className="steering-section__count">
+                          {messages.length} clarification {messages.length === 1 ? "turn" : "turns"}
+                        </span>
+                      )}
+                    </div>
+                    <label className="ui-field steering-guidance__field">
+                      Guidance for the implementing agent
+                      <textarea
+                        ref={guidanceRef}
+                        aria-label="Guidance for the implementing agent"
+                        value={guidance}
+                        maxLength={GUIDANCE_LIMIT}
+                        onChange={(event) => setGuidance(event.target.value)}
+                        rows={8}
+                      />
+                      <small>{guidance.length} / {GUIDANCE_LIMIT} bytes</small>
+                    </label>
+                  </section>
+                </>
+              )}
+
+              {step === "review" && choice !== null && (
+                <section className="steering-review" aria-labelledby="steering-review-heading">
+                  <div className="steering-step-intro">
+                    <p className="ui-kicker">Final step</p>
+                    <h3 id="steering-review-heading">Review the decision</h3>
+                    <p>No terminal decision has been submitted. Confirm the summary below to continue.</p>
+                  </div>
+                  <dl className="steering-review__summary">
+                    <div><dt>Run</dt><dd>{session.itemId}</dd></div>
+                    <div><dt>Outcome</dt><dd>{DECISION_LABELS[choice]}</dd></div>
+                    {choice === "guide" && (
+                      <>
+                        <div><dt>Clarification</dt><dd>{messages.length} {messages.length === 1 ? "turn" : "turns"}</dd></div>
+                        <div className="steering-review__guidance"><dt>Guidance</dt><dd>{guidance}</dd></div>
+                      </>
+                    )}
+                    <div><dt>Result</dt><dd>{DECISION_CONSEQUENCES[choice]}</dd></div>
+                  </dl>
+                </section>
+              )}
             </>
           )}
         </div>
 
-        {(session !== null || error !== "") && (
+        {(error !== "" || busy || (session !== null && step !== "outcome")) && (
           <footer className="steering-modal__footer">
             <div className="steering-modal__feedback" aria-live="assertive">
               {busy && error === "" && (
@@ -414,29 +597,48 @@ function SteeringModal({
                 </div>
               )}
             </div>
-            {session !== null && (
-              <div className="steering-decisions" aria-label="Steering decisions">
-                {passLimit ? (
-                  <>
-                    <button className="ui-button ui-button--primary" type="button" disabled={busy} onClick={() => void decide("continue")}>Continue with a fresh pass budget</button>
-                    <button className="ui-button ui-button--secondary" type="button" disabled={busy} onClick={() => void decide("accept")}>Accept the work as finished</button>
-                    <button className="ui-button ui-button--danger" type="button" disabled={busy} onClick={() => void decide("stop")}>Stop the loop</button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      className="ui-button ui-button--primary"
-                      type="button"
-                      disabled={busy || guidance.trim() === ""}
-                      title={guidance.trim() === "" ? "Enter guidance before building" : undefined}
-                      onClick={() => void decide("guide")}
-                    >
-                      Build with guidance
-                    </button>
-                    <button className="ui-button ui-button--secondary" type="button" disabled={busy} onClick={() => void decide("skip")}>Proceed without guidance</button>
-                    <button className="ui-button ui-button--danger" type="button" disabled={busy} onClick={() => void decide("stop")}>Stop the loop</button>
-                  </>
-                )}
+            {session !== null && step === "clarify" && (
+              <div className="steering-decisions" aria-label="Clarification navigation">
+                <button className="ui-button ui-button--secondary" type="button" disabled={busy} onClick={() => setStep("outcome")}>Back</button>
+                <button className="ui-button ui-button--primary" type="button" disabled={busy} onClick={() => setStep("guidance")}>
+                  {messages.length === 0 ? "Skip clarification" : "Continue to guidance"}
+                </button>
+              </div>
+            )}
+            {session !== null && step === "guidance" && (
+              <div className="steering-decisions" aria-label="Guidance navigation">
+                <button className="ui-button ui-button--secondary" type="button" disabled={busy} onClick={() => setStep("clarify")}>Back to clarification</button>
+                <button
+                  className="ui-button ui-button--primary"
+                  type="button"
+                  disabled={busy || guidance.trim() === ""}
+                  title={guidance.trim() === "" ? "Enter guidance before reviewing" : undefined}
+                  onClick={() => setStep("review")}
+                >
+                  Continue to review
+                </button>
+              </div>
+            )}
+            {session !== null && step === "review" && choice !== null && (
+              <div className="steering-decisions" aria-label="Decision confirmation">
+                <button className="ui-button ui-button--secondary" type="button" disabled={busy} onClick={backFromReview}>Back</button>
+                <button
+                  ref={confirmRef}
+                  className={choice === "stop" ? "ui-button ui-button--danger" : "ui-button ui-button--primary"}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void decide(choice)}
+                >
+                  {choice === "guide"
+                    ? "Confirm and build"
+                    : choice === "skip"
+                      ? "Confirm and proceed"
+                      : choice === "stop"
+                        ? "Confirm stop"
+                        : choice === "continue"
+                          ? "Confirm fresh pass budget"
+                          : "Confirm as finished"}
+                </button>
               </div>
             )}
           </footer>

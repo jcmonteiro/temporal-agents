@@ -53,6 +53,61 @@ async function openModal(): Promise<HTMLElement> {
   return dialog;
 }
 
+it("reviews guidance before the build decision is submitted", async () => {
+  const dialog = await openModal();
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Build with guidance" }));
+  expect(within(dialog).getByRole("heading", { name: "Clarify the direction" })).toBeTruthy();
+  expect(api.steeringDecisions).toBe(0);
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Skip clarification" }));
+  fireEvent.change(within(dialog).getByLabelText("Guidance for the implementing agent"), {
+    target: { value: "Keep the retry." },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Continue to review" }));
+
+  expect(within(dialog).getByRole("heading", { name: "Review the decision" })).toBeTruthy();
+  expect(within(dialog).getByText("Keep the retry.")).toBeTruthy();
+  expect(api.steeringDecisions).toBe(0);
+
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirm and build" }));
+  });
+
+  expect(api.steeringDecisions).toBe(1);
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("maximizes and restores the review outcome inside the steering surface", async () => {
+  const dialog = await openModal();
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Maximize review outcome" }));
+
+  expect(within(dialog).getByRole("button", { name: "Restore review outcome" })).toBeTruthy();
+  expect(within(dialog).queryByRole("heading", { name: "Choose what happens next" })).toBeNull();
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Restore review outcome" }));
+
+  expect(within(dialog).getByRole("heading", { name: "Choose what happens next" })).toBeTruthy();
+});
+
+it("reviews a no-guidance outcome without showing irrelevant steps", async () => {
+  const dialog = await openModal();
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Proceed without guidance" }));
+
+  expect(within(dialog).getByRole("heading", { name: "Review the decision" })).toBeTruthy();
+  expect(within(dialog).queryByRole("heading", { name: "Clarify the direction" })).toBeNull();
+  expect(within(dialog).queryByLabelText("Guidance for the implementing agent")).toBeNull();
+  expect(api.steeringDecisions).toBe(0);
+
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirm and proceed" }));
+  });
+
+  expect(api.steeringDecisions).toBe(1);
+});
+
 it("describes the elapsed wait without exposing its timestamp", async () => {
   const waitingSince = new Date(Date.now() - (5 * 24 + 1) * 60 * 60 * 1_000).toISOString();
   api.steeringSessions["steering-review-1"] = aSteeringSession({ waitingSince });
@@ -63,12 +118,14 @@ it("describes the elapsed wait without exposing its timestamp", async () => {
   expect(dialog.textContent).not.toContain(waitingSince);
 });
 
-it("cannot build with empty guidance and manages keyboard focus", async () => {
+it("requires guidance before review and manages keyboard focus", async () => {
   const dialog = await openModal();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Build with guidance" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Skip clarification" }));
   const guidance = within(dialog).getByLabelText("Guidance for the implementing agent");
-  const build = within(dialog).getByRole("button", { name: "Build with guidance" });
+  const review = within(dialog).getByRole("button", { name: "Continue to review" });
 
-  expect(build.hasAttribute("disabled")).toBe(true);
+  expect(review.hasAttribute("disabled")).toBe(true);
   await waitFor(() => expect(document.activeElement).toBe(guidance));
 
   fireEvent.keyDown(window, { key: "Escape" });
@@ -79,7 +136,7 @@ it("returns keyboard focus to the action that opened steering", async () => {
   const dialog = await openModal();
   const opener = screen.getByRole("button", { name: "Open guidance" });
   await waitFor(() => expect(document.activeElement).toBe(
-    within(dialog).getByLabelText("Guidance for the implementing agent"),
+    within(dialog).getByRole("button", { name: "Build with guidance" }),
   ));
 
   fireEvent.keyDown(window, { key: "Escape" });
@@ -100,16 +157,19 @@ it("keeps keyboard focus inside the steering dialog", async () => {
   expect(document.activeElement).toBe(stop);
 });
 
-it("sends one decision for a burst of clicks", async () => {
+it("sends one decision for a burst of confirmation clicks", async () => {
   const dialog = await openModal();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Build with guidance" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Skip clarification" }));
   fireEvent.change(within(dialog).getByLabelText("Guidance for the implementing agent"), {
     target: { value: "Keep the retry." },
   });
-  const build = within(dialog).getByRole("button", { name: "Build with guidance" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Continue to review" }));
+  const confirm = within(dialog).getByRole("button", { name: "Confirm and build" });
 
   await act(async () => {
-    fireEvent.click(build);
-    fireEvent.click(build);
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
   });
 
   expect(api.steeringDecisions).toBe(1);
@@ -133,7 +193,7 @@ it("closes gracefully when another operator decides the round", async () => {
   expect(screen.getByRole("status").textContent).toContain("decided elsewhere");
 });
 
-it("offers continue, accept, and stop at the pass limit", async () => {
+it("reviews pass-limit outcomes before submitting them", async () => {
   api.steeringSessions["steering-review-1"] = aSteeringSession({
     round: "pass-limit",
     material: "Budget exhausted. Accumulated token cost: 12000.",
@@ -141,28 +201,34 @@ it("offers continue, accept, and stop at the pass limit", async () => {
   const dialog = await openModal();
 
   expect(within(dialog).getByText(/12000/)).toBeTruthy();
-  expect(within(dialog).getByRole("button", { name: "Continue with a fresh pass budget" })).toBeTruthy();
   expect(within(dialog).getByRole("button", { name: "Accept the work as finished" })).toBeTruthy();
   expect(within(dialog).getByRole("button", { name: "Stop the loop" })).toBeTruthy();
   expect(within(dialog).queryByRole("button", { name: "Build with guidance" })).toBeNull();
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Continue with a fresh pass budget" }));
+  expect(within(dialog).getByRole("heading", { name: "Review the decision" })).toBeTruthy();
+  expect(api.steeringDecisions).toBe(0);
+
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("button", { name: "Confirm fresh pass budget" }));
+  });
+  expect(api.steeringDecisions).toBe(1);
 });
 
-it("renders questioning turns in durable sequence and finishes into guidance", async () => {
+it("records clarification turns and can use an answer as draft guidance", async () => {
   const dialog = await openModal();
-  const answer = within(dialog).getByLabelText("Answer the questioning agent");
-  fireEvent.change(answer, { target: { value: "Question me" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Build with guidance" }));
+  const question = within(dialog).getByLabelText("Question for the questioning agent");
+  fireEvent.change(question, { target: { value: "Which callers need the cause?" } });
   await act(async () => {
-    fireEvent.click(within(dialog).getByRole("button", { name: "Ask one question" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Ask question" }));
   });
 
   const conversation = within(dialog).getByRole("region", { name: "Questioning conversation" });
-  expect(conversation.textContent).toContain("Question me");
   expect(conversation.textContent).toContain("Which callers need the cause?");
+  fireEvent.click(within(conversation).getByRole("button", { name: "Use this answer as draft guidance" }));
 
-  fireEvent.change(answer, { target: { value: "That is enough" } });
-  await act(async () => {
-    fireEvent.click(within(dialog).getByRole("button", { name: "Finish into guidance" }));
-  });
   expect((within(dialog).getByLabelText("Guidance for the implementing agent") as HTMLTextAreaElement).value)
-    .toBe("Keep the retry and preserve the cause.");
+    .toBe("Which callers need the cause?");
+  expect(api.steeringDecisions).toBe(0);
 });
