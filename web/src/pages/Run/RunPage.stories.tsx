@@ -191,10 +191,12 @@ async function showsActiveRun(canvasElement: HTMLElement): Promise<void> {
   const repeat = await canvas.findByRole("button", { name: "Run this again" });
   await expect(repeat).toBeEnabled();
 
-  const breadcrumb = canvas.getByRole("link", { name: "Back to overview" });
-  breadcrumb.focus();
+  const breadcrumb = canvas.getByRole("navigation", { name: "Breadcrumb" });
+  within(breadcrumb).getByRole("link", { name: "Overview" }).focus();
   await userEvent.tab();
-  await expect(canvas.getByRole("link", { name: "overcaffeinated-gecko-2026-aug-11" })).toHaveFocus();
+  await expect(
+    within(breadcrumb).getByRole("link", { name: "overcaffeinated-gecko-2026-aug-11" }),
+  ).toHaveFocus();
 }
 
 const activeStory = {

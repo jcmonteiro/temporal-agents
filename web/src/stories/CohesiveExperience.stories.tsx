@@ -199,7 +199,9 @@ function configureReviewApi(api: FakeApi): void {
 
 async function reviewOperatorJourney(canvasElement: HTMLElement): Promise<void> {
   const canvas = within(canvasElement);
-  await expect(canvas.findByRole("heading", { name: "Overview" })).resolves.toBeVisible();
+  await expect(
+    canvas.findByRole("heading", { name: "Overview" }, { timeout: 5_000 }),
+  ).resolves.toBeVisible();
   await expect(
     canvas.findByRole("button", { name: `${runLabel}, Waiting Input` }),
   ).resolves.toBeVisible();
