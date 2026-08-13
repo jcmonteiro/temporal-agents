@@ -159,13 +159,9 @@ func (s *Service) FleetsFor(ctx context.Context, viewer ViewerID, limit int) ([]
 		}
 	}
 
-	requiredIDs := make(map[string]bool, len(required))
-	for _, workflowID := range required {
-		requiredIDs[workflowID] = true
-	}
 	fleets := make([]Fleet, 0, limit)
-	visibleNormal := 0
 	seen := make(map[string]bool)
+	visible := make(map[string]bool)
 	var cursor []byte
 	for {
 		page, err := s.deps.Collections.FleetTreePage(ctx, ChainQuery{
@@ -176,10 +172,15 @@ func (s *Service) FleetsFor(ctx context.Context, viewer ViewerID, limit int) ([]
 		if err != nil {
 			return nil, unavailable("read the recorded fleets", err)
 		}
-		chains := make([]ExecutionChain, 0, len(page.Items))
-		treesByID := make(map[string][]Execution, len(page.Items))
+		itemIDs := make(map[string]bool, len(page.Items))
+		trees := append(append([]FleetTree(nil), page.Items...), page.Required...)
+		chains := make([]ExecutionChain, 0, len(trees))
+		treesByID := make(map[string][]Execution, len(trees))
 		var recorded []Execution
 		for _, tree := range page.Items {
+			itemIDs[tree.Chain.Latest.WorkflowID] = true
+		}
+		for _, tree := range trees {
 			chains = append(chains, tree.Chain)
 			treesByID[tree.Chain.Latest.WorkflowID] = tree.Executions
 			recorded = append(recorded, tree.Chain.Latest)
@@ -189,19 +190,23 @@ func (s *Service) FleetsFor(ctx context.Context, viewer ViewerID, limit int) ([]
 		if err != nil {
 			return nil, err
 		}
-		parents, err := s.resolveExecutionChains(ctx, chains, live, isFleet)
+		candidateLive := boundedLiveCandidates(live, chainWorkflowIDs(chains), limit, isFleet)
+		parents, err := s.resolveExecutionChains(ctx, chains, candidateLive, isFleet)
 		if err != nil {
 			return nil, err
 		}
-		plans, err := s.plansFor(ctx, parents)
-		if err != nil {
-			return nil, err
-		}
+		unseen := parents[:0]
 		for _, parent := range parents {
-			if seen[parent.WorkflowID] {
-				continue
+			if !seen[parent.WorkflowID] {
+				seen[parent.WorkflowID] = true
+				unseen = append(unseen, parent)
 			}
-			seen[parent.WorkflowID] = true
+		}
+		plans, err := s.plansFor(ctx, unseen)
+		if err != nil {
+			return nil, err
+		}
+		for _, parent := range unseen {
 			fleet, err := s.buildFleet(ctx, parent, treesByID[parent.WorkflowID], live, plans[parent.WorkflowID])
 			if err != nil {
 				return nil, err
@@ -210,11 +215,15 @@ func (s *Service) FleetsFor(ctx context.Context, viewer ViewerID, limit int) ([]
 				continue
 			}
 			fleets = append(fleets, fleet)
-			if !requiredIDs[fleet.ID] {
-				visibleNormal++
+			visible[fleet.ID] = true
+		}
+		visibleItems := 0
+		for id := range itemIDs {
+			if visible[id] {
+				visibleItems++
 			}
 		}
-		if visibleNormal >= limit || len(page.Next) == 0 {
+		if visibleItems >= limit || len(page.Next) == 0 {
 			sort.SliceStable(fleets, func(i, j int) bool {
 				if fleets[i].StartedAt.Equal(fleets[j].StartedAt) {
 					return fleets[i].ID < fleets[j].ID
@@ -424,13 +433,9 @@ func (s *Service) RunsFor(ctx context.Context, viewer ViewerID, limit int) ([]Ru
 		}
 	}
 
-	requiredIDs := make(map[string]bool, len(required))
-	for _, workflowID := range required {
-		requiredIDs[workflowID] = true
-	}
 	runs := make([]Run, 0, limit)
-	visibleNormal := 0
 	seen := make(map[string]bool)
+	visible := make(map[string]bool)
 	var cursor []byte
 	for {
 		page, err := s.deps.Collections.RunChainPage(ctx, ChainQuery{
@@ -441,19 +446,25 @@ func (s *Service) RunsFor(ctx context.Context, viewer ViewerID, limit int) ([]Ru
 		if err != nil {
 			return nil, unavailable("read the recorded runs", err)
 		}
-		recordedExecutions := make([]Execution, 0, len(page.Items))
+		itemIDs := make(map[string]bool, len(page.Items))
+		chains := append(append([]ExecutionChain(nil), page.Items...), page.Required...)
+		recordedExecutions := make([]Execution, 0, len(chains))
 		for _, chain := range page.Items {
+			itemIDs[chain.Latest.WorkflowID] = true
+		}
+		for _, chain := range chains {
 			recordedExecutions = append(recordedExecutions, chain.Latest)
 		}
 		live, err = s.addExecutionStates(ctx, live, recordedExecutions)
 		if err != nil {
 			return nil, err
 		}
-		chains, err := s.resolveExecutionChains(ctx, page.Items, live, isRunSatellite)
+		candidateLive := boundedLiveCandidates(live, chainWorkflowIDs(chains), limit, isRunSatellite)
+		resolved, err := s.resolveExecutionChains(ctx, chains, candidateLive, isRunSatellite)
 		if err != nil {
 			return nil, err
 		}
-		for _, chain := range chains {
+		for _, chain := range resolved {
 			if seen[chain.WorkflowID] {
 				continue
 			}
@@ -466,11 +477,15 @@ func (s *Service) RunsFor(ctx context.Context, viewer ViewerID, limit int) ([]Ru
 				continue
 			}
 			runs = append(runs, run)
-			if !requiredIDs[run.ID] {
-				visibleNormal++
+			visible[run.ID] = true
+		}
+		visibleItems := 0
+		for id := range itemIDs {
+			if visible[id] {
+				visibleItems++
 			}
 		}
-		if visibleNormal >= limit || len(page.Next) == 0 {
+		if visibleItems >= limit || len(page.Next) == 0 {
 			sort.SliceStable(runs, func(i, j int) bool {
 				if runs[i].StartedAt.Equal(runs[j].StartedAt) {
 					return runs[i].ID < runs[j].ID
@@ -774,6 +789,9 @@ func (s *Service) plansFor(ctx context.Context, parents []resolvedChain) (map[st
 			refs = append(refs, PlanReference{FleetID: parent.WorkflowID, PlanID: parent.PlanID})
 		}
 	}
+	if len(refs) == 0 {
+		return map[string]Plan{}, nil
+	}
 	plans, err := s.deps.Plans.Plans(ctx, refs)
 	if err != nil {
 		return nil, unavailable("resolve the fleets' plans", err)
@@ -921,6 +939,46 @@ func (s *Service) nodeExecutions(ctx context.Context, parent resolvedChain, tree
 		outcomes[recorded.NodeID] = recorded.Outcome
 	}
 	return executions, outcomes, places, nil
+}
+
+func chainWorkflowIDs(chains []ExecutionChain) map[string]bool {
+	ids := make(map[string]bool, len(chains))
+	for _, chain := range chains {
+		ids[chain.Latest.WorkflowID] = true
+	}
+	return ids
+}
+
+// boundedLiveCandidates keeps the live identities already selected by the record
+// page and the newest limit identities from the live source. Full live state
+// remains available to fleet-node reconciliation; this bounded map controls which
+// parent resources and plans can enter one collection result.
+func boundedLiveCandidates(live map[string]Execution, selected map[string]bool, limit int, keep func(Execution) bool) map[string]Execution {
+	candidates := make(map[string]Execution, len(selected)+limit)
+	for id := range selected {
+		if execution, ok := live[id]; ok {
+			candidates[id] = execution
+		}
+	}
+	ordered := make([]Execution, 0, len(live))
+	for _, execution := range live {
+		if keep(execution) {
+			ordered = append(ordered, execution)
+		}
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].StartedAt.Equal(ordered[j].StartedAt) {
+			return ordered[i].WorkflowID < ordered[j].WorkflowID
+		}
+		return ordered[i].StartedAt.After(ordered[j].StartedAt)
+	})
+	for i, execution := range ordered {
+		if i == limit {
+			break
+		}
+		candidates[execution.WorkflowID] = execution
+	}
+	return candidates
 }
 
 // resolvedChain is one execution chain after collapsing: the chain's latest

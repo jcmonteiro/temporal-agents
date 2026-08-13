@@ -217,12 +217,21 @@ type FleetTree struct {
 	Executions []Execution
 }
 
+// ChainPage separates the identities selected by the stable source page from
+// required identities loaded only to merge current live state. Required identities
+// never consume or extend Items, and Next advances only through Items.
+type ChainPage[T any] struct {
+	Items    []T
+	Required []T
+	Next     []byte
+}
+
 // CollectionSource is the driven port for collection-oriented record reads. The
 // adapter selects resource identities before limits and aggregates every row that
 // belongs to those resources.
 type CollectionSource interface {
-	RunChainPage(ctx context.Context, query ChainQuery) (Page[ExecutionChain], error)
-	FleetTreePage(ctx context.Context, query ChainQuery) (Page[FleetTree], error)
+	RunChainPage(ctx context.Context, query ChainQuery) (ChainPage[ExecutionChain], error)
+	FleetTreePage(ctx context.Context, query ChainQuery) (ChainPage[FleetTree], error)
 	ScheduleActionChains(ctx context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]ExecutionChain, error)
 }
 
