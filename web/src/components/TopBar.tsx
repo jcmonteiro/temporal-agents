@@ -91,6 +91,7 @@ function Inbox(): ReactNode {
   const [onlyUnread, setOnlyUnread] = useState(false);
   const [markingAll, setMarkingAll] = useState(false);
   const [nativeEnabled, setNativeEnabled] = useState(false);
+  const inbox = useRef<HTMLDivElement>(null);
   const seen = useRef(new Set<string>());
 
   const accept = (notifications: NotificationCollectionDTO): void => {
@@ -116,6 +117,28 @@ function Inbox(): ReactNode {
     const timer = setInterval(() => void refresh(), 5_000);
     return () => { cancelled = true; clearInterval(timer); };
   }, [state.status, nativeEnabled]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent): void => {
+      if (event.target instanceof Node && !inbox.current?.contains(event.target)) {
+        setOpen(false);
+        setActionsOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        setActionsOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
 
   const read = async (item: NotificationDTO): Promise<void> => {
     const result = await markNotificationRead(item.id);
@@ -150,7 +173,7 @@ function Inbox(): ReactNode {
   const visibleItems = onlyUnread ? items.filter((item) => !item.read) : items;
 
   return (
-    <div className="notification-inbox">
+    <div ref={inbox} className="notification-inbox">
       <button
         type="button"
         aria-label={`Notifications, ${unread} unread`}

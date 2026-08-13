@@ -40,6 +40,28 @@ it("shows the unread count and requests native permission only after a gesture",
   await waitFor(() => expect(requestPermission).toHaveBeenCalledTimes(1));
 });
 
+it("closes the notification inbox when clicking outside it", async () => {
+  render(<SessionProvider><TopBar /></SessionProvider>);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Notifications, 1 unread" }));
+  expect(screen.getByRole("region", { name: "Notification inbox" })).toBeTruthy();
+
+  fireEvent.pointerDown(document.body);
+
+  expect(screen.queryByRole("region", { name: "Notification inbox" })).toBeNull();
+});
+
+it("closes the notification inbox when Escape is pressed", async () => {
+  render(<SessionProvider><TopBar /></SessionProvider>);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Notifications, 1 unread" }));
+  expect(screen.getByRole("region", { name: "Notification inbox" })).toBeTruthy();
+
+  fireEvent.keyDown(document, { key: "Escape" });
+
+  expect(screen.queryByRole("region", { name: "Notification inbox" })).toBeNull();
+});
+
 it("marks every notification as read from the notification actions menu", async () => {
   render(<SessionProvider><TopBar /></SessionProvider>);
 
