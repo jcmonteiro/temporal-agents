@@ -318,7 +318,7 @@ every node it depends on has been both developed and reviewed.
 ## Tests
 
 ```sh
-make test   # every test, integration suites included
+make test   # web unit, Storybook browser, and Go integration suites
 ```
 
 The `execstore` and Agent Hub dismissal adapters are tested against a real
@@ -331,8 +331,11 @@ so it needs a running Docker daemon but no setup and no environment variable —
 it never touches the `temporal_agents` database you work in. Each test gets a fresh
 database inside the container, so no test can see another's rows.
 
-The target runs `go test -race -shuffle=on ./...`, which is exactly what CI runs, so
-a green run locally means what a green run in CI means.
+The target installs the locked web dependencies, runs the shuffled web unit
+suite and browser-based Storybook suite, then runs
+`go test -race -shuffle=on ./...`. It is the same complete test command used by
+CI and the versioned pre-push hook, so a green run locally means what a green
+run in CI means. Enable versioned hooks once with `make setup`.
 
 ## Docker
 
