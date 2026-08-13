@@ -99,9 +99,9 @@ function configureApi(api: FakeApi, scenario: Scenario): void {
     }),
     aPrompt({
       key: "steering.question",
-      purpose: "How the questioning agent turns operator context into guidance.",
-      effective: "Ask concise questions, then produce implementation guidance.",
-      inherited: "Ask concise questions, then produce implementation guidance.",
+      purpose: "How the clarification agent answers operator questions.",
+      effective: "Answer only the operator's question about the review material.",
+      inherited: "Answer only the operator's question about the review material.",
     }),
   ];
   api.latencyMs = scenario === "loading" ? 450 : 90;

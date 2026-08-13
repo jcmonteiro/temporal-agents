@@ -218,32 +218,33 @@ it("reviews pass-limit outcomes before submitting them", async () => {
 it("records clarification turns and can use an answer as draft guidance", async () => {
   const dialog = await openModal();
   fireEvent.click(within(dialog).getByRole("button", { name: "Build with guidance" }));
-  const question = within(dialog).getByLabelText("Question for the questioning agent");
+  const question = within(dialog).getByLabelText("Question for the clarification agent");
   fireEvent.change(question, { target: { value: "Which callers need the cause?" } });
   await act(async () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Ask question" }));
   });
 
-  const conversation = within(dialog).getByRole("region", { name: "Questioning conversation" });
+  const conversation = within(dialog).getByRole("region", { name: "Clarification conversation" });
   expect(conversation.textContent).toContain("Which callers need the cause?");
+  expect(conversation.textContent).toContain("The Checkout API and audit log need the cause.");
   fireEvent.click(within(conversation).getByRole("button", { name: "Use this answer as draft guidance" }));
 
   expect((within(dialog).getByLabelText("Guidance for the implementing agent") as HTMLTextAreaElement).value)
-    .toBe("Which callers need the cause?");
+    .toBe("The Checkout API and audit log need the cause.");
   expect(api.steeringDecisions).toBe(0);
 });
 
 it("sends a clarification question when Enter is pressed", async () => {
   const dialog = await openModal();
   fireEvent.click(within(dialog).getByRole("button", { name: "Build with guidance" }));
-  const question = within(dialog).getByLabelText("Question for the questioning agent");
+  const question = within(dialog).getByLabelText("Question for the clarification agent");
   fireEvent.change(question, { target: { value: "Which callers need the cause?" } });
 
   await act(async () => {
     fireEvent.keyDown(question, { key: "Enter", code: "Enter" });
   });
 
-  const conversation = within(dialog).getByRole("region", { name: "Questioning conversation" });
+  const conversation = within(dialog).getByRole("region", { name: "Clarification conversation" });
   expect(conversation.textContent).toContain("Which callers need the cause?");
   expect((question as HTMLInputElement).value).toBe("");
 });
@@ -265,18 +266,29 @@ it("labels operator turns without exposing the principal identifier", async () =
 
   fireEvent.click(within(dialog).getByRole("button", { name: "Build with guidance" }));
 
-  const conversation = within(dialog).getByRole("region", { name: "Questioning conversation" });
+  const conversation = within(dialog).getByRole("region", { name: "Clarification conversation" });
   expect(conversation.textContent).toContain("Operator");
   expect(conversation.textContent).toContain("Is point 4 really necessary?");
   expect(conversation.textContent).not.toContain("http://localhost:15556/dex");
 });
 
-it("renders agent clarification responses as Markdown", async () => {
+it("renders agent clarification responses with only safe Markdown HTML", async () => {
   api.steeringSessions["steering-review-1"] = aSteeringSession({
     messages: [{
       sequence: 1,
       role: "agent",
-      text: "**Affected callers:**\n\n- Checkout API\n- Audit log\n\n<a href=\"javascript:alert('unsafe')\">Unsafe link</a>",
+      text: [
+        "**Affected callers:**",
+        "",
+        "- Checkout API",
+        "- Audit log",
+        "",
+        "<a href=\"javascript:alert('unsafe')\">Unsafe link</a>",
+        "![tracking pixel](https://attacker.example/pixel)",
+        "<form action=\"https://attacker.example\"><input name=\"secret\"><button>Send</button></form>",
+        "<p style=\"position:fixed;inset:0;z-index:999\">Sign in again</p>",
+        "<svg><a href=\"https://attacker.example\">Deceptive vector</a></svg>",
+      ].join("\n"),
       at: "2026-08-06T12:00:01Z",
     }],
   });
@@ -284,8 +296,24 @@ it("renders agent clarification responses as Markdown", async () => {
 
   fireEvent.click(within(dialog).getByRole("button", { name: "Build with guidance" }));
 
-  const conversation = within(dialog).getByRole("region", { name: "Questioning conversation" });
+  const conversation = within(dialog).getByRole("region", { name: "Clarification conversation" });
   expect(within(conversation).getByText("Affected callers:").tagName).toBe("STRONG");
   expect(within(conversation).getByText("Checkout API").closest("ul")?.children).toHaveLength(2);
   expect(within(conversation).getByText("Unsafe link").getAttribute("href")).toBeNull();
+  const markdown = conversation.querySelector(".steering-message__markdown");
+  expect(markdown?.querySelector("img, form, input, button, svg")).toBeNull();
+  expect(within(conversation).getByText("Sign in again").getAttribute("style")).toBeNull();
+});
+
+it("validates the guidance limit in UTF-8 bytes", async () => {
+  const dialog = await openModal();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Build with guidance" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Skip clarification" }));
+  const guidance = within(dialog).getByLabelText("Guidance for the implementing agent");
+  const review = within(dialog).getByRole("button", { name: "Continue to review" });
+
+  fireEvent.change(guidance, { target: { value: "é".repeat(4_097) } });
+
+  expect(within(dialog).getByText("8194 / 8192 bytes")).toBeTruthy();
+  expect(review.hasAttribute("disabled")).toBe(true);
 });

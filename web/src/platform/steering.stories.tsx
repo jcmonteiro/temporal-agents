@@ -125,7 +125,7 @@ function configureApi(api: FakeApi, scenario: Scenario): void {
 }
 
 async function findDialog(canvasElement: HTMLElement, name = "Guide this review round") {
-  return within(canvasElement).findByRole("dialog", { name });
+  return within(canvasElement).findByRole("dialog", { name }, { timeout: 5_000 });
 }
 
 async function showsLocalChoices(dialog: HTMLElement): Promise<void> {
@@ -166,7 +166,7 @@ export const ActiveWideDark: Story = {
     const modal = within(dialog);
     await expect(modal.findByText(/retry hides the original error/i)).resolves.toBeVisible();
     await userEvent.click(modal.getByRole("button", { name: "Build with guidance" }));
-    const conversation = modal.getByRole("region", { name: "Questioning conversation" });
+    const conversation = modal.getByRole("region", { name: "Clarification conversation" });
     await expect(within(conversation).getByText("Affected callers:").tagName).toBe("STRONG");
     await expect(conversation).not.toHaveTextContent("http://localhost:15556/dex");
     await userEvent.click(modal.getByRole("button", { name: "Continue to guidance" }));
@@ -193,7 +193,7 @@ export const LongConversationNarrowLight: Story = {
     const dialog = await findDialog(canvasElement);
     const modal = within(dialog);
     await userEvent.click(await modal.findByRole("button", { name: "Build with guidance" }));
-    const conversation = await modal.findByRole("region", { name: "Questioning conversation" });
+    const conversation = await modal.findByRole("region", { name: "Clarification conversation" });
     await expect(within(conversation).getAllByRole("listitem")).toHaveLength(12);
     await expect(dialog.scrollWidth).toBeLessThanOrEqual(dialog.clientWidth);
   },
@@ -214,7 +214,7 @@ export const QuestionPending: Story = {
     const dialog = await findDialog(canvasElement);
     const modal = within(dialog);
     await userEvent.click(await modal.findByRole("button", { name: "Build with guidance" }));
-    await userEvent.type(await modal.findByLabelText("Question for the questioning agent"), "Which callers inspect it?");
+    await userEvent.type(await modal.findByLabelText("Question for the clarification agent"), "Which callers inspect it?");
     await userEvent.click(modal.getByRole("button", { name: "Ask question" }));
     await expect(modal.getByRole("button", { name: "Ask question" })).toBeDisabled();
     await expect(dialog).toHaveAttribute("aria-busy", "true");

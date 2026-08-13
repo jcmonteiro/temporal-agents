@@ -53,8 +53,8 @@ const (
 	// KeyPilotAddress is what the agent is told when it addresses the unresolved
 	// review comments on a pull request.
 	KeyPilotAddress Key = "pilot.address"
-	// KeySteeringQuestion is what the read-only questioning agent is told when it
-	// helps an operator turn context into guidance for one review round.
+	// KeySteeringQuestion is what the read-only clarification agent is told when it
+	// answers an operator about one review round.
 	KeySteeringQuestion Key = "steering.question"
 )
 
@@ -141,11 +141,12 @@ const (
 	// comment threads, rendered by the code that read them.
 	systemPilotAddress = "\n{{.Comments}}"
 
-	factorySteeringQuestion = `Help the operator turn their context into concise guidance for an implementing agent.
-Ask exactly one focused question in each response. Do not propose or make repository changes.
-When asked to finish, return only a self-contained guidance draft, not a question or an explanation.`
+	factorySteeringQuestion = `Answer only the question the operator asked about the review material.
+Keep the answer concise and focused. Do not ask the operator questions.
+Do not propose or make repository changes.
+When asked to finish, return only a self-contained guidance draft, not an explanation.`
 
-	// The material is system-owned so an override cannot make the questioning agent
+	// The material is system-owned so an override cannot make the clarification agent
 	// discuss a different round or omit what the operator is deciding about.
 	systemSteeringQuestion = "\n\nReview material:\n{{.Material}}"
 )
@@ -180,7 +181,7 @@ var specs = []Spec{
 	},
 	{
 		Key:     KeySteeringQuestion,
-		Purpose: "How the read-only agent questions an operator into guidance for one review round.",
+		Purpose: "How the read-only agent answers operator questions about one review round.",
 		Factory: factorySteeringQuestion,
 		Inserts: []Insert{{
 			Name:    "Material",
