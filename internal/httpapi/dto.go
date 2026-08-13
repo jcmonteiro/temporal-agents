@@ -192,6 +192,8 @@ type fleetResource struct {
 	EndedAt *string `json:"endedAt"`
 	// Dismissible reports whether the operator may hide it from the overview.
 	Dismissible bool `json:"dismissible"`
+	// StateRevision is the opaque revision a dismissal must acknowledge.
+	StateRevision string `json:"stateRevision"`
 	// LocationID references the place the fleet runs, resolved against the response's
 	// locations registry.
 	LocationID string `json:"locationId"`
@@ -278,6 +280,8 @@ type runResource struct {
 	Tokens int `json:"tokens,omitempty"`
 	// Dismissible reports whether the operator may hide it from the overview.
 	Dismissible bool `json:"dismissible"`
+	// StateRevision is the opaque revision a dismissal must acknowledge.
+	StateRevision string `json:"stateRevision"`
 	// LocationID references the place the run runs.
 	LocationID string `json:"locationId"`
 	// StartedBy identifies who started the run from the hub. It is absent for a run
@@ -355,14 +359,16 @@ type dismissalResource struct {
 	DismissedAt *string `json:"dismissedAt"`
 }
 
-// dismissalRequest is the body of a dismissal write. It names the item to hide, and
-// nothing else: what is hidden is derived, never client-supplied, so a client
-// cannot invent a dismissal of something that does not exist or has not finished.
+// dismissalRequest is the body of a dismissal write. The state revision is an
+// optimistic precondition, not trusted state: the core calculates the current
+// revision and refuses the write when it differs.
 type dismissalRequest struct {
 	// Kind is the kind of item to dismiss ("fleet" or "run").
 	Kind agenthub.ItemKind `json:"kind"`
 	// ItemID is the item's identity.
 	ItemID string `json:"itemId"`
+	// StateRevision is the exact opaque revision the operator reviewed.
+	StateRevision string `json:"stateRevision"`
 }
 
 // fleetFrom projects a fleet onto its representation and reports the places that
@@ -377,17 +383,18 @@ type dismissalRequest struct {
 func fleetFrom(fleet agenthub.Fleet, withNodes bool) (fleetResource, []agenthub.Location) {
 	upNext := fleet.UpNext()
 	resource := fleetResource{
-		ID:          fleet.ID,
-		Kind:        agenthub.KindFleet,
-		Label:       fleet.Goal,
-		Status:      fleet.Status,
-		Progress:    progressFrom(fleet.Progress),
-		PlanID:      fleet.PlanID,
-		StartedAt:   timestamp(fleet.StartedAt),
-		EndedAt:     timestamp(fleet.EndedAt),
-		Dismissible: fleet.Dismissible(),
-		LocationID:  fleet.Location.ID(),
-		UpNext:      nodesFrom(upNext),
+		ID:            fleet.ID,
+		Kind:          agenthub.KindFleet,
+		Label:         fleet.Goal,
+		Status:        fleet.Status,
+		Progress:      progressFrom(fleet.Progress),
+		PlanID:        fleet.PlanID,
+		StartedAt:     timestamp(fleet.StartedAt),
+		EndedAt:       timestamp(fleet.EndedAt),
+		Dismissible:   fleet.Dismissible(),
+		StateRevision: fleet.StateRevision(),
+		LocationID:    fleet.Location.ID(),
+		UpNext:        nodesFrom(upNext),
 	}
 	// The whole graph contains the up-next nodes, so the single-fleet representation
 	// refers to the graph's places and nothing besides.
@@ -451,17 +458,18 @@ func progressFrom(progress agenthub.Progress) progressResource {
 // single-run representation, which has no envelope to carry the registry for it.
 func runFrom(run agenthub.Run, withRegistry bool) runResource {
 	resource := runResource{
-		ID:          run.ID,
-		Kind:        agenthub.KindRun,
-		Type:        run.Type,
-		Label:       run.Label,
-		Status:      run.Status,
-		StartedAt:   timestamp(run.StartedAt),
-		EndedAt:     timestamp(run.EndedAt),
-		Iterations:  run.Iterations,
-		Tokens:      run.Tokens,
-		Dismissible: run.Dismissible(),
-		LocationID:  run.Location.ID(),
+		ID:            run.ID,
+		Kind:          agenthub.KindRun,
+		Type:          run.Type,
+		Label:         run.Label,
+		Status:        run.Status,
+		StartedAt:     timestamp(run.StartedAt),
+		EndedAt:       timestamp(run.EndedAt),
+		Iterations:    run.Iterations,
+		Tokens:        run.Tokens,
+		Dismissible:   run.Dismissible(),
+		StateRevision: run.StateRevision(),
+		LocationID:    run.Location.ID(),
 	}
 	if withRegistry {
 		// The single-run representation is what a person reads about one run, so it is

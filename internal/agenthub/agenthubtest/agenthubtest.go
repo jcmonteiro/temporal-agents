@@ -183,11 +183,14 @@ func (s *Source) WithSchedules(states ...agenthub.ScheduleState) *Source {
 
 // WithDismissal marks an item as dismissed without going through the service, so
 // a read test can start from a world where something is already hidden.
-func (s *Source) WithDismissal(kind agenthub.ItemKind, itemID string) *Source {
+func (s *Source) WithDismissal(kind agenthub.ItemKind, itemID, stateRevision string) *Source {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	d := agenthub.Dismissal{Kind: kind, ItemID: itemID, DismissedAt: time.Unix(0, 0).UTC()}
-	s.dismissals[d.ID()] = d
+	d := agenthub.Dismissal{
+		Viewer: agenthub.LocalViewerID, Kind: kind, ItemID: itemID,
+		StateRevision: stateRevision, DismissedAt: time.Unix(0, 0).UTC(),
+	}
+	s.dismissals[dismissalKey(d.Viewer, d.Kind, d.ItemID)] = d
 	return s
 }
 
@@ -317,7 +320,28 @@ func (s *Source) RunChains(_ context.Context, query agenthub.ChainQuery) ([]agen
 	return requiredChains(groups, query.Limit, query.RequiredWorkflowIDs), nil
 }
 
-// FleetTrees implements agenthub.CollectionSource.
+// RunChainPage implements agenthub.CollectionSource.
+func (s *Source) RunChainPage(_ context.Context, query agenthub.ChainQuery) (agenthub.Page[agenthub.ExecutionChain], error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return agenthub.Page[agenthub.ExecutionChain]{}, s.err
+	}
+	excluded := stringSet(query.ExcludedWorkflowIDs)
+	groups := map[string][]agenthub.Execution{}
+	for _, e := range s.recorded {
+		if query.WorkflowID != "" && e.WorkflowID != query.WorkflowID {
+			continue
+		}
+		if excluded[e.WorkflowID] || (e.ParentWorkflowID != "" && !e.Detached) || e.ScheduleID != "" || !runClass(e.Class) {
+			continue
+		}
+		groups[e.WorkflowID] = append(groups[e.WorkflowID], e)
+	}
+	return chainPage(limitedChains(groups, 0), query)
+}
+
+// FleetTrees returns selected roots for compatibility callers.
 func (s *Source) FleetTrees(_ context.Context, query agenthub.ChainQuery) ([]agenthub.FleetTree, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -344,6 +368,38 @@ func (s *Source) FleetTrees(_ context.Context, query agenthub.ChainQuery) ([]age
 		trees = append(trees, tree)
 	}
 	return trees, nil
+}
+
+// FleetTreePage implements agenthub.CollectionSource.
+func (s *Source) FleetTreePage(_ context.Context, query agenthub.ChainQuery) (agenthub.Page[agenthub.FleetTree], error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return agenthub.Page[agenthub.FleetTree]{}, s.err
+	}
+	excluded := stringSet(query.ExcludedWorkflowIDs)
+	groups := map[string][]agenthub.Execution{}
+	for _, e := range s.recorded {
+		if e.Class != wfid.ClassFleet || excluded[e.WorkflowID] || query.WorkflowID != "" && e.WorkflowID != query.WorkflowID {
+			continue
+		}
+		groups[e.WorkflowID] = append(groups[e.WorkflowID], e)
+	}
+	chains, err := chainPage(limitedChains(groups, 0), query)
+	if err != nil {
+		return agenthub.Page[agenthub.FleetTree]{}, err
+	}
+	trees := make([]agenthub.FleetTree, 0, len(chains.Items))
+	for _, chain := range chains.Items {
+		tree := agenthub.FleetTree{Chain: chain}
+		for _, e := range s.recorded {
+			if e.WorkflowID == chain.Latest.WorkflowID || e.ParentWorkflowID == chain.Latest.WorkflowID {
+				tree.Executions = append(tree.Executions, e)
+			}
+		}
+		trees = append(trees, tree)
+	}
+	return agenthub.Page[agenthub.FleetTree]{Items: trees, Next: chains.Next}, nil
 }
 
 // SchedulePage implements source-native schedule paging.
@@ -426,15 +482,17 @@ func (s *Source) Schedules(_ context.Context, limit int) ([]agenthub.ScheduleSta
 }
 
 // Dismissals implements agenthub.DismissalStore.
-func (s *Source) Dismissals(context.Context) ([]agenthub.Dismissal, error) {
+func (s *Source) Dismissals(_ context.Context, viewer agenthub.ViewerID) ([]agenthub.Dismissal, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
 		return nil, s.err
 	}
-	out := make([]agenthub.Dismissal, 0, len(s.dismissals))
+	var out []agenthub.Dismissal
 	for _, d := range s.dismissals {
-		out = append(out, d)
+		if d.Viewer == viewer {
+			out = append(out, d)
+		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].ID() < out[j].ID() })
 	return out, nil
@@ -448,28 +506,33 @@ func (s *Source) Dismiss(_ context.Context, d agenthub.Dismissal) (agenthub.Dism
 	if s.err != nil {
 		return agenthub.Dismissal{}, s.err
 	}
-	if existing, ok := s.dismissals[d.ID()]; ok {
-		// Keep and return the original time: the item was already hidden, and a retry
-		// must describe the resource that remains stored.
+	key := dismissalKey(d.Viewer, d.Kind, d.ItemID)
+	if existing, ok := s.dismissals[key]; ok && existing.StateRevision == d.StateRevision {
+		// Keep and return the original time for an exact retry. A new state under the
+		// same item identity is a new acknowledgement and replaces it below.
 		return existing, nil
 	}
-	s.dismissals[d.ID()] = d
+	s.dismissals[key] = d
 	return d, nil
 }
 
 // Undismiss implements agenthub.DismissalStore.
-func (s *Source) Undismiss(_ context.Context, kind agenthub.ItemKind, itemID string) error {
+func (s *Source) Undismiss(_ context.Context, viewer agenthub.ViewerID, kind agenthub.ItemKind, itemID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
 		return s.err
 	}
-	id := agenthub.Dismissal{Kind: kind, ItemID: itemID}.ID()
-	if _, ok := s.dismissals[id]; !ok {
+	key := dismissalKey(viewer, kind, itemID)
+	if _, ok := s.dismissals[key]; !ok {
 		return agenthub.ErrNotFound
 	}
-	delete(s.dismissals, id)
+	delete(s.dismissals, key)
 	return nil
+}
+
+func dismissalKey(viewer agenthub.ViewerID, kind agenthub.ItemKind, itemID string) string {
+	return string(viewer) + "\x00" + string(kind) + "\x00" + itemID
 }
 
 func pageOffset(cursor []byte, size int) (int, error) {
@@ -507,6 +570,30 @@ func runClass(class wfid.Class) bool {
 	default:
 		return false
 	}
+}
+
+func chainPage(chains []agenthub.ExecutionChain, query agenthub.ChainQuery) (agenthub.Page[agenthub.ExecutionChain], error) {
+	offset, err := pageOffset(query.Cursor, len(chains))
+	if err != nil {
+		return agenthub.Page[agenthub.ExecutionChain]{}, err
+	}
+	limit := query.Limit
+	if limit <= 0 {
+		limit = agenthub.DefaultLimit
+	}
+	end := min(offset+limit, len(chains))
+	items := append([]agenthub.ExecutionChain(nil), chains[offset:end]...)
+	known := stringSet(query.RequiredWorkflowIDs)
+	for _, chain := range chains[end:] {
+		if known[chain.Latest.WorkflowID] {
+			items = append(items, chain)
+		}
+	}
+	page := agenthub.Page[agenthub.ExecutionChain]{Items: items}
+	if end < len(chains) {
+		page.Next = pageToken(end)
+	}
+	return page, nil
 }
 
 func requiredChains(groups map[string][]agenthub.Execution, limit int, requiredIDs []string) []agenthub.ExecutionChain {

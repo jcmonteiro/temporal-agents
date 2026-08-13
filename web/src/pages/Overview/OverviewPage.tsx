@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { dismissWorkItem } from "../../clients/dismissals";
 import { loadOverview, type OverviewData } from "../../clients/work-items";
 import {
+  itemKey,
   sameItem,
   STATUS_ORDER,
   type WorkItem,
@@ -36,11 +38,17 @@ const REFRESH_INTERVAL_MS = 5_000;
 interface State {
   data: OverviewData | null;
   error: string | null;
+  dismissalError: string | null;
 }
 
 export function OverviewPage(): ReactNode {
   const steering = useSteering();
-  const [state, setState] = useState<State>({ data: null, error: null });
+  const [state, setState] = useState<State>({
+    data: null,
+    error: null,
+    dismissalError: null,
+  });
+  const [dismissing, setDismissing] = useState<Set<string>>(new Set());
   // Identity, not a bare id: a fleet and a run may share an id.
   const [selectedId, setSelectedId] = useState<WorkItemId | null>(null);
   // The place the operator picked, by its server-issued id. An item and a place
@@ -59,8 +67,8 @@ export function OverviewPage(): ReactNode {
       if (cancelled) return;
       setState((prev) =>
         result.ok
-          ? { data: result.value, error: null }
-          : { data: prev.data, error: result.error.message },
+          ? { ...prev, data: result.value, error: null }
+          : { ...prev, error: result.error.message },
       );
     };
     void refresh();
@@ -128,6 +136,35 @@ export function OverviewPage(): ReactNode {
   };
   const clearFilter = (): void => setVisibleStatuses(new Set());
 
+  const dismissItem = async (item: WorkItem): Promise<void> => {
+    const key = itemKey(item);
+    setDismissing((current) => new Set(current).add(key));
+    setState((current) => ({ ...current, dismissalError: null }));
+    const result = await dismissWorkItem(item);
+    setDismissing((current) => {
+      const next = new Set(current);
+      next.delete(key);
+      return next;
+    });
+    if (!result.ok) {
+      setState((current) => ({
+        ...current,
+        dismissalError: `Could not dismiss ${item.label}: ${result.error.message}`,
+      }));
+      return;
+    }
+    setState((current) => ({
+      ...current,
+      data: current.data === null
+        ? null
+        : {
+            ...current.data,
+            items: current.data.items.filter((candidate) => !sameItem(candidate, item)),
+          },
+    }));
+    if (sameItem(selectedId, item)) setSelectedId(null);
+  };
+
   return (
     <div className="overview-page" style={{ display: "flex", flex: 1, minWidth: 0, minHeight: 0 }}>
       <main
@@ -159,6 +196,11 @@ export function OverviewPage(): ReactNode {
           >
             Here's what's orbiting your work today.
           </p>
+          {state.dismissalError !== null && (
+            <div className="ui-feedback ui-feedback--error" role="alert" style={{ marginTop: 12 }}>
+              {state.dismissalError}
+            </div>
+          )}
           {steering.sessions.length > 0 && (
             <section aria-label="Work waiting for guidance" style={{ marginTop: 12, padding: 12, border: "1px solid var(--status-waiting)", borderRadius: "var(--radius-sm)" }}>
               <strong>{steering.sessions.length} review round{steering.sessions.length === 1 ? "" : "s"} waiting for guidance</strong>
@@ -178,6 +220,8 @@ export function OverviewPage(): ReactNode {
             selectedPlaceId={selectedPlaceId}
             onSelect={selectItem}
             onSelectPlace={(place) => selectPlace(place.id)}
+            onDismiss={(item) => void dismissItem(item)}
+            dismissing={dismissing}
             onClear={clearSelection}
           />
           <StatusOverlay state={state} />

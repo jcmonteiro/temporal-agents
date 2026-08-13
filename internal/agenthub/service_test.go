@@ -606,9 +606,13 @@ func TestRunsShowLiveWorkTheRecordDoesNotHave(t *testing.T) {
 func TestDismissedItemsLeaveTheOverviewButNotTheStore(t *testing.T) {
 	kept := agenthubtest.Run("run-"+uuidLike("f"), "kept", agenthub.OutcomeSucceeded, ago(time.Hour))
 	hidden := agenthubtest.Run("run-"+uuidLike("10"), "hidden", agenthub.OutcomeSucceeded, ago(2*time.Hour))
-	source := agenthubtest.New().WithRecorded(kept, hidden).
-		WithDismissal(agenthub.KindRun, hidden.WorkflowID)
+	source := agenthubtest.New().WithRecorded(kept, hidden)
 	service := newService(t, source)
+	hiddenRun, err := service.Run(context.Background(), hidden.WorkflowID)
+	if err != nil {
+		t.Fatalf("Run(hidden): %v", err)
+	}
+	source.WithDismissal(agenthub.KindRun, hidden.WorkflowID, hiddenRun.StateRevision())
 
 	runs, err := service.Runs(context.Background(), 0)
 	if err != nil {
@@ -622,6 +626,60 @@ func TestDismissedItemsLeaveTheOverviewButNotTheStore(t *testing.T) {
 	}
 }
 
+// TestADismissedRunReappearsWhenItsChainChanges pins that a dismissal acknowledges
+// only the state the operator reviewed. A later iteration is new work under the same
+// stable workflow ID and must therefore appear again.
+func TestADismissedRunReappearsWhenItsChainChanges(t *testing.T) {
+	id := "run-" + uuidLike("changed")
+	first := agenthubtest.Run(id, "review this", agenthub.OutcomeSucceeded, ago(2*time.Hour))
+	first.RunID = "iteration-1"
+	first.EndedAt = ago(time.Hour)
+	source := agenthubtest.New().WithRecorded(first)
+	service := newService(t, source)
+
+	if _, err := service.Dismiss(context.Background(), agenthub.KindRun, id, runRevision(t, service, id)); err != nil {
+		t.Fatalf("Dismiss: %v", err)
+	}
+	second := agenthubtest.Run(id, "review this", agenthub.OutcomeRunning, ago(time.Minute))
+	second.RunID = "iteration-2"
+	source.WithRecorded(second).WithRunning(second)
+
+	runs, err := service.Runs(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("Runs: %v", err)
+	}
+	if len(runs) != 1 || runs[0].ID != id || runs[0].Status != agenthub.StatusInProgress {
+		t.Fatalf("runs = %+v, want the changed chain visible and in progress", runs)
+	}
+}
+
+func TestDismissRefusesARevisionTheOperatorDidNotReview(t *testing.T) {
+	id := "run-" + uuidLike("race")
+	first := agenthubtest.Run(id, "review this", agenthub.OutcomeSucceeded, ago(2*time.Hour))
+	first.RunID = "iteration-1"
+	first.EndedAt = ago(time.Hour)
+	source := agenthubtest.New().WithRecorded(first)
+	service := newService(t, source)
+	reviewedRevision := runRevision(t, service, id)
+
+	second := agenthubtest.Run(id, "review this", agenthub.OutcomeSucceeded, ago(time.Minute))
+	second.RunID = "iteration-2"
+	second.EndedAt = now
+	source.WithRecorded(second)
+
+	_, err := service.Dismiss(context.Background(), agenthub.KindRun, id, reviewedRevision)
+	if !errors.Is(err, agenthub.ErrStateChanged) {
+		t.Fatalf("Dismiss(stale revision) = %v, want ErrStateChanged", err)
+	}
+	dismissals, err := service.Dismissals(context.Background())
+	if err != nil {
+		t.Fatalf("Dismissals: %v", err)
+	}
+	if len(dismissals) != 0 {
+		t.Fatalf("dismissals = %+v, want no acknowledgement of the unreviewed state", dismissals)
+	}
+}
+
 // TestDismissRefusesWorkThatIsStillActive pins that the "only finished work can be
 // hidden" rule is the server's: a client that offers the affordance anyway cannot
 // hide a running run.
@@ -632,13 +690,13 @@ func TestDismissRefusesWorkThatIsStillActive(t *testing.T) {
 		WithRunning(agenthubtest.Run(id, "still going", agenthub.OutcomeRunning, ago(time.Minute)))
 	service := newService(t, source)
 
-	if _, err := service.Dismiss(context.Background(), agenthub.KindRun, id); !errors.Is(err, agenthub.ErrNotDismissible) {
+	if _, err := service.Dismiss(context.Background(), agenthub.KindRun, id, runRevision(t, service, id)); !errors.Is(err, agenthub.ErrNotDismissible) {
 		t.Fatalf("Dismiss(running) = %v, want ErrNotDismissible", err)
 	}
-	if _, err := service.Dismiss(context.Background(), agenthub.KindRun, "run-nope"); !errors.Is(err, agenthub.ErrNotFound) {
+	if _, err := service.Dismiss(context.Background(), agenthub.KindRun, "run-nope", "reviewed"); !errors.Is(err, agenthub.ErrNotFound) {
 		t.Fatalf("Dismiss(unknown) = %v, want ErrNotFound", err)
 	}
-	if _, err := service.Dismiss(context.Background(), agenthub.KindSchedule, "schedule-1"); err == nil {
+	if _, err := service.Dismiss(context.Background(), agenthub.KindSchedule, "schedule-1", "reviewed"); err == nil {
 		t.Fatal("Dismiss(schedule) = nil, want a refusal")
 	}
 }
@@ -659,8 +717,9 @@ func TestDismissIsIdempotentAndUndoable(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 	ctx := context.Background()
+	revision := runRevision(t, service, id)
 
-	first, err := service.Dismiss(ctx, agenthub.KindRun, id)
+	first, err := service.Dismiss(ctx, agenthub.KindRun, id, revision)
 	if err != nil {
 		t.Fatalf("Dismiss: %v", err)
 	}
@@ -668,7 +727,7 @@ func TestDismissIsIdempotentAndUndoable(t *testing.T) {
 		t.Errorf("dismissedAt = %v, want the injected clock %v", first.DismissedAt, now)
 	}
 	clock = now.Add(time.Hour)
-	second, err := service.Dismiss(ctx, agenthub.KindRun, id)
+	second, err := service.Dismiss(ctx, agenthub.KindRun, id, revision)
 	if err != nil {
 		t.Fatalf("a repeated Dismiss must succeed: %v", err)
 	}
@@ -687,6 +746,38 @@ func TestDismissIsIdempotentAndUndoable(t *testing.T) {
 	}
 	if err := service.Undismiss(ctx, agenthub.KindRun, id); !errors.Is(err, agenthub.ErrNotFound) {
 		t.Fatalf("Undismiss(twice) = %v, want ErrNotFound", err)
+	}
+}
+
+// TestDismissalIsPrivateToTheViewer pins that acknowledgement is personal view
+// state. One operator reviewing a run must not remove it from another operator's
+// canvas.
+func TestDismissalIsPrivateToTheViewer(t *testing.T) {
+	id := "run-" + uuidLike("private")
+	source := agenthubtest.New().WithRecorded(
+		agenthubtest.Run(id, "review this", agenthub.OutcomeSucceeded, ago(time.Hour)),
+	)
+	service := newService(t, source)
+	alice := agenthub.ViewerID("issuer|alice")
+	bob := agenthub.ViewerID("issuer|bob")
+
+	if _, err := service.DismissFor(context.Background(), alice, agenthub.KindRun, id, runRevision(t, service, id)); err != nil {
+		t.Fatalf("DismissFor(alice): %v", err)
+	}
+	aliceRuns, err := service.RunsFor(context.Background(), alice, 0)
+	if err != nil {
+		t.Fatalf("RunsFor(alice): %v", err)
+	}
+	bobRuns, err := service.RunsFor(context.Background(), bob, 0)
+	if err != nil {
+		t.Fatalf("RunsFor(bob): %v", err)
+	}
+
+	if len(aliceRuns) != 0 {
+		t.Fatalf("Alice's runs = %+v, want the reviewed run hidden", aliceRuns)
+	}
+	if len(bobRuns) != 1 || bobRuns[0].ID != id {
+		t.Fatalf("Bob's runs = %+v, want %q still visible", bobRuns, id)
 	}
 }
 
@@ -842,20 +933,62 @@ func TestAnUnavailableDependencyIsReportedAsRetryable(t *testing.T) {
 // dismissals cannot permanently hide an older visible fleet.
 func TestDismissedFleetsAreExcludedBeforeTheLimit(t *testing.T) {
 	source := agenthubtest.New()
+	var hiddenIDs []string
 	for i := 0; i < 201; i++ {
 		id := "fleet-" + uuidLike(fmt.Sprintf("%x", 0x100+i))
 		source.WithRecorded(agenthubtest.Fleet(id, agenthub.OutcomeSucceeded, now.Add(-time.Duration(i)*time.Second)))
-		source.WithDismissal(agenthub.KindFleet, id)
+		hiddenIDs = append(hiddenIDs, id)
 	}
 	visibleID := "fleet-" + uuidLike("2ff")
 	source.WithRecorded(agenthubtest.Fleet(visibleID, agenthub.OutcomeSucceeded, ago(time.Hour)))
+	service := newService(t, source)
+	for _, id := range hiddenIDs {
+		fleet, err := service.Fleet(context.Background(), id)
+		if err != nil {
+			t.Fatalf("Fleet(%s): %v", id, err)
+		}
+		source.WithDismissal(agenthub.KindFleet, id, fleet.StateRevision())
+	}
 
-	fleets, err := newService(t, source).Fleets(context.Background(), 1)
+	fleets, err := service.Fleets(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("Fleets: %v", err)
 	}
 	if len(fleets) != 1 || fleets[0].ID != visibleID {
 		t.Fatalf("fleets = %v, want older visible fleet %q", fleets, visibleID)
+	}
+}
+
+type observedCollection struct {
+	agenthub.CollectionSource
+	fleetLimits []int
+}
+
+func (c *observedCollection) FleetTreePage(ctx context.Context, query agenthub.ChainQuery) (agenthub.Page[agenthub.FleetTree], error) {
+	c.fleetLimits = append(c.fleetLimits, query.Limit)
+	return c.CollectionSource.FleetTreePage(ctx, query)
+}
+
+func TestRunDismissalsDoNotIncreaseFleetReads(t *testing.T) {
+	source := agenthubtest.New().WithRecorded(
+		agenthubtest.Fleet("fleet-"+uuidLike("read"), agenthub.OutcomeSucceeded, ago(time.Hour)),
+	)
+	for i := 0; i < 900; i++ {
+		source.WithDismissal(agenthub.KindRun, fmt.Sprintf("run-dismissed-%03d", i), "reviewed")
+	}
+	observed := &observedCollection{CollectionSource: source}
+	deps := source.Dependencies(now)
+	deps.Collections = observed
+	service, err := agenthub.NewService(deps)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	if _, err := service.Fleets(context.Background(), 0); err != nil {
+		t.Fatalf("Fleets: %v", err)
+	}
+	if len(observed.fleetLimits) != 1 || observed.fleetLimits[0] != agenthub.DefaultLimit {
+		t.Fatalf("fleet page limits = %v, want one bounded default page", observed.fleetLimits)
 	}
 }
 
@@ -878,6 +1011,15 @@ func TestFleetsRespectTheLimit(t *testing.T) {
 	if !fleets[0].StartedAt.After(fleets[1].StartedAt) {
 		t.Errorf("fleets are not newest-first: %v then %v", fleets[0].StartedAt, fleets[1].StartedAt)
 	}
+}
+
+func runRevision(t *testing.T, service *agenthub.Service, id string) string {
+	t.Helper()
+	run, err := service.Run(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Run(%s): %v", id, err)
+	}
+	return run.StateRevision()
 }
 
 // uuidLike builds a canonical-looking UUID from a short seed, so a test ID is

@@ -163,9 +163,9 @@ move to it deliberately.
 | `POST /api/v1/runs` | Start a develop or review pass in a known place |
 | `GET /api/v1/runs/{id}` | One standalone chain |
 | `GET /api/v1/schedules` | One item per schedule |
-| `GET /api/v1/dismissals` | View-state dismissals in force |
-| `POST /api/v1/dismissals` | Hide one finished fleet or run |
-| `DELETE /api/v1/dismissals/{id}` | Make the item visible again |
+| `GET /api/v1/dismissals` | The signed-in user's view-state dismissals in force |
+| `POST /api/v1/dismissals` | Hide one finished fleet or run for the signed-in user |
+| `DELETE /api/v1/dismissals/{id}` | Make the item visible again for the signed-in user |
 | `GET /api/v1/places` | The places the hub may work in |
 | `POST /api/v1/places` | Register a place |
 | `GET /api/v1/settings` | What the tool is configured to do, and where each value came from |
@@ -332,9 +332,14 @@ is `paused`.
 
 ## Dismissals
 
-A dismissal is durable operator view state. It never signals, cancels, or changes a
-workflow. Only terminal fleets and runs (`done` or `failed`) can be dismissed. A
-schedule cannot be dismissed.
+A dismissal is durable, user-specific operator view state. It never signals, cancels,
+or changes a workflow. Only terminal fleets and runs (`done` or `failed`) can be
+dismissed. A schedule cannot be dismissed.
+
+The dismissal acknowledges the exact state visible when the user acted. If any
+published state changes — for example, a run gains an iteration, changes outcome, or
+reports updated token usage — its state revision no longer matches and the run appears
+again automatically. Another user always has an independent view.
 
 ```http
 POST /api/v1/dismissals
@@ -349,8 +354,10 @@ The response is `201 Created`, with a `Location` header such as:
 /api/v1/dismissals/run:run-...
 ```
 
-The identity is derived from kind and item ID. Repeating the same POST is idempotent
-and keeps the original dismissal time. Delete the returned resource to undo it.
+Within one user's view, the identity is derived from kind and item ID. Repeating the
+same POST against the same item state is idempotent and keeps the original dismissal
+time. Dismissing a later state replaces that user's earlier acknowledgement. Delete
+the returned resource to undo it.
 
 ## Starting work
 

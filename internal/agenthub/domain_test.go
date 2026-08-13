@@ -3,6 +3,7 @@ package agenthub
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestAggregateStatus pins the published precedence, including the empty fleet and
@@ -222,6 +223,52 @@ func TestUpNext(t *testing.T) {
 	got := fleet.UpNext()
 	if len(got) != 2 || got[0].ID != "ready" || got[1].ID != "waiting" {
 		t.Fatalf("UpNext = %v, want [ready waiting]", ids(got))
+	}
+}
+
+// TestFleetStateRevisionCoversEveryPublishedNodeField pins that a dismissal
+// acknowledges the graph the operator saw, not only each node's execution state.
+func TestFleetStateRevisionCoversEveryPublishedNodeField(t *testing.T) {
+	started := time.Date(2026, time.August, 6, 9, 0, 0, 0, time.UTC)
+	location, err := NewDirectoryLocation("/srv/worktree", nil)
+	if err != nil {
+		t.Fatalf("NewDirectoryLocation: %v", err)
+	}
+	baseline := Fleet{ID: "fleet-1", Nodes: []FleetNode{{
+		ID: "api", Prompt: "build the API", DependsOn: []string{"domain"},
+		Status: StatusDone, Execution: &NodeExecution{
+			WorkflowID: "fleet-1-api", RunID: "run-1", StartedAt: started,
+			EndedAt: started.Add(time.Minute), Tokens: 10,
+		},
+	}}}
+
+	cases := map[string]func(*FleetNode){
+		"id":               func(node *FleetNode) { node.ID = "web" },
+		"prompt":           func(node *FleetNode) { node.Prompt = "build the web client" },
+		"dependency count": func(node *FleetNode) { node.DependsOn = append(node.DependsOn, "schema") },
+		"dependency":       func(node *FleetNode) { node.DependsOn[0] = "storage" },
+		"status":           func(node *FleetNode) { node.Status = StatusFailed },
+		"location":         func(node *FleetNode) { node.Location = location },
+		"execution":        func(node *FleetNode) { node.Execution = nil },
+		"workflow id":      func(node *FleetNode) { node.Execution.WorkflowID = "fleet-1-web" },
+		"run id":           func(node *FleetNode) { node.Execution.RunID = "run-2" },
+		"start time":       func(node *FleetNode) { node.Execution.StartedAt = started.Add(time.Second) },
+		"end time":         func(node *FleetNode) { node.Execution.EndedAt = started.Add(2 * time.Minute) },
+		"tokens":           func(node *FleetNode) { node.Execution.Tokens++ },
+	}
+	wantDifferentFrom := baseline.StateRevision()
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			changed := baseline
+			changed.Nodes = append([]FleetNode(nil), baseline.Nodes...)
+			changed.Nodes[0].DependsOn = append([]string(nil), baseline.Nodes[0].DependsOn...)
+			execution := *baseline.Nodes[0].Execution
+			changed.Nodes[0].Execution = &execution
+			change(&changed.Nodes[0])
+			if got := changed.StateRevision(); got == wantDifferentFrom {
+				t.Fatalf("StateRevision() = %q after %s changed; want a new revision", got, name)
+			}
+		})
 	}
 }
 

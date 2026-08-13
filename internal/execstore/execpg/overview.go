@@ -2,7 +2,10 @@ package execpg
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"time"
 
 	"temporal-agents/internal/execstore"
 )
@@ -10,12 +13,22 @@ import (
 // Compile-time proof that Postgres provides the collection-oriented read port.
 var _ execstore.OverviewReader = (*Postgres)(nil)
 
-// ListExecutionChains selects workflow identities before it loads their rows, then
-// aggregates every iteration of each selected chain.
+// ListExecutionChains returns the first stable page for compatibility callers.
 func (p *Postgres) ListExecutionChains(ctx context.Context, filter execstore.ChainFilter) ([]execstore.ExecutionChain, error) {
-	rows, err := p.pool.Query(ctx, selectedExecutionsSQL(false), chainArgs(filter)...)
+	page, err := p.ListExecutionChainPage(ctx, filter)
+	return page.Items, err
+}
+
+// ListExecutionChainPage selects workflow identities before it loads their rows,
+// then aggregates every iteration of each selected chain.
+func (p *Postgres) ListExecutionChainPage(ctx context.Context, filter execstore.ChainFilter) (execstore.ExecutionChainPage, error) {
+	args, err := chainArgs(filter)
 	if err != nil {
-		return nil, readError("read execution chains", err)
+		return execstore.ExecutionChainPage{}, err
+	}
+	rows, err := p.pool.Query(ctx, selectedExecutionsSQL(false), args...)
+	if err != nil {
+		return execstore.ExecutionChainPage{}, readError("read execution chains", err)
 	}
 	defer rows.Close()
 
@@ -24,7 +37,7 @@ func (p *Postgres) ListExecutionChains(ctx context.Context, filter execstore.Cha
 	for rows.Next() {
 		execution, err := scanExecution(rows)
 		if err != nil {
-			return nil, err
+			return execstore.ExecutionChainPage{}, err
 		}
 		if _, known := groups[execution.WorkflowID]; !known {
 			order = append(order, execution.WorkflowID)
@@ -32,22 +45,35 @@ func (p *Postgres) ListExecutionChains(ctx context.Context, filter execstore.Cha
 		groups[execution.WorkflowID] = append(groups[execution.WorkflowID], execution)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, readError("read execution chains", err)
+		return execstore.ExecutionChainPage{}, readError("read execution chains", err)
 	}
 
 	chains := make([]execstore.ExecutionChain, 0, len(order))
 	for _, workflowID := range order {
 		chains = append(chains, aggregateChain(groups[workflowID]))
 	}
-	return chains, nil
+	items, next, err := chainPage(chains, filter, func(chain execstore.ExecutionChain) execstore.ExecutionChain {
+		return chain
+	})
+	return execstore.ExecutionChainPage{Items: items, Next: next}, err
 }
 
-// ListExecutionTrees selects root workflow identities before it loads every root
-// iteration and direct child row for those roots.
+// ListExecutionTrees returns the first stable page for compatibility callers.
 func (p *Postgres) ListExecutionTrees(ctx context.Context, filter execstore.ChainFilter) ([]execstore.ExecutionTree, error) {
-	rows, err := p.pool.Query(ctx, selectedExecutionsSQL(true), chainArgs(filter)...)
+	page, err := p.ListExecutionTreePage(ctx, filter)
+	return page.Items, err
+}
+
+// ListExecutionTreePage selects root workflow identities before it loads every
+// root iteration and direct child row for those roots.
+func (p *Postgres) ListExecutionTreePage(ctx context.Context, filter execstore.ChainFilter) (execstore.ExecutionTreePage, error) {
+	args, err := chainArgs(filter)
 	if err != nil {
-		return nil, readError("read execution trees", err)
+		return execstore.ExecutionTreePage{}, err
+	}
+	rows, err := p.pool.Query(ctx, selectedExecutionsSQL(true), args...)
+	if err != nil {
+		return execstore.ExecutionTreePage{}, readError("read execution trees", err)
 	}
 	defer rows.Close()
 
@@ -57,7 +83,7 @@ func (p *Postgres) ListExecutionTrees(ctx context.Context, filter execstore.Chai
 	for rows.Next() {
 		execution, err := scanExecution(rows)
 		if err != nil {
-			return nil, err
+			return execstore.ExecutionTreePage{}, err
 		}
 		rootID := execution.WorkflowID
 		if execution.ParentWorkflowID != "" {
@@ -75,14 +101,17 @@ func (p *Postgres) ListExecutionTrees(ctx context.Context, filter execstore.Chai
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, readError("read execution trees", err)
+		return execstore.ExecutionTreePage{}, readError("read execution trees", err)
 	}
 
 	out := make([]execstore.ExecutionTree, 0, len(order))
 	for _, rootID := range order {
 		out = append(out, *trees[rootID])
 	}
-	return out, nil
+	items, next, err := chainPage(out, filter, func(tree execstore.ExecutionTree) execstore.ExecutionChain {
+		return tree.Chain
+	})
+	return execstore.ExecutionTreePage{Items: items, Next: next}, err
 }
 
 // ListScheduleActionChains returns the newest bounded action chains for every
@@ -168,8 +197,10 @@ func selectedExecutionsSQL(tree bool) string {
 ), page AS (
 	SELECT workflow_id, chain_started
 	FROM eligible
+	WHERE ($6::timestamptz IS NULL OR chain_started < $6
+		OR (chain_started = $6 AND workflow_id > $7))
 	ORDER BY chain_started DESC, workflow_id ASC
-	LIMIT $4
+	LIMIT ($4 + 1)
 ), selected AS (
 	SELECT workflow_id, chain_started FROM page
 	UNION
@@ -183,7 +214,12 @@ JOIN selected ON (%s)
 ORDER BY selected.chain_started DESC, selected.workflow_id ASC, e.started_at DESC, e.run_id DESC`, qualifiedExecutionColumns, join)
 }
 
-func chainArgs(filter execstore.ChainFilter) []any {
+type executionChainCursor struct {
+	StartedAt  time.Time `json:"startedAt"`
+	WorkflowID string    `json:"workflowId"`
+}
+
+func chainArgs(filter execstore.ChainFilter) ([]any, error) {
 	kinds := make([]string, 0, len(filter.Kinds))
 	for _, kind := range filter.Kinds {
 		kinds = append(kinds, string(kind))
@@ -196,8 +232,43 @@ func chainArgs(filter execstore.ChainFilter) []any {
 	if required == nil {
 		required = []string{}
 	}
+	var startedAt *time.Time
+	var workflowID string
+	if len(filter.Cursor) > 0 {
+		var cursor executionChainCursor
+		if err := json.Unmarshal(filter.Cursor, &cursor); err != nil || cursor.StartedAt.IsZero() || cursor.WorkflowID == "" {
+			return nil, errors.New("invalid execution-chain cursor")
+		}
+		startedAt = &cursor.StartedAt
+		workflowID = cursor.WorkflowID
+	}
 	limit := execstore.EffectiveLimit(filter.Limit, execstore.DefaultHistoryLimit)
-	return []any{kinds, filter.WorkflowID, excluded, limit, required}
+	return []any{kinds, filter.WorkflowID, excluded, limit, required, startedAt, workflowID}, nil
+}
+
+func chainPage[T any](all []T, filter execstore.ChainFilter, chainOf func(T) execstore.ExecutionChain) ([]T, []byte, error) {
+	limit := execstore.EffectiveLimit(filter.Limit, execstore.DefaultHistoryLimit)
+	if len(all) <= limit {
+		return all, nil, nil
+	}
+	items := append([]T(nil), all[:limit]...)
+	required := make(map[string]bool, len(filter.RequiredWorkflowIDs))
+	for _, workflowID := range filter.RequiredWorkflowIDs {
+		required[workflowID] = true
+	}
+	for _, item := range all[limit:] {
+		if required[chainOf(item).Latest.WorkflowID] {
+			items = append(items, item)
+		}
+	}
+	last := chainOf(all[limit-1])
+	next, err := json.Marshal(executionChainCursor{
+		StartedAt: last.StartedAt, WorkflowID: last.Latest.WorkflowID,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode execution-chain cursor: %w", err)
+	}
+	return items, next, nil
 }
 
 func executionActionID(execution execstore.Execution) string {

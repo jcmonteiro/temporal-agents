@@ -41,6 +41,8 @@ export interface WorkItem {
   spec?: string;
   paused?: boolean;
   dismissible?: boolean;
+  // Opaque optimistic precondition for an exact-state dismissal.
+  stateRevision?: string;
 }
 
 // Identity of a work item. The API only guarantees that an id is unique within

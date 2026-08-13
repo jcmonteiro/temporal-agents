@@ -18,9 +18,12 @@
 package agenthub
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -231,6 +234,31 @@ type Fleet struct {
 // a settled parent with a terminal aggregate status can be.
 func (f Fleet) Dismissible() bool { return !f.Running && f.Status.Terminal() }
 
+// StateRevision identifies the fleet state an operator reviewed. Any observable
+// change produces a different revision, so an old dismissal cannot hide new work.
+func (f Fleet) StateRevision() string {
+	parts := []string{
+		f.ID, strconv.FormatBool(f.Running), f.Goal, f.PlanID, string(f.Status),
+		strconv.Itoa(f.Progress.Done), strconv.Itoa(f.Progress.Total),
+		timeRevision(f.StartedAt), timeRevision(f.EndedAt), f.Location.ID(),
+	}
+	for _, node := range f.Nodes {
+		parts = append(parts,
+			node.ID, node.Prompt, string(node.Status), node.Location.ID(),
+			strconv.Itoa(len(node.DependsOn)),
+		)
+		parts = append(parts, node.DependsOn...)
+		if node.Execution == nil {
+			parts = append(parts, "")
+			continue
+		}
+		parts = append(parts, node.Execution.WorkflowID, node.Execution.RunID,
+			timeRevision(node.Execution.StartedAt), timeRevision(node.Execution.EndedAt),
+			strconv.Itoa(node.Execution.Tokens))
+	}
+	return stateRevision(parts...)
+}
+
 // UpNext returns the nodes that have not started, prerequisites-ready first
 // (todo) and then merely waiting, in plan order within each group. It is the
 // server-side answer to the overview's "up next" queue, so the queue's meaning
@@ -341,6 +369,34 @@ type Run struct {
 // Dismissible reports whether the run may be dismissed from the overview.
 func (r Run) Dismissible() bool { return !r.Running && r.Status.Terminal() }
 
+// StateRevision identifies the run state an operator reviewed. It covers every
+// fact published in the collection, plus liveness, so a changed iteration, outcome,
+// cost, label, or place makes a dismissed run visible again.
+func (r Run) StateRevision() string {
+	return stateRevision(
+		r.ID, strconv.FormatBool(r.Running), string(r.Type), r.Label, string(r.Status),
+		timeRevision(r.StartedAt), timeRevision(r.EndedAt), strconv.Itoa(r.Iterations),
+		strconv.Itoa(r.Tokens), r.Location.ID(),
+	)
+}
+
+func stateRevision(parts ...string) string {
+	hash := sha256.New()
+	for _, part := range parts {
+		_, _ = hash.Write([]byte(strconv.Itoa(len(part))))
+		_, _ = hash.Write([]byte{':'})
+		_, _ = hash.Write([]byte(part))
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func timeRevision(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
 // Schedule is one schedule satellite. A schedule is recurring, so it is never
 // "done": its status describes its latest action, and it carries no progress —
 // there is no finite amount of work to be a fraction of.
@@ -419,15 +475,27 @@ type Page[T any] struct {
 	Next  []byte
 }
 
-// Dismissal records that the operator has dismissed a finished item from the
-// overview. It is view state: it hides an item, and never touches the work.
+// ViewerID is the stable identity whose private view state is being read. The
+// local value covers the explicit unauthenticated mode without turning it into
+// shared state with any authenticated principal.
+type ViewerID string
+
+const LocalViewerID ViewerID = "local-operator"
+
+// Dismissal records that one viewer dismissed one observed state of a finished
+// item. It is view state: it hides an item, and never touches the work.
 type Dismissal struct {
+	// Viewer is the only principal this dismissal applies to.
+	Viewer ViewerID
 	// Kind is the kind of item dismissed, which is part of its identity: a fleet
 	// and a run could in principle carry the same ID.
 	Kind ItemKind
 	// ItemID is the item's stable identity — a fleet's parent workflow ID or a
 	// run chain's workflow ID.
 	ItemID string
+	// StateRevision is the exact state the viewer acknowledged. A changed item has
+	// a different revision and is visible again without deleting this record first.
+	StateRevision string
 	// DismissedAt is when it was dismissed.
 	DismissedAt time.Time
 }

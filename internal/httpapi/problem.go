@@ -40,6 +40,8 @@ const (
 	codeRequestTooLarge problemCode = "request-too-large"
 	// codeNotDismissible is a dismissal asked for work that has not finished.
 	codeNotDismissible problemCode = "not-dismissible"
+	// codeStateChanged is a dismissal whose optimistic state precondition is stale.
+	codeStateChanged problemCode = "state-changed"
 	// codeNotAPlace is a registration of a directory the hub cannot work in: nothing
 	// is there, or no repository holds it.
 	codeNotAPlace problemCode = "not-a-place"
@@ -125,6 +127,12 @@ var problemTypes = map[problemCode]problemType{
 		Description: "Dismissing is view state over finished work: only an item that has finished " +
 			"(done or failed) can be hidden, and a schedule never can because it has no finished " +
 			"state. Wait for the work to settle, or leave it visible.",
+	},
+	codeStateChanged: {
+		Title:  "The item changed before dismissal",
+		Status: http.StatusConflict,
+		Description: "The item no longer has the exact state revision the operator reviewed. " +
+			"Refresh the overview, review the current state, and dismiss that revision if appropriate.",
 	},
 	codeNotAPlace: {
 		Title:  "The hub cannot work in that directory",

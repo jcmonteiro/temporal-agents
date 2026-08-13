@@ -68,6 +68,7 @@ export interface FleetDTO {
   startedAt: string | null;
   endedAt: string | null;
   dismissible: boolean;
+  stateRevision: string;
   upNext?: FleetNode[];
   nodes?: FleetNode[];
 }
@@ -93,9 +94,17 @@ export interface RunDTO {
   iterations: number;
   tokens?: number;
   dismissible: boolean;
+  stateRevision: string;
   // Provenance, published on a run's own resource only.
   startedBy?: string;
   instructions?: InstructionUseDTO[];
+}
+
+export interface DismissalDTO {
+  id: string;
+  kind: "fleet" | "run";
+  itemId: string;
+  dismissedAt: string | null;
 }
 
 export interface ScheduleDTO {

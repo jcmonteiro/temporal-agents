@@ -525,7 +525,7 @@ func runAPIServer(options serveOptions) error {
 			{
 				Name: "hub-store",
 				Check: func(ctx context.Context) error {
-					_, err := hubStore.Dismissals(ctx)
+					_, err := hubStore.Dismissals(ctx, agenthub.LocalViewerID)
 					return err
 				},
 			},

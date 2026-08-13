@@ -38,7 +38,7 @@ type viewStub struct {
 	err        error
 }
 
-func (v *viewStub) Fleets(context.Context, int) ([]agenthub.Fleet, error) {
+func (v *viewStub) FleetsFor(_ context.Context, viewer agenthub.ViewerID, _ int) ([]agenthub.Fleet, error) {
 	return v.fleets, v.err
 }
 
@@ -54,7 +54,9 @@ func (v *viewStub) Fleet(_ context.Context, id string) (agenthub.Fleet, error) {
 	return agenthub.Fleet{}, agenthub.ErrNotFound
 }
 
-func (v *viewStub) Runs(context.Context, int) ([]agenthub.Run, error) { return v.runs, v.err }
+func (v *viewStub) RunsFor(_ context.Context, viewer agenthub.ViewerID, _ int) ([]agenthub.Run, error) {
+	return v.runs, v.err
+}
 
 func (v *viewStub) Run(_ context.Context, id string) (agenthub.Run, error) {
 	if v.err != nil {
@@ -121,11 +123,17 @@ func activeTypeFromRun(runType agenthub.RunType) agenthub.ActiveWorkType {
 	}
 }
 
-func (v *viewStub) Dismissals(context.Context) ([]agenthub.Dismissal, error) {
-	return v.dismissals, v.err
+func (v *viewStub) DismissalsFor(_ context.Context, viewer agenthub.ViewerID) ([]agenthub.Dismissal, error) {
+	var dismissals []agenthub.Dismissal
+	for _, dismissal := range v.dismissals {
+		if dismissal.Viewer == viewer {
+			dismissals = append(dismissals, dismissal)
+		}
+	}
+	return dismissals, v.err
 }
 
-func (v *viewStub) Dismiss(_ context.Context, kind agenthub.ItemKind, itemID string) (agenthub.Dismissal, error) {
+func (v *viewStub) DismissFor(_ context.Context, viewer agenthub.ViewerID, kind agenthub.ItemKind, itemID, expectedRevision string) (agenthub.Dismissal, error) {
 	if v.err != nil {
 		return agenthub.Dismissal{}, v.err
 	}
@@ -133,22 +141,32 @@ func (v *viewStub) Dismiss(_ context.Context, kind agenthub.ItemKind, itemID str
 		return agenthub.Dismissal{}, err
 	}
 	var terminal bool
+	var currentRevision string
 	switch kind {
 	case agenthub.KindFleet:
 		for _, fleet := range v.fleets {
-			terminal = terminal || fleet.ID == itemID && fleet.Dismissible()
+			if fleet.ID == itemID {
+				terminal = fleet.Dismissible()
+				currentRevision = fleet.StateRevision()
+			}
 		}
 	case agenthub.KindRun:
 		for _, run := range v.runs {
-			terminal = terminal || run.ID == itemID && run.Dismissible()
+			if run.ID == itemID {
+				terminal = run.Dismissible()
+				currentRevision = run.StateRevision()
+			}
 		}
+	}
+	if currentRevision != expectedRevision {
+		return agenthub.Dismissal{}, agenthub.ErrStateChanged
 	}
 	if !terminal {
 		return agenthub.Dismissal{}, agenthub.ErrNotDismissible
 	}
-	d := agenthub.Dismissal{Kind: kind, ItemID: itemID, DismissedAt: fixedNow}
+	d := agenthub.Dismissal{Viewer: viewer, Kind: kind, ItemID: itemID, StateRevision: currentRevision, DismissedAt: fixedNow}
 	for _, existing := range v.dismissals {
-		if existing.ID() == d.ID() {
+		if existing.Viewer == viewer && existing.ID() == d.ID() {
 			return existing, nil
 		}
 	}
@@ -156,13 +174,13 @@ func (v *viewStub) Dismiss(_ context.Context, kind agenthub.ItemKind, itemID str
 	return d, nil
 }
 
-func (v *viewStub) Undismiss(_ context.Context, kind agenthub.ItemKind, itemID string) error {
+func (v *viewStub) UndismissFor(_ context.Context, viewer agenthub.ViewerID, kind agenthub.ItemKind, itemID string) error {
 	if v.err != nil {
 		return v.err
 	}
 	id := agenthub.Dismissal{Kind: kind, ItemID: itemID}.ID()
 	for i, dismissal := range v.dismissals {
-		if dismissal.ID() == id {
+		if dismissal.Viewer == viewer && dismissal.ID() == id {
 			v.dismissals = append(v.dismissals[:i], v.dismissals[i+1:]...)
 			return nil
 		}
@@ -507,10 +525,11 @@ func TestUnknownAndWrongMethodAreProblemDocuments(t *testing.T) {
 // TestDismissalLifecycle pins the API's sole mutation end to end: strict JSON creates
 // durable view state under an address, listing shows it, and DELETE removes it.
 func TestDismissalLifecycle(t *testing.T) {
-	view := &viewStub{runs: []agenthub.Run{{ID: "run-1", Status: agenthub.StatusDone, Iterations: 1}}}
+	run := agenthub.Run{ID: "run-1", Status: agenthub.StatusDone, Iterations: 1}
+	view := &viewStub{runs: []agenthub.Run{run}}
 	server := newTestServer(t, view)
 
-	body := strings.NewReader(`{"kind":"run","itemId":"run-1"}`)
+	body := strings.NewReader(fmt.Sprintf(`{"kind":"run","itemId":"run-1","stateRevision":%q}`, run.StateRevision()))
 	req := newRequest(http.MethodPost, BasePath+"/dismissals", body)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	created := httptest.NewRecorder()
@@ -545,7 +564,7 @@ func TestDismissalLifecycle(t *testing.T) {
 // unknown fields, trailing documents and size are refused before the core sees them.
 func TestDismissalBodyIsStrictAndBounded(t *testing.T) {
 	view := &viewStub{runs: []agenthub.Run{{ID: "run-1", Status: agenthub.StatusDone, Iterations: 1}}}
-	server := newTestServer(t, view, func(options *Options) { options.MaxBodyBytes = 48 })
+	server := newTestServer(t, view, func(options *Options) { options.MaxBodyBytes = 128 })
 
 	cases := []struct {
 		name        string
@@ -554,10 +573,11 @@ func TestDismissalBodyIsStrictAndBounded(t *testing.T) {
 		status      int
 		code        problemCode
 	}{
-		{"missing media type", "", `{"kind":"run","itemId":"run-1"}`, 415, codeUnsupportedMediaType},
-		{"unknown field", "application/json", `{"kind":"run","itemId":"run-1","owner":"me"}`, 400, codeInvalidRequest},
-		{"two documents", "application/json", `{"kind":"run","itemId":"run-1"}{}`, 400, codeInvalidRequest},
-		{"oversized", "application/json", `{"kind":"run","itemId":"run-111111111111111111111111111111111111111111111"}`, 413, codeRequestTooLarge},
+		{"missing media type", "", `{"kind":"run","itemId":"run-1","stateRevision":"reviewed"}`, 415, codeUnsupportedMediaType},
+		{"missing state revision", "application/json", `{"kind":"run","itemId":"run-1"}`, 400, codeInvalidRequest},
+		{"unknown field", "application/json", `{"kind":"run","itemId":"run-1","stateRevision":"reviewed","owner":"me"}`, 400, codeInvalidRequest},
+		{"two documents", "application/json", `{"kind":"run","itemId":"run-1","stateRevision":"reviewed"}{}`, 400, codeInvalidRequest},
+		{"oversized", "application/json", `{"kind":"run","itemId":"run-111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111","stateRevision":"reviewed"}`, 413, codeRequestTooLarge},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -574,10 +594,23 @@ func TestDismissalBodyIsStrictAndBounded(t *testing.T) {
 
 // TestActiveItemCannotBeDismissed pins that the server enforces the rule rather than
 // trusting a frontend to hide the affordance.
+func TestChangedItemStateCannotBeDismissed(t *testing.T) {
+	run := agenthub.Run{ID: "run-1", Status: agenthub.StatusDone, Iterations: 2}
+	server := newTestServer(t, &viewStub{runs: []agenthub.Run{run}})
+	req := newRequest(http.MethodPost, BasePath+"/dismissals", strings.NewReader(
+		`{"kind":"run","itemId":"run-1","stateRevision":"an-older-revision"}`))
+	req.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, req)
+	requireProblem(t, response, http.StatusConflict, codeStateChanged)
+}
+
 func TestActiveItemCannotBeDismissed(t *testing.T) {
-	view := &viewStub{runs: []agenthub.Run{{ID: "run-1", Running: true, Status: agenthub.StatusInProgress, Iterations: 1}}}
+	run := agenthub.Run{ID: "run-1", Running: true, Status: agenthub.StatusInProgress, Iterations: 1}
+	view := &viewStub{runs: []agenthub.Run{run}}
 	server := newTestServer(t, view)
-	req := newRequest(http.MethodPost, BasePath+"/dismissals", strings.NewReader(`{"kind":"run","itemId":"run-1"}`))
+	req := newRequest(http.MethodPost, BasePath+"/dismissals", strings.NewReader(fmt.Sprintf(
+		`{"kind":"run","itemId":"run-1","stateRevision":%q}`, run.StateRevision())))
 	req.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, req)
@@ -1082,13 +1115,13 @@ func TestOverviewResourcesKeepTheFieldNamesTheWebClientReads(t *testing.T) {
 	}{
 		{
 			path:      "/fleets",
-			itemKeys:  []string{"id", "kind", "label", "status", "progress", "dismissible", "upNext", "locationId"},
+			itemKeys:  []string{"id", "kind", "label", "status", "progress", "dismissible", "stateRevision", "upNext", "locationId"},
 			nestedKey: "progress",
 			nested:    []string{"done", "total", "fraction"},
 		},
 		{
 			path:     "/runs",
-			itemKeys: []string{"id", "kind", "type", "label", "status", "iterations", "dismissible", "locationId"},
+			itemKeys: []string{"id", "kind", "type", "label", "status", "iterations", "dismissible", "stateRevision", "locationId"},
 		},
 		{
 			path:     "/schedules",

@@ -11,9 +11,12 @@ package execstoretest
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"temporal-agents/internal/execstore"
 )
@@ -113,6 +116,16 @@ func (s *Store) ListExecutionChains(_ context.Context, filter execstore.ChainFil
 	return executionChains(s.currentRecords(), filter), nil
 }
 
+// ListExecutionChainPage returns one stable page of fully aggregated chains.
+func (s *Store) ListExecutionChainPage(_ context.Context, filter execstore.ChainFilter) (execstore.ExecutionChainPage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.outage(); err != nil {
+		return execstore.ExecutionChainPage{}, err
+	}
+	return executionChainPage(s.currentRecords(), filter)
+}
+
 // ListExecutionTrees returns selected root chains with their direct children.
 func (s *Store) ListExecutionTrees(_ context.Context, filter execstore.ChainFilter) ([]execstore.ExecutionTree, error) {
 	s.mu.Lock()
@@ -133,6 +146,31 @@ func (s *Store) ListExecutionTrees(_ context.Context, filter execstore.ChainFilt
 		trees = append(trees, tree)
 	}
 	return trees, nil
+}
+
+// ListExecutionTreePage returns one stable page of roots with direct children.
+func (s *Store) ListExecutionTreePage(_ context.Context, filter execstore.ChainFilter) (execstore.ExecutionTreePage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.outage(); err != nil {
+		return execstore.ExecutionTreePage{}, err
+	}
+	executions := s.currentRecords()
+	chainPage, err := executionChainPage(executions, filter)
+	if err != nil {
+		return execstore.ExecutionTreePage{}, err
+	}
+	trees := make([]execstore.ExecutionTree, 0, len(chainPage.Items))
+	for _, chain := range chainPage.Items {
+		tree := execstore.ExecutionTree{Chain: chain}
+		for _, execution := range executions {
+			if execution.WorkflowID == chain.Latest.WorkflowID || execution.ParentWorkflowID == chain.Latest.WorkflowID {
+				tree.Executions = append(tree.Executions, execution)
+			}
+		}
+		trees = append(trees, tree)
+	}
+	return execstore.ExecutionTreePage{Items: trees, Next: chainPage.Next}, nil
 }
 
 // ListScheduleActionChains returns a bounded action-chain sample for every schedule.
@@ -288,6 +326,48 @@ func executionChains(executions []execstore.Execution, filter execstore.ChainFil
 		}
 	}
 	return selected
+}
+
+type chainCursor struct {
+	StartedAt  time.Time `json:"startedAt"`
+	WorkflowID string    `json:"workflowId"`
+}
+
+func executionChainPage(executions []execstore.Execution, filter execstore.ChainFilter) (execstore.ExecutionChainPage, error) {
+	unbounded := filter
+	unbounded.Limit = 0
+	unbounded.RequiredWorkflowIDs = nil
+	unbounded.Cursor = nil
+	chains := executionChains(executions, unbounded)
+	if len(filter.Cursor) > 0 {
+		var cursor chainCursor
+		if err := json.Unmarshal(filter.Cursor, &cursor); err != nil || cursor.StartedAt.IsZero() || cursor.WorkflowID == "" {
+			return execstore.ExecutionChainPage{}, errors.New("invalid execution-chain cursor")
+		}
+		first := 0
+		for first < len(chains) && (chains[first].StartedAt.After(cursor.StartedAt) ||
+			chains[first].StartedAt.Equal(cursor.StartedAt) && chains[first].Latest.WorkflowID <= cursor.WorkflowID) {
+			first++
+		}
+		chains = chains[first:]
+	}
+	limit := execstore.EffectiveLimit(filter.Limit, execstore.DefaultHistoryLimit)
+	if len(chains) <= limit {
+		return execstore.ExecutionChainPage{Items: chains}, nil
+	}
+	items := append([]execstore.ExecutionChain(nil), chains[:limit]...)
+	required := stringsOf(filter.RequiredWorkflowIDs)
+	for _, chain := range chains[limit:] {
+		if required[chain.Latest.WorkflowID] {
+			items = append(items, chain)
+		}
+	}
+	last := chains[limit-1]
+	next, err := json.Marshal(chainCursor{StartedAt: last.StartedAt, WorkflowID: last.Latest.WorkflowID})
+	if err != nil {
+		return execstore.ExecutionChainPage{}, err
+	}
+	return execstore.ExecutionChainPage{Items: items, Next: next}, nil
 }
 
 func groupedExecutionChains(groups map[string][]execstore.Execution, limit int) []execstore.ExecutionChain {

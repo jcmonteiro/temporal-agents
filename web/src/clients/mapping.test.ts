@@ -19,6 +19,7 @@ function aFleet(overrides: Partial<FleetDTO> = {}): FleetDTO {
     startedAt: null,
     endedAt: null,
     dismissible: false,
+    stateRevision: "fleet-revision-1",
     ...overrides,
   };
 }
@@ -34,6 +35,7 @@ function aRun(overrides: Partial<RunDTO> = {}): RunDTO {
     endedAt: null,
     iterations: 3,
     dismissible: false,
+    stateRevision: "run-revision-1",
     ...overrides,
   };
 }
@@ -85,6 +87,7 @@ describe("the projection of a fleet", () => {
     expect(item.label).toBe("Checkout revamp");
     expect(item.status).toBe("in-progress");
     expect(item.progress).toEqual({ done: 1, total: 4, fraction: 0.25 });
+    expect(item.stateRevision).toBe("fleet-revision-1");
   });
 
   it("falls back to the id when the label is empty", () => {
@@ -106,6 +109,7 @@ describe("the projection of a run", () => {
     expect(item.kind).toBe("run");
     expect(item.runType).toBe("coder");
     expect(item.iterations).toBe(3);
+    expect(item.stateRevision).toBe("run-revision-1");
     expect(item.progress).toBeUndefined();
   });
 
