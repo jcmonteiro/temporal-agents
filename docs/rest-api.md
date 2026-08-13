@@ -6,11 +6,12 @@ Postgres records as a public model.
 
 ## Start it
 
-The worker must have started at least once, because the worker owns the execution
-record and plan schema. The API owns and applies the dismissal schema itself.
+Apply every bounded context's schema before starting the worker or API. `serve`
+verifies the Agent Hub schema and does not apply migrations itself.
 
 ```sh
 export DATABASE_URL=postgres://postgres:postgres@localhost:15432/temporal_agents?sslmode=disable
+temporal-agents migrate
 temporal-agents serve
 ```
 
@@ -149,8 +150,9 @@ must be built with `VITE_AGENT_HUB_API_URL` set to the API it calls.
 
 A successful model response includes a `Link: <...>; rel="describedby"` header.
 The linked schema is versioned independently, such as `fleet.v1`. The major API
-version is in the URL. A future breaking API does not replace `/api/v1`; consumers
-move to it deliberately.
+version is in the URL. The `/api/v1` baseline contract includes the required state
+revision on dismissal requests and has no predecessor compatibility mode. A future
+breaking API does not replace `/api/v1`; consumers move to it deliberately.
 
 ## Resources
 
@@ -195,7 +197,8 @@ not changed.
 A fleet is identified by the parent workflow ID. Its plan comes from the stored plan
 handle written by that fleet execution. This is authoritative for the current code:
 plans are durable Postgres records, so an ambient plan file or a decoded workflow
-start input is neither needed nor trusted.
+start input is neither needed nor trusted. Every fleet carries `stateRevision`, an
+opaque revision of all published state used as the dismissal precondition.
 
 The detail resource reconciles the plan against child workflow IDs of the form
 `<fleet-id>-<node-id>`. Each node has its plan prompt, predecessor links, derived
@@ -230,7 +233,8 @@ which is stable over continue-as-new. The active-work projection reports current
 liveness in `running`; the existing `run.v1` model is unchanged. The latest iteration
 supplies status, the first known iteration supplies start time, and token usage is
 summed from each iteration's incremental count. A chain is never returned as one
-item per run ID.
+item per run ID. Every run carries `stateRevision`, an opaque revision of all
+published state used as the dismissal precondition.
 
 Schedule-fired runs are represented by their schedule. Child workflows are
 represented by their parent. They are excluded from `/runs` to avoid showing the
@@ -345,7 +349,11 @@ again automatically. Another user always has an independent view.
 POST /api/v1/dismissals
 Content-Type: application/json
 
-{"kind":"run","itemId":"run-..."}
+{
+  "kind": "run",
+  "itemId": "run-...",
+  "stateRevision": "<opaque revision from the run resource>"
+}
 ```
 
 The response is `201 Created`, with a `Location` header such as:

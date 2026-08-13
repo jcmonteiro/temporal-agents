@@ -106,6 +106,12 @@ database before rolling the new build out, or the first `worker` and `serve` of
 the rollout stop with a stale-schema failure. Migrating an already up-to-date
 database applies nothing, so the step is safe to run ahead of time.
 
+**Dismissal upgrade note:** Agent Hub migration
+`0004_personal_state_dismissals.sql` clears existing dismissal rows. Earlier rows
+have no viewer identity or exact state revision, so they cannot be migrated safely.
+Previously hidden fleets and runs reappear after this migration and can be dismissed
+again from their current state.
+
 Workflow submission and `watch` connect to `localhost:17233` by default. Override
 that address with `TEMPORAL_ADDRESS`. The `list` command reads
 `http://127.0.0.1:3000/api/v1` instead. Override its versioned endpoint with

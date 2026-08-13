@@ -19,12 +19,52 @@ func TestOpenRejectsAnEmptyDSN(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestMigrateIsIdempotent pins that a restart is free: the server applies the schema
-// at startup, so re-running it must do nothing.
+// TestMigrateIsIdempotent pins that the explicit migration command can be retried:
+// re-running an already current schema must do nothing.
 func TestMigrateIsIdempotent(t *testing.T) {
 	store := newTestStore(t)
 	require.NoError(t, store.Migrate(context.Background()))
 	require.NoError(t, store.Migrate(context.Background()))
+}
+
+// TestPersonalDismissalMigrationResetsUnscopedRows pins the deliberate upgrade
+// behavior: old rows identify neither a viewer nor an exact state, so migration
+// 0004 clears them and changes identity to viewer plus kind plus item.
+func TestPersonalDismissalMigrationResetsUnscopedRows(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, pgtest.NewDatabase(t))
+	_, err := store.pool.Exec(ctx, `CREATE TABLE schema_migrations (
+		name text PRIMARY KEY,
+		applied_at timestamptz NOT NULL DEFAULT now()
+	)`)
+	require.NoError(t, err)
+	for _, name := range []string{
+		"0001_dismissals.sql", "0002_registered_places.sql", "0003_launches.sql",
+	} {
+		body, err := migrationFS.ReadFile("migrations/" + name)
+		require.NoError(t, err)
+		_, err = store.pool.Exec(ctx, string(body))
+		require.NoError(t, err)
+		_, err = store.pool.Exec(ctx,
+			`INSERT INTO schema_migrations (name) VALUES ($1)`, migrationNamespace+"/"+name)
+		require.NoError(t, err)
+	}
+	_, err = store.pool.Exec(ctx,
+		`INSERT INTO dismissals (kind, item_id) VALUES ('run', 'old-hidden-run')`)
+	require.NoError(t, err)
+
+	require.NoError(t, store.Migrate(ctx))
+
+	var dismissals int
+	require.NoError(t, store.pool.QueryRow(ctx, `SELECT count(*) FROM dismissals`).Scan(&dismissals))
+	require.Zero(t, dismissals)
+	var primaryKey string
+	require.NoError(t, store.pool.QueryRow(ctx, `
+		SELECT pg_get_constraintdef(oid)
+		FROM pg_constraint
+		WHERE conrelid = 'dismissals'::regclass AND contype = 'p'
+	`).Scan(&primaryKey))
+	require.Equal(t, "PRIMARY KEY (viewer, kind, item_id)", primaryKey)
 }
 
 // TestDismissalsRoundTripNewestFirst pins the read the whole overview depends on: a
