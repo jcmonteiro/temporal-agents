@@ -68,6 +68,14 @@ function placeNames(): string[] {
   );
 }
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 function railSection(title: string): HTMLElement {
   const aside = screen.getByRole("complementary");
   const section = within(aside).getByText(title).closest("section");
@@ -208,6 +216,16 @@ describe("the Overview", () => {
     expect(api.dismissedRuns).toEqual(["run-1"]);
   });
 
+  it("dismisses a reviewed fleet directly from its satellite", async () => {
+    api.fleets = [aFleet({ status: "done", dismissible: true })];
+    await showOverview();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss Checkout revamp" }));
+
+    await waitFor(() => expect(satelliteNames()).toEqual([]));
+    expect(api.dismissedFleets).toEqual(["fleet-1"]);
+  });
+
   it("shows a dismissed run again after its state changes", async () => {
     api.runs = [aRun({ dismissible: true })];
     await showOverviewOnAFakeClock();
@@ -219,6 +237,71 @@ describe("the Overview", () => {
     await tick(REFRESH_INTERVAL_MS);
 
     expect(satelliteNames()).toEqual(["Fix the flaky test, Failed"]);
+  });
+
+  it("does not restore a dismissal from a refresh that started before it", async () => {
+    api.runs = [aRun({ dismissible: true })];
+    await showOverviewOnAFakeClock();
+    const underlyingFetch = globalThis.fetch;
+    const refreshStarted = deferred();
+    const releaseRefresh = deferred();
+    let heldReads = 0;
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input), "http://test.local");
+      const isOverviewRead = (init?.method ?? "GET") === "GET" &&
+        ["/api/v1/fleets", "/api/v1/runs", "/api/v1/schedules", "/api/v1/places"].includes(url.pathname);
+      if (!isOverviewRead) return underlyingFetch(input, init);
+      const staleResponse = underlyingFetch(input, init);
+      heldReads += 1;
+      if (heldReads === 4) refreshStarted.resolve();
+      await releaseRefresh.promise;
+      return staleResponse;
+    };
+
+    await tick(REFRESH_INTERVAL_MS);
+    await refreshStarted.promise;
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss Fix the flaky test" }));
+    await tick();
+    expect(satelliteNames()).toEqual([]);
+
+    releaseRefresh.resolve();
+    await tick();
+
+    expect(satelliteNames()).toEqual([]);
+  });
+
+  it("keeps a newer selection when an older dismissal completes", async () => {
+    api.runs = [
+      aRun({ id: "run-1", label: "First run", dismissible: true }),
+      aRun({ id: "run-2", label: "Second run", dismissible: true }),
+    ];
+    await showOverview();
+    const underlyingFetch = globalThis.fetch;
+    const dismissalStarted = deferred();
+    const releaseDismissal = deferred();
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input), "http://test.local");
+      if (url.pathname !== "/api/v1/dismissals" || init?.method !== "POST") {
+        return underlyingFetch(input, init);
+      }
+      const response = underlyingFetch(input, init);
+      dismissalStarted.resolve();
+      await releaseDismissal.promise;
+      return response;
+    };
+
+    fireEvent.click(screen.getByRole("button", { name: "First run, Done" }));
+    await waitFor(() =>
+      expect(within(railSection("Selected")).getByText("First run")).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss First run" }));
+    await dismissalStarted.promise;
+    fireEvent.click(screen.getByRole("button", { name: "Second run, Done" }));
+
+    releaseDismissal.resolve();
+    await waitFor(() =>
+      expect(within(railSection("Selected")).getByText("Second run")).toBeTruthy(),
+    );
   });
 });
 

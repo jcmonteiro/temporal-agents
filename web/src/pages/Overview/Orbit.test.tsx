@@ -45,6 +45,7 @@ function showOrbit(
 ): {
   onSelect: ReturnType<typeof vi.fn>;
   onSelectPlace: ReturnType<typeof vi.fn>;
+  onDismiss: ReturnType<typeof vi.fn>;
   onClear: ReturnType<typeof vi.fn>;
 } {
   const onSelect = vi.fn();
@@ -65,7 +66,7 @@ function showOrbit(
       {...overrides}
     />,
   );
-  return { onSelect, onSelectPlace, onClear };
+  return { onSelect, onSelectPlace, onDismiss, onClear };
 }
 
 /** The satellite of the given work item, as the operator picks it out. */
@@ -220,6 +221,22 @@ describe("picking a satellite", () => {
     );
 
     expect(onSelect).toHaveBeenCalledWith(FLEET);
+  });
+});
+
+describe("dismissing a satellite", () => {
+  it("offers the control for a terminal fleet with an exact state revision", () => {
+    const fleet: WorkItem = {
+      ...FLEET,
+      status: "done",
+      dismissible: true,
+      stateRevision: "fleet-revision-1",
+    };
+    const { onDismiss } = showOrbit({ items: [fleet] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss Checkout revamp" }));
+
+    expect(onDismiss).toHaveBeenCalledWith(fleet);
   });
 });
 
