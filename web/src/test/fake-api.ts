@@ -26,9 +26,11 @@ export class FakeApi {
   fleets: FleetDTO[] = [];
   runs: RunDTO[] = [];
   schedules: ScheduleDTO[] = [];
-  /** Run identities dismissed by the current principal, in action order. */
+  /** Work identities dismissed by the current principal, in action order. */
+  dismissedFleets: string[] = [];
   dismissedRuns: string[] = [];
-  /** The exact opaque state revision reviewed for each dismissed run. */
+  /** The exact opaque state revision reviewed for each dismissed item. */
+  private dismissedFleetStates: Record<string, string> = {};
   private dismissedRunStates: Record<string, string> = {};
   /**
    * The registry every response publishes. The API always carries at least the
@@ -278,26 +280,36 @@ export class FakeApi {
     return this.problem(404, "not-found", "no such steering resource");
   }
 
-  /** Records the exact run state the operator reviewed. */
+  /** Records the exact fleet or run state the operator reviewed. */
   private dismiss(body: BodyInit | null | undefined): Response {
     const asked = JSON.parse(String(body ?? "{}")) as {
       kind?: string;
       itemId?: string;
       stateRevision?: string;
     };
-    const run = this.runs.find((candidate) => candidate.id === asked.itemId);
-    if (asked.kind !== "run" || !run?.dismissible) {
+    const item = asked.kind === "fleet"
+      ? this.fleets.find((candidate) => candidate.id === asked.itemId)
+      : asked.kind === "run"
+        ? this.runs.find((candidate) => candidate.id === asked.itemId)
+        : undefined;
+    if (!item?.dismissible) {
       return this.problem(409, "not-dismissible", "only a finished item can be dismissed");
     }
-    if (asked.stateRevision !== run.stateRevision) {
+    if (asked.stateRevision !== item.stateRevision) {
       return this.problem(409, "state-changed", "the item changed before dismissal");
     }
-    if (!this.dismissedRuns.includes(run.id)) this.dismissedRuns.push(run.id);
-    this.dismissedRunStates[run.id] = run.stateRevision;
+    if (asked.kind === "fleet") {
+      if (!this.dismissedFleets.includes(item.id)) this.dismissedFleets.push(item.id);
+      this.dismissedFleetStates[item.id] = item.stateRevision;
+    } else {
+      if (!this.dismissedRuns.includes(item.id)) this.dismissedRuns.push(item.id);
+      this.dismissedRunStates[item.id] = item.stateRevision;
+    }
     return this.json({
-      id: `run:${run.id}`,
-      kind: "run",
-      itemId: run.id,
+      id: `${asked.kind}:${item.id}`,
+      kind: asked.kind,
+      itemId: item.id,
+      stateRevision: item.stateRevision,
       dismissedAt: "2026-08-06T12:00:00Z",
     }, 201);
   }
@@ -492,7 +504,9 @@ export class FakeApi {
   private bodyFor(path: string): unknown {
     switch (path) {
       case "/api/v1/fleets":
-        return this.collection(this.fleets);
+        return this.collection(this.fleets.filter((fleet) =>
+          this.dismissedFleetStates[fleet.id] !== fleet.stateRevision
+        ));
       case "/api/v1/runs":
         return this.collection(this.runs.filter((run) =>
           this.dismissedRunStates[run.id] !== run.stateRevision

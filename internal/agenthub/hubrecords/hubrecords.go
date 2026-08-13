@@ -73,7 +73,7 @@ func (r *Records) RecordedExecutions(ctx context.Context, q agenthub.RecordQuery
 }
 
 // RunChainPage implements agenthub.CollectionSource.
-func (r *Records) RunChainPage(ctx context.Context, query agenthub.ChainQuery) (agenthub.Page[agenthub.ExecutionChain], error) {
+func (r *Records) RunChainPage(ctx context.Context, query agenthub.ChainQuery) (agenthub.ChainPage[agenthub.ExecutionChain], error) {
 	page, err := r.overview.ListExecutionChainPage(ctx, execstore.ChainFilter{
 		Kinds: []execstore.Kind{
 			execstore.KindRun, execstore.KindDevelop, execstore.KindReview,
@@ -86,9 +86,10 @@ func (r *Records) RunChainPage(ctx context.Context, query agenthub.ChainQuery) (
 		Cursor:              query.Cursor,
 	})
 	if err != nil {
-		return agenthub.Page[agenthub.ExecutionChain]{}, err
+		return agenthub.ChainPage[agenthub.ExecutionChain]{}, err
 	}
-	return agenthub.Page[agenthub.ExecutionChain]{Items: chainsFrom(page.Items), Next: page.Next}, nil
+	items, required := splitRequired(chainsFrom(page.Items), query.Limit)
+	return agenthub.ChainPage[agenthub.ExecutionChain]{Items: items, Required: required, Next: page.Next}, nil
 }
 
 // RunChains returns the first page for detail-focused compatibility callers.
@@ -98,7 +99,7 @@ func (r *Records) RunChains(ctx context.Context, query agenthub.ChainQuery) ([]a
 }
 
 // FleetTreePage implements agenthub.CollectionSource.
-func (r *Records) FleetTreePage(ctx context.Context, query agenthub.ChainQuery) (agenthub.Page[agenthub.FleetTree], error) {
+func (r *Records) FleetTreePage(ctx context.Context, query agenthub.ChainQuery) (agenthub.ChainPage[agenthub.FleetTree], error) {
 	page, err := r.overview.ListExecutionTreePage(ctx, execstore.ChainFilter{
 		Kinds:               []execstore.Kind{execstore.KindFleet},
 		WorkflowID:          query.WorkflowID,
@@ -108,7 +109,7 @@ func (r *Records) FleetTreePage(ctx context.Context, query agenthub.ChainQuery) 
 		Cursor:              query.Cursor,
 	})
 	if err != nil {
-		return agenthub.Page[agenthub.FleetTree]{}, err
+		return agenthub.ChainPage[agenthub.FleetTree]{}, err
 	}
 	out := make([]agenthub.FleetTree, 0, len(page.Items))
 	for _, tree := range page.Items {
@@ -118,7 +119,18 @@ func (r *Records) FleetTreePage(ctx context.Context, query agenthub.ChainQuery) 
 		}
 		out = append(out, converted)
 	}
-	return agenthub.Page[agenthub.FleetTree]{Items: out, Next: page.Next}, nil
+	items, required := splitRequired(out, query.Limit)
+	return agenthub.ChainPage[agenthub.FleetTree]{Items: items, Required: required, Next: page.Next}, nil
+}
+
+func splitRequired[T any](selected []T, limit int) ([]T, []T) {
+	if limit <= 0 {
+		limit = agenthub.DefaultLimit
+	}
+	if len(selected) <= limit {
+		return selected, nil
+	}
+	return selected[:limit], selected[limit:]
 }
 
 // FleetTrees returns the first page for detail-focused compatibility callers.

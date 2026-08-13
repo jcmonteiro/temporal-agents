@@ -321,11 +321,11 @@ func (s *Source) RunChains(_ context.Context, query agenthub.ChainQuery) ([]agen
 }
 
 // RunChainPage implements agenthub.CollectionSource.
-func (s *Source) RunChainPage(_ context.Context, query agenthub.ChainQuery) (agenthub.Page[agenthub.ExecutionChain], error) {
+func (s *Source) RunChainPage(_ context.Context, query agenthub.ChainQuery) (agenthub.ChainPage[agenthub.ExecutionChain], error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
-		return agenthub.Page[agenthub.ExecutionChain]{}, s.err
+		return agenthub.ChainPage[agenthub.ExecutionChain]{}, s.err
 	}
 	excluded := stringSet(query.ExcludedWorkflowIDs)
 	groups := map[string][]agenthub.Execution{}
@@ -371,11 +371,11 @@ func (s *Source) FleetTrees(_ context.Context, query agenthub.ChainQuery) ([]age
 }
 
 // FleetTreePage implements agenthub.CollectionSource.
-func (s *Source) FleetTreePage(_ context.Context, query agenthub.ChainQuery) (agenthub.Page[agenthub.FleetTree], error) {
+func (s *Source) FleetTreePage(_ context.Context, query agenthub.ChainQuery) (agenthub.ChainPage[agenthub.FleetTree], error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
-		return agenthub.Page[agenthub.FleetTree]{}, s.err
+		return agenthub.ChainPage[agenthub.FleetTree]{}, s.err
 	}
 	excluded := stringSet(query.ExcludedWorkflowIDs)
 	groups := map[string][]agenthub.Execution{}
@@ -387,19 +387,24 @@ func (s *Source) FleetTreePage(_ context.Context, query agenthub.ChainQuery) (ag
 	}
 	chains, err := chainPage(limitedChains(groups, 0), query)
 	if err != nil {
-		return agenthub.Page[agenthub.FleetTree]{}, err
+		return agenthub.ChainPage[agenthub.FleetTree]{}, err
 	}
-	trees := make([]agenthub.FleetTree, 0, len(chains.Items))
-	for _, chain := range chains.Items {
-		tree := agenthub.FleetTree{Chain: chain}
-		for _, e := range s.recorded {
-			if e.WorkflowID == chain.Latest.WorkflowID || e.ParentWorkflowID == chain.Latest.WorkflowID {
-				tree.Executions = append(tree.Executions, e)
+	toTrees := func(selected []agenthub.ExecutionChain) []agenthub.FleetTree {
+		trees := make([]agenthub.FleetTree, 0, len(selected))
+		for _, chain := range selected {
+			tree := agenthub.FleetTree{Chain: chain}
+			for _, e := range s.recorded {
+				if e.WorkflowID == chain.Latest.WorkflowID || e.ParentWorkflowID == chain.Latest.WorkflowID {
+					tree.Executions = append(tree.Executions, e)
+				}
 			}
+			trees = append(trees, tree)
 		}
-		trees = append(trees, tree)
+		return trees
 	}
-	return agenthub.Page[agenthub.FleetTree]{Items: trees, Next: chains.Next}, nil
+	return agenthub.ChainPage[agenthub.FleetTree]{
+		Items: toTrees(chains.Items), Required: toTrees(chains.Required), Next: chains.Next,
+	}, nil
 }
 
 // SchedulePage implements source-native schedule paging.
@@ -572,24 +577,32 @@ func runClass(class wfid.Class) bool {
 	}
 }
 
-func chainPage(chains []agenthub.ExecutionChain, query agenthub.ChainQuery) (agenthub.Page[agenthub.ExecutionChain], error) {
+func chainPage(chains []agenthub.ExecutionChain, query agenthub.ChainQuery) (agenthub.ChainPage[agenthub.ExecutionChain], error) {
 	offset, err := pageOffset(query.Cursor, len(chains))
 	if err != nil {
-		return agenthub.Page[agenthub.ExecutionChain]{}, err
+		return agenthub.ChainPage[agenthub.ExecutionChain]{}, err
 	}
 	limit := query.Limit
 	if limit <= 0 {
 		limit = agenthub.DefaultLimit
 	}
 	end := min(offset+limit, len(chains))
-	items := append([]agenthub.ExecutionChain(nil), chains[offset:end]...)
-	known := stringSet(query.RequiredWorkflowIDs)
-	for _, chain := range chains[end:] {
-		if known[chain.Latest.WorkflowID] {
-			items = append(items, chain)
+	page := agenthub.ChainPage[agenthub.ExecutionChain]{
+		Items: append([]agenthub.ExecutionChain(nil), chains[offset:end]...),
+	}
+	itemIDs := make(map[string]bool, len(page.Items))
+	for _, chain := range page.Items {
+		itemIDs[chain.Latest.WorkflowID] = true
+	}
+	required := stringSet(query.RequiredWorkflowIDs)
+	for _, chain := range chains {
+		if len(page.Required) == limit {
+			break
+		}
+		if required[chain.Latest.WorkflowID] && !itemIDs[chain.Latest.WorkflowID] {
+			page.Required = append(page.Required, chain)
 		}
 	}
-	page := agenthub.Page[agenthub.ExecutionChain]{Items: items}
 	if end < len(chains) {
 		page.Next = pageToken(end)
 	}

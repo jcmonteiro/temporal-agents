@@ -201,12 +201,19 @@ func selectedExecutionsSQL(tree bool) string {
 		OR (chain_started = $6 AND workflow_id > $7))
 	ORDER BY chain_started DESC, workflow_id ASC
 	LIMIT ($4 + 1)
-), selected AS (
-	SELECT workflow_id, chain_started FROM page
-	UNION
+), required AS (
 	SELECT workflow_id, chain_started
 	FROM eligible
 	WHERE workflow_id = ANY($5::text[])
+		AND NOT EXISTS (
+			SELECT 1 FROM page WHERE page.workflow_id = eligible.workflow_id
+		)
+	ORDER BY chain_started DESC, workflow_id ASC
+	LIMIT $4
+), selected AS (
+	SELECT workflow_id, chain_started FROM page
+	UNION
+	SELECT workflow_id, chain_started FROM required
 )
 SELECT %s
 FROM executions AS e
@@ -257,6 +264,9 @@ func chainPage[T any](all []T, filter execstore.ChainFilter, chainOf func(T) exe
 		required[workflowID] = true
 	}
 	for _, item := range all[limit:] {
+		if len(items) == 2*limit {
+			break
+		}
 		if required[chainOf(item).Latest.WorkflowID] {
 			items = append(items, item)
 		}

@@ -11,9 +11,11 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 import {
+  isDismissibleWorkItem,
   itemKey,
   sameItem,
   STATUS_LABEL,
+  type DismissibleWorkItem,
   type WorkItem,
   type WorkItemId,
   type WorkItemStatus,
@@ -65,7 +67,7 @@ interface Props {
   selectedPlaceId: string | null;
   onSelect: (item: WorkItem) => void;
   onSelectPlace: (place: Place) => void;
-  onDismiss: (item: WorkItem) => void;
+  onDismiss: (item: DismissibleWorkItem) => void;
   dismissing: Set<string>;
   onClear: () => void;
 }
@@ -541,7 +543,7 @@ export function Orbit({
                           </text>
                         </g>
                       </g>
-                      {item.kind === "run" && item.dismissible && (
+                      {isDismissibleWorkItem(item) && (
                         <g
                           className="satellite-dismiss"
                           transform="translate(24, -24)"

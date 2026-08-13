@@ -53,6 +53,24 @@ export interface WorkItemId {
   id: string;
 }
 
+// The only work item shape accepted by the dismissal mutation. The intersection
+// keeps all display fields while making eligibility and the optimistic
+// precondition compile-time requirements.
+export type DismissibleWorkItem = WorkItem & {
+  kind: "fleet" | "run";
+  dismissible: true;
+  stateRevision: string;
+};
+
+export function isDismissibleWorkItem(
+  item: WorkItem,
+): item is DismissibleWorkItem {
+  return (item.kind === "fleet" || item.kind === "run") &&
+    item.dismissible === true &&
+    typeof item.stateRevision === "string" &&
+    item.stateRevision.length > 0;
+}
+
 /** Stable, collision-free string form of an identity, for use as a React key. */
 export function itemKey(item: WorkItemId): string {
   return `${item.kind}:${item.id}`;

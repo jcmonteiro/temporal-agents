@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { dismissWorkItem } from "../../clients/dismissals";
 import { loadOverview, type OverviewData } from "../../clients/work-items";
 import {
   itemKey,
   sameItem,
   STATUS_ORDER,
+  type DismissibleWorkItem,
   type WorkItem,
   type WorkItemId,
   type WorkItemStatus,
@@ -49,6 +50,9 @@ export function OverviewPage(): ReactNode {
     dismissalError: null,
   });
   const [dismissing, setDismissing] = useState<Set<string>>(new Set());
+  // A successful mutation invalidates every refresh that began before it. This
+  // prevents an older GET snapshot from restoring an item just dismissed.
+  const mutationGeneration = useRef(0);
   // Identity, not a bare id: a fleet and a run may share an id.
   const [selectedId, setSelectedId] = useState<WorkItemId | null>(null);
   // The place the operator picked, by its server-issued id. An item and a place
@@ -63,8 +67,9 @@ export function OverviewPage(): ReactNode {
   useEffect(() => {
     let cancelled = false;
     const refresh = async (): Promise<void> => {
+      const startedAtGeneration = mutationGeneration.current;
       const result = await loadOverview();
-      if (cancelled) return;
+      if (cancelled || startedAtGeneration !== mutationGeneration.current) return;
       setState((prev) =>
         result.ok
           ? { ...prev, data: result.value, error: null }
@@ -136,7 +141,7 @@ export function OverviewPage(): ReactNode {
   };
   const clearFilter = (): void => setVisibleStatuses(new Set());
 
-  const dismissItem = async (item: WorkItem): Promise<void> => {
+  const dismissItem = async (item: DismissibleWorkItem): Promise<void> => {
     const key = itemKey(item);
     setDismissing((current) => new Set(current).add(key));
     setState((current) => ({ ...current, dismissalError: null }));
@@ -153,6 +158,7 @@ export function OverviewPage(): ReactNode {
       }));
       return;
     }
+    mutationGeneration.current += 1;
     setState((current) => ({
       ...current,
       data: current.data === null
@@ -162,7 +168,7 @@ export function OverviewPage(): ReactNode {
             items: current.data.items.filter((candidate) => !sameItem(candidate, item)),
           },
     }));
-    if (sameItem(selectedId, item)) setSelectedId(null);
+    setSelectedId((current) => sameItem(current, item) ? null : current);
   };
 
   return (

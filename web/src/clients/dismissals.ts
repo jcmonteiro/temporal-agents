@@ -1,4 +1,4 @@
-import type { WorkItem } from "../domain/work-item";
+import type { DismissibleWorkItem } from "../domain/work-item";
 import { err, ok, type Result } from "../utils/result";
 import type { DismissalDTO } from "./api";
 import { postJSON } from "./http";
@@ -9,7 +9,7 @@ import { postJSON } from "./http";
  * echoes the opaque revision that was published with the item.
  */
 export async function dismissWorkItem(
-  item: WorkItem,
+  item: DismissibleWorkItem,
 ): Promise<Result<void, Error>> {
   const result = await postJSON<DismissalDTO>("/dismissals", {
     kind: item.kind,

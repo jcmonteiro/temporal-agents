@@ -962,11 +962,75 @@ func TestDismissedFleetsAreExcludedBeforeTheLimit(t *testing.T) {
 type observedCollection struct {
 	agenthub.CollectionSource
 	fleetLimits []int
+	fleetSizes  []int
 }
 
-func (c *observedCollection) FleetTreePage(ctx context.Context, query agenthub.ChainQuery) (agenthub.Page[agenthub.FleetTree], error) {
+func (c *observedCollection) FleetTreePage(ctx context.Context, query agenthub.ChainQuery) (agenthub.ChainPage[agenthub.FleetTree], error) {
 	c.fleetLimits = append(c.fleetLimits, query.Limit)
-	return c.CollectionSource.FleetTreePage(ctx, query)
+	page, err := c.CollectionSource.FleetTreePage(ctx, query)
+	c.fleetSizes = append(c.fleetSizes, len(page.Items)+len(page.Required))
+	return page, err
+}
+
+type observedPlans struct {
+	agenthub.PlanSource
+	calls    int
+	resolved map[string]int
+}
+
+func (p *observedPlans) Plans(ctx context.Context, refs []agenthub.PlanReference) (map[string]agenthub.Plan, error) {
+	p.calls++
+	for _, ref := range refs {
+		p.resolved[ref.FleetID]++
+	}
+	return p.PlanSource.Plans(ctx, refs)
+}
+
+// TestAThousandLiveFleetsKeepOneOverviewReadBounded pins that required live
+// identities augment a stable source page instead of turning the public limit into
+// a thousand-tree read. A fleet that naturally belongs to the source page counts
+// toward the requested result, and no plan is resolved twice.
+func TestAThousandLiveFleetsKeepOneOverviewReadBounded(t *testing.T) {
+	source := agenthubtest.New()
+	for i := 0; i < 1000; i++ {
+		id := "fleet-" + uuidLike(fmt.Sprintf("%x", 0x1000+i))
+		fleet := agenthubtest.Fleet(id, agenthub.OutcomeRunning, now.Add(-time.Duration(i)*time.Second))
+		source.WithRecorded(fleet).WithRunning(fleet).WithPlan(id, agenthub.Plan{})
+	}
+	collections := &observedCollection{CollectionSource: source}
+	plans := &observedPlans{PlanSource: source, resolved: map[string]int{}}
+	deps := source.Dependencies(now)
+	deps.Collections = collections
+	deps.Plans = plans
+	service, err := agenthub.NewService(deps)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	fleets, err := service.Fleets(context.Background(), 25)
+	if err != nil {
+		t.Fatalf("Fleets: %v", err)
+	}
+	if len(fleets) != 25 {
+		t.Fatalf("got %d fleets, want 25", len(fleets))
+	}
+	if len(collections.fleetLimits) != 1 {
+		t.Fatalf("collection pages = %d, want 1", len(collections.fleetLimits))
+	}
+	if collections.fleetSizes[0] > 50 {
+		t.Fatalf("loaded %d fleet trees for a 25-item read, want at most 50", collections.fleetSizes[0])
+	}
+	if plans.calls != 1 {
+		t.Fatalf("plan batches = %d, want 1", plans.calls)
+	}
+	for id, count := range plans.resolved {
+		if count != 1 {
+			t.Fatalf("plan %s resolved %d times, want once", id, count)
+		}
+	}
+	if len(plans.resolved) > 50 {
+		t.Fatalf("resolved %d plans for a 25-item read, want at most 50", len(plans.resolved))
+	}
 }
 
 func TestRunDismissalsDoNotIncreaseFleetReads(t *testing.T) {
