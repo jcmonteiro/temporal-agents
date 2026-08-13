@@ -50,6 +50,8 @@ function AgentResponse({ text }: { text: string }): ReactNode {
         "a",
       ],
       ALLOWED_ATTR: ["href", "title"],
+      ALLOW_ARIA_ATTR: false,
+      ALLOW_DATA_ATTR: false,
     }),
     [text],
   );

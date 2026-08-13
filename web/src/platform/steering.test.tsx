@@ -284,6 +284,8 @@ it("renders agent clarification responses with only safe Markdown HTML", async (
         "- Audit log",
         "",
         "<a href=\"javascript:alert('unsafe')\">Unsafe link</a>",
+        "<a href=\"https://attacker.example\" aria-label=\"Trusted internal documentation\">Sign in</a>",
+        "<p aria-hidden=\"true\" data-state=\"spoofed\">Important warning</p>",
         "![tracking pixel](https://attacker.example/pixel)",
         "<form action=\"https://attacker.example\"><input name=\"secret\"><button>Send</button></form>",
         "<p style=\"position:fixed;inset:0;z-index:999\">Sign in again</p>",
@@ -300,6 +302,10 @@ it("renders agent clarification responses with only safe Markdown HTML", async (
   expect(within(conversation).getByText("Affected callers:").tagName).toBe("STRONG");
   expect(within(conversation).getByText("Checkout API").closest("ul")?.children).toHaveLength(2);
   expect(within(conversation).getByText("Unsafe link").getAttribute("href")).toBeNull();
+  expect(within(conversation).getByText("Sign in").getAttribute("aria-label")).toBeNull();
+  const warning = within(conversation).getByText("Important warning");
+  expect(warning.getAttribute("aria-hidden")).toBeNull();
+  expect(warning.getAttribute("data-state")).toBeNull();
   const markdown = conversation.querySelector(".steering-message__markdown");
   expect(markdown?.querySelector("img, form, input, button, svg")).toBeNull();
   expect(within(conversation).getByText("Sign in again").getAttribute("style")).toBeNull();

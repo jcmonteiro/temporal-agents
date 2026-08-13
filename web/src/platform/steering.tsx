@@ -11,6 +11,10 @@ import {
 import type { SteeringSessionDTO } from "../clients/api";
 import { loadWaitingSessions } from "../clients/steering";
 import { connectHubEvents } from "../clients/streams";
+import {
+  SteeringModalErrorBoundary,
+  SteeringModalLoading,
+} from "./steering-modal-boundary";
 import { waitingFor } from "./waiting-time";
 
 const SteeringModal = lazy(() => import("./steering-modal"));
@@ -76,16 +80,22 @@ export function SteeringProvider({ children }: { children: ReactNode }): ReactNo
         </div>
       )}
       {activeId !== null && (
-        <Suspense fallback={null}>
-          <SteeringModal
-            sessionId={activeId}
-            onClose={() => setActiveId(null)}
-            onDecided={() => {
-              setSessions((current) => current.filter((session) => session.id !== activeId));
-              setActiveId(null);
-            }}
-          />
-        </Suspense>
+        <SteeringModalErrorBoundary
+          resetKey={activeId}
+          onClose={() => setActiveId(null)}
+          onReload={() => window.location.reload()}
+        >
+          <Suspense fallback={<SteeringModalLoading onClose={() => setActiveId(null)} />}>
+            <SteeringModal
+              sessionId={activeId}
+              onClose={() => setActiveId(null)}
+              onDecided={() => {
+                setSessions((current) => current.filter((session) => session.id !== activeId));
+                setActiveId(null);
+              }}
+            />
+          </Suspense>
+        </SteeringModalErrorBoundary>
       )}
     </SteeringContext.Provider>
   );
