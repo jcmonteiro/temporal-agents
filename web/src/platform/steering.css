@@ -6,7 +6,7 @@
   padding: var(--space-5);
   overflow: hidden;
   place-items: center;
-  background: color-mix(in srgb, #06080d 72%, transparent);
+  background: color-mix(in srgb, var(--color-bg) 72%, transparent);
   backdrop-filter: blur(8px);
 }
 

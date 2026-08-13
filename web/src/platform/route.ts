@@ -10,7 +10,7 @@
 import { useEffect, useState } from "react";
 
 export type PlaceCategory = "overview" | "start" | "instructions";
-export type SettingsCategory = "instructions" | "places";
+export type SettingsCategory = "appearance" | "instructions" | "places";
 
 export type Route =
   | { name: "overview" }
@@ -21,6 +21,7 @@ export type Route =
 
 export const OVERVIEW: Route = { name: "overview" };
 export const SETTINGS: Route = { name: "settings", category: "instructions" };
+export const SETTINGS_APPEARANCE: Route = { name: "settings", category: "appearance" };
 export const SETTINGS_PLACES: Route = { name: "settings", category: "places" };
 
 /** The address of a route, fragment included. */
@@ -35,6 +36,7 @@ export function addressOf(route: Route): string {
     case "fleet":
       return `#/fleets/${encodeURIComponent(route.fleetId)}`;
     case "settings":
+      if (route.category === "appearance") return "#/settings/appearance";
       return route.category === "places" ? "#/settings/places" : "#/settings";
     default:
       return "#/";
@@ -66,6 +68,9 @@ export function routeOf(address: string): Route {
   if (section === "runs" && id !== null) return { name: "run", runId: id };
   if (section === "fleets" && id !== null) return { name: "fleet", fleetId: id };
   if (section === "settings" && rest.length === 0) return SETTINGS;
+  if (section === "settings" && rest.length === 1 && rest[0] === "appearance") {
+    return SETTINGS_APPEARANCE;
+  }
   if (section === "settings" && rest.length === 1 && rest[0] === "places") {
     return SETTINGS_PLACES;
   }

@@ -5,6 +5,7 @@ import {
   OVERVIEW,
   routeOf,
   SETTINGS,
+  SETTINGS_APPEARANCE,
   SETTINGS_PLACES,
 } from "./route";
 
@@ -35,6 +36,7 @@ describe("the address of a route", () => {
     expect(addressOf({ name: "run", runId: "run-1" })).toBe("#/runs/run-1");
     expect(addressOf({ name: "fleet", fleetId: "fleet-1" })).toBe("#/fleets/fleet-1");
     expect(addressOf(SETTINGS)).toBe("#/settings");
+    expect(addressOf(SETTINGS_APPEARANCE)).toBe("#/settings/appearance");
     expect(addressOf(SETTINGS_PLACES)).toBe("#/settings/places");
   });
 });
@@ -91,6 +93,7 @@ describe("the route an address names", () => {
     expect(routeOf("#/runs/run-1")).toEqual({ name: "run", runId: "run-1" });
     expect(routeOf("#/fleets/fleet-1")).toEqual({ name: "fleet", fleetId: "fleet-1" });
     expect(routeOf("#/settings")).toEqual(SETTINGS);
+    expect(routeOf("#/settings/appearance")).toEqual(SETTINGS_APPEARANCE);
     expect(routeOf("#/settings/places")).toEqual(SETTINGS_PLACES);
   });
 
@@ -112,6 +115,7 @@ describe("the navigation entry a route belongs under", () => {
   it("puts a fleet under the fleets, and every settings category under settings", () => {
     expect(navigationKeyOf({ name: "fleet", fleetId: "fleet-1" })).toBe("fleets");
     expect(navigationKeyOf(SETTINGS)).toBe("settings");
+    expect(navigationKeyOf(SETTINGS_APPEARANCE)).toBe("settings");
     expect(navigationKeyOf(SETTINGS_PLACES)).toBe("settings");
   });
 

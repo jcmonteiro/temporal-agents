@@ -3,6 +3,7 @@ import { expect, userEvent, within } from "storybook/test";
 import { aDirectoryPlace, aPrompt, type FakeApi, theUnknownPlace } from "../../test/fake-api";
 import { installStoryApi } from "../../stories/story-api";
 import { SettingsPage } from "./SettingsPage";
+import { ThemeProvider } from "../../platform/theme";
 
 type Scenario = "configured" | "empty" | "loading" | "read-error" | "validation-error";
 
@@ -150,6 +151,23 @@ export const WideLight: Story = {
 export const WideDark: Story = {
   ...configuredStory,
   globals: { theme: "dark" },
+};
+
+export const Appearance: Story = {
+  args: { category: "appearance" },
+  decorators: [
+    (Story) => (
+      <ThemeProvider>
+        <Story />
+      </ThemeProvider>
+    ),
+  ],
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.findByRole("heading", { name: "Appearance" })).resolves.toBeTruthy();
+    await userEvent.click(canvas.getByRole("radio", { name: "Dark" }));
+    await expect(canvas.getByRole("radio", { name: "Dark" })).toBeChecked();
+  },
 };
 
 export const PlacesWide: Story = {
