@@ -13,8 +13,8 @@
 .steering-modal {
   --steering-font-size-xs: 12px;
   display: flex;
-  width: min(900px, 100%);
-  max-height: min(920px, calc(100dvh - 2 * var(--space-5)));
+  width: min(var(--content-width-wide), 100%);
+  max-height: min(1040px, calc(100dvh - 2 * var(--space-5)));
   flex-direction: column;
   overflow: hidden;
   color: var(--color-text);
@@ -25,7 +25,7 @@
 
 .steering-modal--material-expanded {
   width: min(var(--content-width-wide), 100%);
-  height: min(920px, calc(100dvh - 2 * var(--space-5)));
+  height: min(1040px, calc(100dvh - 2 * var(--space-5)));
 }
 
 .steering-modal__header {
@@ -528,6 +528,68 @@
   color: var(--color-text);
   font-size: var(--font-size-sm);
   line-height: var(--line-height-body);
+}
+
+.steering-message__markdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-body);
+}
+
+.steering-message__markdown > :first-child {
+  margin-top: 0;
+}
+
+.steering-message__markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.steering-message__markdown > p,
+.steering-message__markdown > ul,
+.steering-message__markdown > ol,
+.steering-message__markdown > pre,
+.steering-message__markdown > blockquote {
+  margin-block: 0 var(--space-2);
+}
+
+.steering-message__markdown ul,
+.steering-message__markdown ol {
+  padding-left: var(--space-5);
+}
+
+.steering-message__markdown pre {
+  max-width: 100%;
+  padding: var(--space-3);
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  white-space: pre-wrap;
+}
+
+.steering-message__markdown code {
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 0.92em;
+}
+
+.steering-message__markdown :not(pre) > code {
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  background: var(--color-surface);
+}
+
+.steering-message__markdown blockquote {
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--color-accent);
+  color: var(--color-text-muted);
+}
+
+.steering-message__markdown a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .steering-message__use {

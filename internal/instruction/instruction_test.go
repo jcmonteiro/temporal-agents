@@ -51,18 +51,24 @@ func TestAnOverrideThatMovesTheRequiredMaterialIsAccepted(t *testing.T) {
 // The other half of the safety story: text a parser depends on is the system's own,
 // so an override cannot decide whether the agent sees the comments at all. The
 // system's block renders even for an override that never mentions it.
-func TestTheQuestioningInstructionAlwaysReceivesTheReviewMaterial(t *testing.T) {
+func TestTheClarificationInstructionAnswersOnlyTheOperatorsQuestionAboutTheReviewMaterial(t *testing.T) {
 	spec, ok := SpecFor(KeySteeringQuestion)
 	if !ok {
-		t.Fatal("the questioning instruction is not governed")
+		t.Fatal("the clarification instruction is not governed")
 	}
 
 	rendered, err := spec.Render(spec.Factory, Data{"Material": "the retry hides the error"})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	if !strings.Contains(rendered, "the retry hides the error") {
-		t.Fatalf("questioning prompt does not contain its review material: %q", rendered)
+	for _, required := range []string{
+		"Answer only the question the operator asked",
+		"Do not ask the operator questions",
+		"the retry hides the error",
+	} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("clarification prompt does not contain %q: %q", required, rendered)
+		}
 	}
 }
 

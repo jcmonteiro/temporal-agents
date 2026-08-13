@@ -253,7 +253,9 @@ export class FakeApi {
     if (method === "POST" && action === "question") {
       const messages = [...(session.messages ?? [])];
       messages.push({ sequence: messages.length + 1, role: "operator", author: this.principal?.id, text: request.text ?? "", at: "2026-08-06T12:00:00Z" });
-      const agentText = request.finish ? "Keep the retry and preserve the cause." : "Which callers need the cause?";
+      const agentText = request.finish
+        ? "Keep the retry and preserve the cause."
+        : "The Checkout API and audit log need the cause.";
       messages.push({ sequence: messages.length + 1, role: "agent", text: agentText, tokens: 40, at: "2026-08-06T12:00:01Z" });
       const updated = { ...session, messages, tokens: (session.tokens ?? 0) + 40, guidance: request.finish ? agentText : session.guidance };
       this.steeringSessions[id] = updated;
