@@ -2,22 +2,6 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <script>
-      (() => {
-        try {
-          const preference = localStorage.getItem("agent-hub.theme-preference");
-          const theme =
-            preference === "light" || preference === "dark"
-              ? preference
-              : matchMedia("(prefers-color-scheme: dark)").matches
-                ? "dark"
-                : "light";
-          document.documentElement.dataset.theme = theme;
-        } catch {
-          document.documentElement.dataset.theme = "light";
-        }
-      })();
-    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Hub</title>
   </head>
