@@ -308,11 +308,10 @@ func TestFleetsUsesTheRecordedBreakdownForSkippedAndBlockedNodes(t *testing.T) {
 		t.Errorf("fleet status = %q, want waiting-input", fleet.Status)
 	}
 	if !fleet.Dismissible() {
-		// waiting-input is not terminal: the fleet still needs an operator, so hiding
-		// it would hide work that is not finished.
-		if fleet.Status.Terminal() {
-			t.Error("waiting-input must not be terminal")
-		}
+		t.Error("a fleet waiting for input must be dismissible at its current state")
+	}
+	if fleet.Status.Terminal() {
+		t.Error("waiting-input must not be terminal")
 	}
 	upNext := fleet.UpNext()
 	if len(upNext) != 0 {
@@ -631,10 +630,9 @@ func TestDismissedItemsLeaveTheOverviewButNotTheStore(t *testing.T) {
 // stable workflow ID and must therefore appear again.
 func TestADismissedRunReappearsWhenItsChainChanges(t *testing.T) {
 	id := "run-" + uuidLike("changed")
-	first := agenthubtest.Run(id, "review this", agenthub.OutcomeSucceeded, ago(2*time.Hour))
+	first := agenthubtest.Run(id, "review this", agenthub.OutcomeRunning, ago(2*time.Minute))
 	first.RunID = "iteration-1"
-	first.EndedAt = ago(time.Hour)
-	source := agenthubtest.New().WithRecorded(first)
+	source := agenthubtest.New().WithRecorded(first).WithRunning(first)
 	service := newService(t, source)
 
 	if _, err := service.Dismiss(context.Background(), agenthub.KindRun, id, runRevision(t, service, id)); err != nil {
@@ -680,19 +678,28 @@ func TestDismissRefusesARevisionTheOperatorDidNotReview(t *testing.T) {
 	}
 }
 
-// TestDismissRefusesWorkThatIsStillActive pins that the "only finished work can be
-// hidden" rule is the server's: a client that offers the affordance anyway cannot
-// hide a running run.
-func TestDismissRefusesWorkThatIsStillActive(t *testing.T) {
+// TestDismissHidesActiveWorkAtItsCurrentState pins that dismissal is view state
+// over any observed workflow state, not only a terminal outcome.
+func TestDismissHidesActiveWorkAtItsCurrentState(t *testing.T) {
 	id := "run-" + uuidLike("11")
-	source := agenthubtest.New().
-		WithRecorded(agenthubtest.Run(id, "still going", agenthub.OutcomeRunning, ago(time.Minute))).
-		WithRunning(agenthubtest.Run(id, "still going", agenthub.OutcomeRunning, ago(time.Minute)))
+	running := agenthubtest.Run(id, "still going", agenthub.OutcomeRunning, ago(time.Minute))
+	source := agenthubtest.New().WithRecorded(running).WithRunning(running)
 	service := newService(t, source)
 
-	if _, err := service.Dismiss(context.Background(), agenthub.KindRun, id, runRevision(t, service, id)); !errors.Is(err, agenthub.ErrNotDismissible) {
-		t.Fatalf("Dismiss(running) = %v, want ErrNotDismissible", err)
+	if _, err := service.Dismiss(context.Background(), agenthub.KindRun, id, runRevision(t, service, id)); err != nil {
+		t.Fatalf("Dismiss(running) = %v", err)
 	}
+	runs, err := service.Runs(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("Runs: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("runs = %+v, want the reviewed active state hidden", runs)
+	}
+}
+
+func TestDismissRefusesUnknownWorkAndSchedules(t *testing.T) {
+	service := newService(t, agenthubtest.New())
 	if _, err := service.Dismiss(context.Background(), agenthub.KindRun, "run-nope", "reviewed"); !errors.Is(err, agenthub.ErrNotFound) {
 		t.Fatalf("Dismiss(unknown) = %v, want ErrNotFound", err)
 	}

@@ -76,7 +76,7 @@ func WorkStatuses() []WorkStatus {
 }
 
 // Terminal reports whether the status is an end state, i.e. nothing further will
-// happen without an operator. Only terminal items can be dismissed.
+// happen without an operator.
 func (s WorkStatus) Terminal() bool {
 	return s == StatusDone || s == StatusFailed
 }
@@ -230,9 +230,9 @@ type Fleet struct {
 	Location Location
 }
 
-// Dismissible reports whether the fleet may be dismissed from the overview: only
-// a settled parent with a terminal aggregate status can be.
-func (f Fleet) Dismissible() bool { return !f.Running && f.Status.Terminal() }
+// Dismissible reports whether the fleet may be dismissed from the overview.
+// Every observed fleet state may be hidden until that state changes.
+func (f Fleet) Dismissible() bool { return true }
 
 // StateRevision identifies the fleet state an operator reviewed. Any observable
 // change produces a different revision, so an old dismissal cannot hide new work.
@@ -367,7 +367,8 @@ type Run struct {
 }
 
 // Dismissible reports whether the run may be dismissed from the overview.
-func (r Run) Dismissible() bool { return !r.Running && r.Status.Terminal() }
+// Every observed run state may be hidden until that state changes.
+func (r Run) Dismissible() bool { return true }
 
 // StateRevision identifies the run state an operator reviewed. It covers every
 // fact published in the collection, plus liveness, so a changed iteration, outcome,
@@ -482,8 +483,8 @@ type ViewerID string
 
 const LocalViewerID ViewerID = "local-operator"
 
-// Dismissal records that one viewer dismissed one observed state of a finished
-// item. It is view state: it hides an item, and never touches the work.
+// Dismissal records that one viewer dismissed one observed state of an item. It
+// is view state: it hides an item, and never touches the work.
 type Dismissal struct {
 	// Viewer is the only principal this dismissal applies to.
 	Viewer ViewerID
@@ -554,7 +555,7 @@ func ValidateDismissalTarget(kind ItemKind, itemID string) error {
 		return fmt.Errorf("%w: unknown item kind %q", ErrInvalid, kind)
 	}
 	if kind == KindSchedule {
-		return fmt.Errorf("%w: a schedule cannot be dismissed, it has no finished state", ErrInvalid)
+		return fmt.Errorf("%w: a schedule cannot be dismissed", ErrInvalid)
 	}
 	return ValidateItemID(itemID)
 }

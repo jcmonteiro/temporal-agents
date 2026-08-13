@@ -225,10 +225,10 @@ describe("picking a satellite", () => {
 });
 
 describe("dismissing a satellite", () => {
-  it("offers the control for a terminal fleet with an exact state revision", () => {
+  it("offers the control for an active fleet with an exact state revision", () => {
     const fleet: WorkItem = {
       ...FLEET,
-      status: "done",
+      status: "in-progress",
       dismissible: true,
       stateRevision: "fleet-revision-1",
     };

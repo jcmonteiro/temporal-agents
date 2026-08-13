@@ -246,9 +246,10 @@ run, and a start into a place something is already running in is refused naming 
 work in the way, because two loops in one working tree commit over each other.
 
 The server joins live Temporal state with the durable execution and plan record.
-Finished items remain visible until dismissed. A dismissal is Postgres-backed,
-user-specific view state and never changes workflow state. It acknowledges only the
-state the user reviewed: any later change makes the item visible again. Continue-as-new
+Fleet and run items remain visible until their current state is dismissed. A dismissal
+is Postgres-backed, user-specific view state and never changes workflow state.
+Schedules cannot be dismissed. A dismissal acknowledges only the state the user
+reviewed: any later change makes the item visible again. Continue-as-new
 iterations are one run resource identified by workflow ID, and a new iteration changes
 that resource's state.
 

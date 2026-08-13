@@ -8,8 +8,8 @@
 // the contract can hold still while the model and its sources move underneath — and
 // the contract, not this implementation, is what a consumer builds against.
 //
-// The API is read-only except for one write: an operator dismissing a finished item
-// from their overview, which is view state and never touches the work. It is
+// The API is read-only except for one write: an operator dismissing an observed
+// fleet or run state from their overview. It never touches the work. The API is
 // unauthenticated only on its default loopback listener; an exposed listener requires
 // bearer authentication. It is built as if exposed in either mode: bounded rate, bounded
 // bodies, bounded time, no permissive cross-origin default, and no internal detail in
@@ -82,7 +82,7 @@ type WorkView interface {
 	ActiveWork(ctx context.Context, query agenthub.PageQuery) (agenthub.Page[agenthub.ActiveWorkItem], error)
 	// DismissalsFor returns one principal's dismissals in force.
 	DismissalsFor(ctx context.Context, viewer agenthub.ViewerID) ([]agenthub.Dismissal, error)
-	// DismissFor hides the exact finished item state one principal reviewed.
+	// DismissFor hides the exact item state one principal reviewed.
 	DismissFor(ctx context.Context, viewer agenthub.ViewerID, kind agenthub.ItemKind, itemID, expectedRevision string) (agenthub.Dismissal, error)
 	// UndismissFor brings a dismissed item back for one principal.
 	UndismissFor(ctx context.Context, viewer agenthub.ViewerID, kind agenthub.ItemKind, itemID string) error
@@ -724,7 +724,7 @@ func (s *Server) handleDismissals(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, modelDismissalCollection, newCollection(items, len(items)))
 }
 
-// handleDismiss hides a finished item from the overview.
+// handleDismiss hides an exact fleet or run state from the overview.
 //
 // The dismissal's identity is derived from the item it refers to, so posting the same
 // item twice addresses the same resource: a client that retries a lost response gets
@@ -994,9 +994,6 @@ func (s *Server) writeServiceProblem(w http.ResponseWriter, r *http.Request, err
 	switch {
 	case errors.Is(err, agenthub.ErrNotFound):
 		s.writeProblem(w, r, codeNotFound, "no such resource")
-	case errors.Is(err, agenthub.ErrNotDismissible):
-		s.writeProblem(w, r, codeNotDismissible,
-			"only an item that has finished can be dismissed")
 	case errors.Is(err, agenthub.ErrStateChanged):
 		s.writeProblem(w, r, codeStateChanged,
 			"the item changed after it was shown; review its current state before dismissing it")

@@ -140,29 +140,26 @@ func (v *viewStub) DismissFor(_ context.Context, viewer agenthub.ViewerID, kind 
 	if err := agenthub.ValidateDismissalTarget(kind, itemID); err != nil {
 		return agenthub.Dismissal{}, err
 	}
-	var terminal bool
 	var currentRevision string
 	switch kind {
 	case agenthub.KindFleet:
 		for _, fleet := range v.fleets {
 			if fleet.ID == itemID {
-				terminal = fleet.Dismissible()
 				currentRevision = fleet.StateRevision()
 			}
 		}
 	case agenthub.KindRun:
 		for _, run := range v.runs {
 			if run.ID == itemID {
-				terminal = run.Dismissible()
 				currentRevision = run.StateRevision()
 			}
 		}
 	}
+	if currentRevision == "" {
+		return agenthub.Dismissal{}, agenthub.ErrNotFound
+	}
 	if currentRevision != expectedRevision {
 		return agenthub.Dismissal{}, agenthub.ErrStateChanged
-	}
-	if !terminal {
-		return agenthub.Dismissal{}, agenthub.ErrNotDismissible
 	}
 	d := agenthub.Dismissal{Viewer: viewer, Kind: kind, ItemID: itemID, StateRevision: currentRevision, DismissedAt: fixedNow}
 	for _, existing := range v.dismissals {
@@ -592,8 +589,6 @@ func TestDismissalBodyIsStrictAndBounded(t *testing.T) {
 	}
 }
 
-// TestActiveItemCannotBeDismissed pins that the server enforces the rule rather than
-// trusting a frontend to hide the affordance.
 func TestChangedItemStateCannotBeDismissed(t *testing.T) {
 	run := agenthub.Run{ID: "run-1", Status: agenthub.StatusDone, Iterations: 2}
 	server := newTestServer(t, &viewStub{runs: []agenthub.Run{run}})
@@ -605,7 +600,7 @@ func TestChangedItemStateCannotBeDismissed(t *testing.T) {
 	requireProblem(t, response, http.StatusConflict, codeStateChanged)
 }
 
-func TestActiveItemCannotBeDismissed(t *testing.T) {
+func TestActiveItemCanBeDismissedAtItsCurrentState(t *testing.T) {
 	run := agenthub.Run{ID: "run-1", Running: true, Status: agenthub.StatusInProgress, Iterations: 1}
 	view := &viewStub{runs: []agenthub.Run{run}}
 	server := newTestServer(t, view)
@@ -614,7 +609,9 @@ func TestActiveItemCannotBeDismissed(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, req)
-	requireProblem(t, response, http.StatusConflict, codeNotDismissible)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create = %d: %s", response.Code, response.Body.String())
+	}
 }
 
 func TestARecordedPlaceThatCannotBeExpressedIsReportedAsADefectHere(t *testing.T) {

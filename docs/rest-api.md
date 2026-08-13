@@ -159,14 +159,14 @@ breaking API does not replace `/api/v1`; consumers move to it deliberately.
 | Method and path | Meaning |
 |---|---|
 | `GET /api/v1/active-work` | Paged active top-level fleets, runs, and schedules |
-| `GET /api/v1/fleets` | Running fleets and non-dismissed terminal fleets |
+| `GET /api/v1/fleets` | Fleets whose current state has not been dismissed |
 | `GET /api/v1/fleets/{id}` | One fleet and its plan node graph |
-| `GET /api/v1/runs` | Running standalone chains and non-dismissed terminal chains |
+| `GET /api/v1/runs` | Standalone chains whose current state has not been dismissed |
 | `POST /api/v1/runs` | Start a develop or review pass in a known place |
 | `GET /api/v1/runs/{id}` | One standalone chain |
 | `GET /api/v1/schedules` | One item per schedule |
 | `GET /api/v1/dismissals` | The signed-in user's view-state dismissals in force |
-| `POST /api/v1/dismissals` | Hide one finished fleet or run for the signed-in user |
+| `POST /api/v1/dismissals` | Hide one fleet or run at its current state for the signed-in user |
 | `DELETE /api/v1/dismissals/{id}` | Make the item visible again for the signed-in user |
 | `GET /api/v1/places` | The places the hub may work in |
 | `POST /api/v1/places` | Register a place |

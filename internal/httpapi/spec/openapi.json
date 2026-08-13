@@ -3,7 +3,7 @@
   "info": {
     "title": "Temporal Agents API",
     "version": "1.0.0",
-    "description": "A versioned local API for observing agent work as fleets, standalone run chains, schedules, and a paged active-work projection. The API exposes the work model rather than Temporal or database structures. Writes register places, start work, steer waiting rounds, dismiss finished items, and configure governed prompts. All times are RFC 3339 UTC timestamps. Existing collection reads are capped and newest first. The active-work resource uses opaque source-native cursor pagination. A continue-as-new chain is one item identified by its stable workflow ID. The server binds to loopback by default because responses can contain workflow goals and prompts.",
+    "description": "A versioned local API for observing agent work as fleets, standalone run chains, schedules, and a paged active-work projection. The API exposes the work model rather than Temporal or database structures. Writes register places, start work, steer waiting rounds, dismiss observed fleet or run states, and configure governed prompts. All times are RFC 3339 UTC timestamps. Existing collection reads are capped and newest first. The active-work resource uses opaque source-native cursor pagination. A continue-as-new chain is one item identified by its stable workflow ID. The server binds to loopback by default because responses can contain workflow goals and prompts.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -48,7 +48,7 @@
     },
     {
       "name": "Dismissals",
-      "description": "Durable operator view state over finished items. Dismissals never change workflow state."
+      "description": "Durable operator view state over exact fleet or run states. Dismissals never change workflow state."
     },
     {
       "name": "Active Work",
@@ -319,7 +319,7 @@
           "Fleets"
         ],
         "summary": "List visible fleets",
-        "description": "Returns running fleets and terminal fleets that have not been dismissed. The server aggregates each fleet's node status and progress. Fleet nodes are omitted from this collection; follow a fleet URL for its graph.",
+        "description": "Returns fleets whose current state has not been dismissed. The server aggregates each fleet's node status and progress. Fleet nodes are omitted from this collection; follow a fleet URL for its graph.",
         "operationId": "listFleets",
         "parameters": [
           {
@@ -431,7 +431,7 @@
           "Runs"
         ],
         "summary": "List visible standalone run chains",
-        "description": "Returns running chains and terminal chains that have not been dismissed. Continue-as-new iterations are collapsed to one item identified by workflow ID. Schedule-fired runs and child workflows are excluded because their schedule or parent represents them.",
+        "description": "Returns chains whose current state has not been dismissed. Continue-as-new iterations are collapsed to one item identified by workflow ID. Schedule-fired runs and child workflows are excluded because their schedule or parent represents them.",
         "operationId": "listRuns",
         "parameters": [
           {
@@ -707,8 +707,8 @@
         "tags": [
           "Dismissals"
         ],
-        "summary": "Dismiss a finished item",
-        "description": "Creates durable view state that hides one finished fleet or run from overview collections. The operation never changes workflow state. Posting the same target again is idempotent because the dismissal identity is derived from kind and item ID.",
+        "summary": "Dismiss a fleet or run state",
+        "description": "Creates durable view state that hides one fleet or run at the exact state revision supplied. The item appears again when its state changes. The operation never changes workflow state. Posting the same target and revision again is idempotent because the dismissal identity is derived from kind and item ID.",
         "operationId": "createDismissal",
         "requestBody": {
           "required": true,
@@ -752,7 +752,7 @@
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
-            "$ref": "#/components/responses/NotDismissible"
+            "$ref": "#/components/responses/StateChanged"
           },
           "413": {
             "$ref": "#/components/responses/RequestTooLarge"
@@ -795,7 +795,7 @@
           "Dismissals"
         ],
         "summary": "Remove a dismissal",
-        "description": "Makes the finished item visible again. It does not change workflow state.",
+        "description": "Makes the dismissed item state visible again. It does not change workflow state.",
         "operationId": "deleteDismissal",
         "responses": {
           "204": {
@@ -2008,8 +2008,8 @@
           }
         }
       },
-      "NotDismissible": {
-        "description": "Only finished fleets and runs can be dismissed.",
+      "StateChanged": {
+        "description": "The fleet or run no longer has the state revision supplied by the client.",
         "content": {
           "application/problem+json": {
             "schema": {
@@ -2309,6 +2309,7 @@
           "startedAt",
           "endedAt",
           "dismissible",
+          "stateRevision",
           "locationId"
         ],
         "properties": {
@@ -2345,7 +2346,12 @@
             "$ref": "#/components/schemas/NullableTimestamp"
           },
           "dismissible": {
-            "type": "boolean"
+            "const": true
+          },
+          "stateRevision": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The exact state a dismissal must acknowledge."
           },
           "locationId": {
             "$ref": "#/components/schemas/LocationID",
@@ -2382,6 +2388,7 @@
           "endedAt",
           "iterations",
           "dismissible",
+          "stateRevision",
           "locationId"
         ],
         "properties": {
@@ -2422,7 +2429,12 @@
             "minimum": 0
           },
           "dismissible": {
-            "type": "boolean"
+            "const": true
+          },
+          "stateRevision": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The exact state a dismissal must acknowledge."
           },
           "locations": {
             "$ref": "#/components/schemas/LocationRegistry",

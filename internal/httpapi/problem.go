@@ -38,8 +38,6 @@ const (
 	codeUnsupportedMediaType problemCode = "unsupported-media-type"
 	// codeRequestTooLarge is a request body above the accepted size.
 	codeRequestTooLarge problemCode = "request-too-large"
-	// codeNotDismissible is a dismissal asked for work that has not finished.
-	codeNotDismissible problemCode = "not-dismissible"
 	// codeStateChanged is a dismissal whose optimistic state precondition is stale.
 	codeStateChanged problemCode = "state-changed"
 	// codeNotAPlace is a registration of a directory the hub cannot work in: nothing
@@ -106,8 +104,8 @@ var problemTypes = map[problemCode]problemType{
 		Title:  "The method is not allowed on this resource",
 		Status: http.StatusMethodNotAllowed,
 		Description: "The resource exists but does not offer this method. The Allow header lists " +
-			"the methods it does offer. Almost everything here is read-only: the sole write is the " +
-			"dismissal of a finished item.",
+			"the methods it does offer. Almost everything here is read-only: the sole write is a " +
+			"dismissal of an observed fleet or run state.",
 	},
 	codeUnsupportedMediaType: {
 		Title:  "The request body's media type is not supported",
@@ -120,13 +118,6 @@ var problemTypes = map[problemCode]problemType{
 		Status: http.StatusRequestEntityTooLarge,
 		Description: "A write body is bounded, so a request cannot make the server allocate an " +
 			"arbitrary amount of memory. The bodies this API accepts are a few fields long.",
-	},
-	codeNotDismissible: {
-		Title:  "The item cannot be dismissed",
-		Status: http.StatusConflict,
-		Description: "Dismissing is view state over finished work: only an item that has finished " +
-			"(done or failed) can be hidden, and a schedule never can because it has no finished " +
-			"state. Wait for the work to settle, or leave it visible.",
 	},
 	codeStateChanged: {
 		Title:  "The item changed before dismissal",

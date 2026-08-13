@@ -206,8 +206,8 @@ describe("the Overview", () => {
     expect(satelliteNames()).toEqual(["Fix the flaky test, Done"]);
   });
 
-  it("dismisses a reviewed run directly from its satellite", async () => {
-    api.runs = [aRun({ dismissible: true })];
+  it("dismisses an active run at its current state directly from its satellite", async () => {
+    api.runs = [aRun({ status: "in-progress" })];
     await showOverview();
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss Fix the flaky test" }));
@@ -216,8 +216,8 @@ describe("the Overview", () => {
     expect(api.dismissedRuns).toEqual(["run-1"]);
   });
 
-  it("dismisses a reviewed fleet directly from its satellite", async () => {
-    api.fleets = [aFleet({ status: "done", dismissible: true })];
+  it("dismisses an active fleet at its current state directly from its satellite", async () => {
+    api.fleets = [aFleet()];
     await showOverview();
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss Checkout revamp" }));

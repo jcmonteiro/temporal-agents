@@ -292,8 +292,8 @@ export class FakeApi {
       : asked.kind === "run"
         ? this.runs.find((candidate) => candidate.id === asked.itemId)
         : undefined;
-    if (!item?.dismissible) {
-      return this.problem(409, "not-dismissible", "only a finished item can be dismissed");
+    if (!item) {
+      return this.problem(404, "not-found", "no such fleet or run");
     }
     if (asked.stateRevision !== item.stateRevision) {
       return this.problem(409, "state-changed", "the item changed before dismissal");
@@ -606,7 +606,7 @@ export function aFleet(overrides: Partial<FleetDTO> = {}): FleetDTO {
     progress: { done: 1, total: 4, fraction: 0.25 },
     startedAt: null,
     endedAt: null,
-    dismissible: false,
+    dismissible: true,
     stateRevision: "fleet-revision-1",
     ...overrides,
   };
@@ -623,7 +623,7 @@ export function aRun(overrides: Partial<RunDTO> = {}): RunDTO {
     startedAt: null,
     endedAt: null,
     iterations: 3,
-    dismissible: false,
+    dismissible: true,
     stateRevision: "run-revision-1",
     ...overrides,
   };
