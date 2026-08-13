@@ -22,6 +22,11 @@ var ErrUnavailable = errors.New("a dependency of the read path is unavailable")
 // enforced here rather than trusted to the client that offers the affordance.
 var ErrNotDismissible = errors.New("only a finished item can be dismissed")
 
+// ErrStateChanged is returned when the item no longer has the state revision the
+// operator reviewed. The client-supplied revision is only a precondition: the
+// service always calculates the current revision before it writes a dismissal.
+var ErrStateChanged = errors.New("the item state changed before it was dismissed")
+
 // Limits on how much one read returns. The API is an overview, not a history
 // browser: it is capped so a single request can never turn into a full table
 // scan, and the caps are part of the published contract.
@@ -143,55 +148,87 @@ func (s *Service) FleetsFor(ctx context.Context, viewer ViewerID, limit int) ([]
 	if err != nil {
 		return nil, err
 	}
-	trees, err := s.deps.Collections.FleetTrees(ctx, ChainQuery{
-		Limit: limit + len(dismissed),
-	})
-	if err != nil {
-		return nil, unavailable("read the recorded fleets", err)
-	}
 	live, err := s.liveByWorkflowID(ctx)
 	if err != nil {
 		return nil, err
 	}
-	chains := make([]ExecutionChain, 0, len(trees))
-	treesByID := make(map[string][]Execution, len(trees))
-	var recorded []Execution
-	for _, tree := range trees {
-		chains = append(chains, tree.Chain)
-		treesByID[tree.Chain.Latest.WorkflowID] = tree.Executions
-		recorded = append(recorded, tree.Chain.Latest)
-		recorded = append(recorded, tree.Executions...)
-	}
-	live, err = s.addExecutionStates(ctx, live, recorded)
-	if err != nil {
-		return nil, err
-	}
-	parents, err := s.resolveExecutionChains(ctx, chains, live, func(e Execution) bool {
-		return isFleet(e)
-	})
-	if err != nil {
-		return nil, err
-	}
-	plans, err := s.plansFor(ctx, parents)
-	if err != nil {
-		return nil, err
+	required := make([]string, 0, len(live))
+	for workflowID, execution := range live {
+		if isFleet(execution) {
+			required = append(required, workflowID)
+		}
 	}
 
-	fleets := make([]Fleet, 0, min(len(parents), limit))
-	for _, parent := range parents {
-		fleet, err := s.buildFleet(ctx, parent, treesByID[parent.WorkflowID], live, plans[parent.WorkflowID])
+	requiredIDs := make(map[string]bool, len(required))
+	for _, workflowID := range required {
+		requiredIDs[workflowID] = true
+	}
+	fleets := make([]Fleet, 0, limit)
+	visibleNormal := 0
+	seen := make(map[string]bool)
+	var cursor []byte
+	for {
+		page, err := s.deps.Collections.FleetTreePage(ctx, ChainQuery{
+			RequiredWorkflowIDs: required,
+			Limit:               collectionPageLimit(limit, dismissed.count(KindFleet)),
+			Cursor:              cursor,
+		})
+		if err != nil {
+			return nil, unavailable("read the recorded fleets", err)
+		}
+		chains := make([]ExecutionChain, 0, len(page.Items))
+		treesByID := make(map[string][]Execution, len(page.Items))
+		var recorded []Execution
+		for _, tree := range page.Items {
+			chains = append(chains, tree.Chain)
+			treesByID[tree.Chain.Latest.WorkflowID] = tree.Executions
+			recorded = append(recorded, tree.Chain.Latest)
+			recorded = append(recorded, tree.Executions...)
+		}
+		live, err = s.addExecutionStates(ctx, live, recorded)
 		if err != nil {
 			return nil, err
 		}
-		if dismissed.has(KindFleet, fleet.ID, fleet.StateRevision()) {
-			continue
+		parents, err := s.resolveExecutionChains(ctx, chains, live, isFleet)
+		if err != nil {
+			return nil, err
 		}
-		fleets = append(fleets, fleet)
-		if len(fleets) == limit {
-			break
+		plans, err := s.plansFor(ctx, parents)
+		if err != nil {
+			return nil, err
 		}
+		for _, parent := range parents {
+			if seen[parent.WorkflowID] {
+				continue
+			}
+			seen[parent.WorkflowID] = true
+			fleet, err := s.buildFleet(ctx, parent, treesByID[parent.WorkflowID], live, plans[parent.WorkflowID])
+			if err != nil {
+				return nil, err
+			}
+			if dismissed.has(KindFleet, fleet.ID, fleet.StateRevision()) {
+				continue
+			}
+			fleets = append(fleets, fleet)
+			if !requiredIDs[fleet.ID] {
+				visibleNormal++
+			}
+		}
+		if visibleNormal >= limit || len(page.Next) == 0 {
+			sort.SliceStable(fleets, func(i, j int) bool {
+				if fleets[i].StartedAt.Equal(fleets[j].StartedAt) {
+					return fleets[i].ID < fleets[j].ID
+				}
+				return fleets[i].StartedAt.After(fleets[j].StartedAt)
+			})
+			if len(fleets) > limit {
+				fleets = fleets[:limit]
+			}
+			return fleets, nil
+		}
+		cursor = page.Next
+		required = nil
 	}
-	return fleets, nil
 }
 
 const (
@@ -308,10 +345,11 @@ func (s *Service) Fleet(ctx context.Context, id string) (Fleet, error) {
 	}
 	// The collection adapter selects this identity first and then returns its whole
 	// tree, so a large execution history cannot truncate the graph.
-	trees, err := s.deps.Collections.FleetTrees(ctx, ChainQuery{WorkflowID: id, Limit: 1})
+	page, err := s.deps.Collections.FleetTreePage(ctx, ChainQuery{WorkflowID: id, Limit: 1})
 	if err != nil {
 		return Fleet{}, unavailable("read the fleet's records", err)
 	}
+	trees := page.Items
 	live, err := s.liveByWorkflowID(ctx)
 	if err != nil {
 		return Fleet{}, err
@@ -385,41 +423,68 @@ func (s *Service) RunsFor(ctx context.Context, viewer ViewerID, limit int) ([]Ru
 			required = append(required, workflowID)
 		}
 	}
-	recorded, err := s.deps.Collections.RunChains(ctx, ChainQuery{
-		RequiredWorkflowIDs: required,
-		Limit:               limit + len(dismissed),
-	})
-	if err != nil {
-		return nil, unavailable("read the recorded runs", err)
-	}
-	recordedExecutions := make([]Execution, 0, len(recorded))
-	for _, chain := range recorded {
-		recordedExecutions = append(recordedExecutions, chain.Latest)
-	}
-	live, err = s.addExecutionStates(ctx, live, recordedExecutions)
-	if err != nil {
-		return nil, err
-	}
-	chains, err := s.resolveExecutionChains(ctx, recorded, live, isRunSatellite)
-	if err != nil {
-		return nil, err
-	}
 
-	runs := make([]Run, 0, min(len(chains), limit))
-	for _, chain := range chains {
-		run, err := runFrom(chain)
+	requiredIDs := make(map[string]bool, len(required))
+	for _, workflowID := range required {
+		requiredIDs[workflowID] = true
+	}
+	runs := make([]Run, 0, limit)
+	visibleNormal := 0
+	seen := make(map[string]bool)
+	var cursor []byte
+	for {
+		page, err := s.deps.Collections.RunChainPage(ctx, ChainQuery{
+			RequiredWorkflowIDs: required,
+			Limit:               collectionPageLimit(limit, dismissed.count(KindRun)),
+			Cursor:              cursor,
+		})
+		if err != nil {
+			return nil, unavailable("read the recorded runs", err)
+		}
+		recordedExecutions := make([]Execution, 0, len(page.Items))
+		for _, chain := range page.Items {
+			recordedExecutions = append(recordedExecutions, chain.Latest)
+		}
+		live, err = s.addExecutionStates(ctx, live, recordedExecutions)
 		if err != nil {
 			return nil, err
 		}
-		if dismissed.has(KindRun, run.ID, run.StateRevision()) {
-			continue
+		chains, err := s.resolveExecutionChains(ctx, page.Items, live, isRunSatellite)
+		if err != nil {
+			return nil, err
 		}
-		runs = append(runs, run)
-		if len(runs) == limit {
-			break
+		for _, chain := range chains {
+			if seen[chain.WorkflowID] {
+				continue
+			}
+			seen[chain.WorkflowID] = true
+			run, err := runFrom(chain)
+			if err != nil {
+				return nil, err
+			}
+			if dismissed.has(KindRun, run.ID, run.StateRevision()) {
+				continue
+			}
+			runs = append(runs, run)
+			if !requiredIDs[run.ID] {
+				visibleNormal++
+			}
 		}
+		if visibleNormal >= limit || len(page.Next) == 0 {
+			sort.SliceStable(runs, func(i, j int) bool {
+				if runs[i].StartedAt.Equal(runs[j].StartedAt) {
+					return runs[i].ID < runs[j].ID
+				}
+				return runs[i].StartedAt.After(runs[j].StartedAt)
+			})
+			if len(runs) > limit {
+				runs = runs[:limit]
+			}
+			return runs, nil
+		}
+		cursor = page.Next
+		required = nil
 	}
-	return runs, nil
 }
 
 // Run returns one run chain, or ErrNotFound.
@@ -427,10 +492,11 @@ func (s *Service) Run(ctx context.Context, id string) (Run, error) {
 	if err := ValidateItemID(id); err != nil {
 		return Run{}, err
 	}
-	recorded, err := s.deps.Collections.RunChains(ctx, ChainQuery{WorkflowID: id, Limit: 1})
+	page, err := s.deps.Collections.RunChainPage(ctx, ChainQuery{WorkflowID: id, Limit: 1})
 	if err != nil {
 		return Run{}, unavailable("read the run's records", err)
 	}
+	recorded := page.Items
 	live, err := s.liveByWorkflowID(ctx)
 	if err != nil {
 		return Run{}, err
@@ -623,18 +689,24 @@ func (s *Service) DismissalsFor(ctx context.Context, viewer ViewerID) ([]Dismiss
 //
 // Dismissing an already-dismissed item succeeds and reports the dismissal, so a
 // client that retries a lost response is not punished for it.
-func (s *Service) Dismiss(ctx context.Context, kind ItemKind, itemID string) (Dismissal, error) {
-	return s.DismissFor(ctx, LocalViewerID, kind, itemID)
+func (s *Service) Dismiss(ctx context.Context, kind ItemKind, itemID, expectedRevision string) (Dismissal, error) {
+	return s.DismissFor(ctx, LocalViewerID, kind, itemID, expectedRevision)
 }
 
 // DismissFor hides the exact state one viewer reviewed.
-func (s *Service) DismissFor(ctx context.Context, viewer ViewerID, kind ItemKind, itemID string) (Dismissal, error) {
+func (s *Service) DismissFor(ctx context.Context, viewer ViewerID, kind ItemKind, itemID, expectedRevision string) (Dismissal, error) {
 	if err := ValidateDismissalTarget(kind, itemID); err != nil {
 		return Dismissal{}, err
+	}
+	if expectedRevision == "" {
+		return Dismissal{}, fmt.Errorf("%w: stateRevision is required", ErrInvalid)
 	}
 	dismissible, revision, err := s.dismissible(ctx, kind, itemID)
 	if err != nil {
 		return Dismissal{}, err
+	}
+	if revision != expectedRevision {
+		return Dismissal{}, ErrStateChanged
 	}
 	if !dismissible {
 		return Dismissal{}, ErrNotDismissible
@@ -1206,6 +1278,29 @@ func (s *Service) addExecutionStates(ctx context.Context, states map[string]Exec
 // dismissalSet is one viewer's dismissals indexed by item identity. The stored
 // value is the exact state that viewer acknowledged.
 type dismissalSet map[string]string
+
+// count reports how many dismissals can affect one collection kind. A run
+// dismissal must not make a fleet page resolve more complete plan trees.
+func (d dismissalSet) count(kind ItemKind) int {
+	prefix := string(kind) + ":"
+	var count int
+	for id := range d {
+		if len(id) >= len(prefix) && id[:len(prefix)] == prefix {
+			count++
+		}
+	}
+	return count
+}
+
+// collectionPageLimit compensates for likely exact dismissals without allowing
+// one source read to grow past the public collection bound. Further candidates
+// are reached through the stable cursor.
+func collectionPageLimit(limit, dismissed int) int {
+	if dismissed >= MaxLimit-limit {
+		return MaxLimit
+	}
+	return limit + dismissed
+}
 
 // has reports whether this exact item state is dismissed.
 func (d dismissalSet) has(kind ItemKind, itemID, revision string) bool {

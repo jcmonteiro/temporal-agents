@@ -82,6 +82,7 @@ it("shows a repository already known from recorded work", async () => {
     iterations: 1,
     tokens: 100,
     dismissible: true,
+    stateRevision: "run-revision-1",
   }];
 
   await openTheSettings();

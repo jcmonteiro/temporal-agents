@@ -82,8 +82,8 @@ type WorkView interface {
 	ActiveWork(ctx context.Context, query agenthub.PageQuery) (agenthub.Page[agenthub.ActiveWorkItem], error)
 	// DismissalsFor returns one principal's dismissals in force.
 	DismissalsFor(ctx context.Context, viewer agenthub.ViewerID) ([]agenthub.Dismissal, error)
-	// DismissFor hides a finished item for one principal.
-	DismissFor(ctx context.Context, viewer agenthub.ViewerID, kind agenthub.ItemKind, itemID string) (agenthub.Dismissal, error)
+	// DismissFor hides the exact finished item state one principal reviewed.
+	DismissFor(ctx context.Context, viewer agenthub.ViewerID, kind agenthub.ItemKind, itemID, expectedRevision string) (agenthub.Dismissal, error)
 	// UndismissFor brings a dismissed item back for one principal.
 	UndismissFor(ctx context.Context, viewer agenthub.ViewerID, kind agenthub.ItemKind, itemID string) error
 }
@@ -734,7 +734,11 @@ func (s *Server) handleDismiss(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeJSONBody(w, r, &request) {
 		return
 	}
-	dismissal, err := s.view.DismissFor(r.Context(), agenthub.ViewerID(requestPrincipal(r)), request.Kind, request.ItemID)
+	if request.StateRevision == "" {
+		s.writeServiceProblem(w, r, fmt.Errorf("%w: stateRevision is required", agenthub.ErrInvalid))
+		return
+	}
+	dismissal, err := s.view.DismissFor(r.Context(), agenthub.ViewerID(requestPrincipal(r)), request.Kind, request.ItemID, request.StateRevision)
 	if err != nil {
 		s.writeServiceProblem(w, r, err)
 		return
@@ -993,6 +997,9 @@ func (s *Server) writeServiceProblem(w http.ResponseWriter, r *http.Request, err
 	case errors.Is(err, agenthub.ErrNotDismissible):
 		s.writeProblem(w, r, codeNotDismissible,
 			"only an item that has finished can be dismissed")
+	case errors.Is(err, agenthub.ErrStateChanged):
+		s.writeProblem(w, r, codeStateChanged,
+			"the item changed after it was shown; review its current state before dismissing it")
 	case errors.Is(err, agenthub.ErrPlaceIsBusy):
 		// The request is fine and will succeed once the work in that place settles, so
 		// the refusal names what it collided with — in the sentence for a person, and

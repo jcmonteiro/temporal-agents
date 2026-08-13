@@ -324,6 +324,34 @@ func TestPostgres_ListExecutionChainsLimitsIdentitiesAfterFullAggregation(t *tes
 	require.Equal(t, "run-other", chains[1].Latest.WorkflowID)
 }
 
+func TestPostgres_ListExecutionChainPageUsesAStableStartedAtAndWorkflowIDCursor(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	for _, workflowID := range []string{"run-c", "run-a", "run-b"} {
+		require.NoError(t, store.SaveExecution(ctx, execstore.Execution{
+			WorkflowID: workflowID, RunID: workflowID + "-1", Kind: execstore.KindRun,
+			StartedAt: stamp, Status: execstore.StatusSucceeded,
+		}))
+	}
+
+	first, err := store.ListExecutionChainPage(ctx, execstore.ChainFilter{
+		Kinds: []execstore.Kind{execstore.KindRun}, Limit: 2,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"run-a", "run-b"}, []string{
+		first.Items[0].Latest.WorkflowID, first.Items[1].Latest.WorkflowID,
+	})
+	require.NotEmpty(t, first.Next)
+
+	second, err := store.ListExecutionChainPage(ctx, execstore.ChainFilter{
+		Kinds: []execstore.Kind{execstore.KindRun}, Limit: 2, Cursor: first.Next,
+	})
+	require.NoError(t, err)
+	require.Len(t, second.Items, 1)
+	require.Equal(t, "run-c", second.Items[0].Latest.WorkflowID)
+	require.Empty(t, second.Next)
+}
+
 func TestPostgres_ListExecutionChainsIncludesRequiredIdentitiesOutsideThePage(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

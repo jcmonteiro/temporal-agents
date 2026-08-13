@@ -320,7 +320,28 @@ func (s *Source) RunChains(_ context.Context, query agenthub.ChainQuery) ([]agen
 	return requiredChains(groups, query.Limit, query.RequiredWorkflowIDs), nil
 }
 
-// FleetTrees implements agenthub.CollectionSource.
+// RunChainPage implements agenthub.CollectionSource.
+func (s *Source) RunChainPage(_ context.Context, query agenthub.ChainQuery) (agenthub.Page[agenthub.ExecutionChain], error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return agenthub.Page[agenthub.ExecutionChain]{}, s.err
+	}
+	excluded := stringSet(query.ExcludedWorkflowIDs)
+	groups := map[string][]agenthub.Execution{}
+	for _, e := range s.recorded {
+		if query.WorkflowID != "" && e.WorkflowID != query.WorkflowID {
+			continue
+		}
+		if excluded[e.WorkflowID] || (e.ParentWorkflowID != "" && !e.Detached) || e.ScheduleID != "" || !runClass(e.Class) {
+			continue
+		}
+		groups[e.WorkflowID] = append(groups[e.WorkflowID], e)
+	}
+	return chainPage(limitedChains(groups, 0), query)
+}
+
+// FleetTrees returns selected roots for compatibility callers.
 func (s *Source) FleetTrees(_ context.Context, query agenthub.ChainQuery) ([]agenthub.FleetTree, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -347,6 +368,38 @@ func (s *Source) FleetTrees(_ context.Context, query agenthub.ChainQuery) ([]age
 		trees = append(trees, tree)
 	}
 	return trees, nil
+}
+
+// FleetTreePage implements agenthub.CollectionSource.
+func (s *Source) FleetTreePage(_ context.Context, query agenthub.ChainQuery) (agenthub.Page[agenthub.FleetTree], error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return agenthub.Page[agenthub.FleetTree]{}, s.err
+	}
+	excluded := stringSet(query.ExcludedWorkflowIDs)
+	groups := map[string][]agenthub.Execution{}
+	for _, e := range s.recorded {
+		if e.Class != wfid.ClassFleet || excluded[e.WorkflowID] || query.WorkflowID != "" && e.WorkflowID != query.WorkflowID {
+			continue
+		}
+		groups[e.WorkflowID] = append(groups[e.WorkflowID], e)
+	}
+	chains, err := chainPage(limitedChains(groups, 0), query)
+	if err != nil {
+		return agenthub.Page[agenthub.FleetTree]{}, err
+	}
+	trees := make([]agenthub.FleetTree, 0, len(chains.Items))
+	for _, chain := range chains.Items {
+		tree := agenthub.FleetTree{Chain: chain}
+		for _, e := range s.recorded {
+			if e.WorkflowID == chain.Latest.WorkflowID || e.ParentWorkflowID == chain.Latest.WorkflowID {
+				tree.Executions = append(tree.Executions, e)
+			}
+		}
+		trees = append(trees, tree)
+	}
+	return agenthub.Page[agenthub.FleetTree]{Items: trees, Next: chains.Next}, nil
 }
 
 // SchedulePage implements source-native schedule paging.
@@ -517,6 +570,30 @@ func runClass(class wfid.Class) bool {
 	default:
 		return false
 	}
+}
+
+func chainPage(chains []agenthub.ExecutionChain, query agenthub.ChainQuery) (agenthub.Page[agenthub.ExecutionChain], error) {
+	offset, err := pageOffset(query.Cursor, len(chains))
+	if err != nil {
+		return agenthub.Page[agenthub.ExecutionChain]{}, err
+	}
+	limit := query.Limit
+	if limit <= 0 {
+		limit = agenthub.DefaultLimit
+	}
+	end := min(offset+limit, len(chains))
+	items := append([]agenthub.ExecutionChain(nil), chains[offset:end]...)
+	known := stringSet(query.RequiredWorkflowIDs)
+	for _, chain := range chains[end:] {
+		if known[chain.Latest.WorkflowID] {
+			items = append(items, chain)
+		}
+	}
+	page := agenthub.Page[agenthub.ExecutionChain]{Items: items}
+	if end < len(chains) {
+		page.Next = pageToken(end)
+	}
+	return page, nil
 }
 
 func requiredChains(groups map[string][]agenthub.Execution, limit int, requiredIDs []string) []agenthub.ExecutionChain {

@@ -215,7 +215,7 @@ describe("the Overview", () => {
     await tick();
     expect(satelliteNames()).toEqual([]);
 
-    api.runs = [aRun({ status: "failed", dismissible: true })];
+    api.runs = [aRun({ status: "failed", dismissible: true, stateRevision: "run-revision-2" })];
     await tick(REFRESH_INTERVAL_MS);
 
     expect(satelliteNames()).toEqual(["Fix the flaky test, Failed"]);

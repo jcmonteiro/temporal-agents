@@ -63,6 +63,7 @@ export function fromFleet(f: FleetDTO): WorkItem {
     placeId: placeOf(f.locationId),
     progress: f.progress,
     dismissible: f.dismissible,
+    stateRevision: f.stateRevision,
   };
 }
 
@@ -77,6 +78,7 @@ export function fromRun(r: RunDTO): WorkItem {
     runType: r.type,
     iterations: r.iterations,
     dismissible: r.dismissible,
+    stateRevision: r.stateRevision,
   };
 }
 

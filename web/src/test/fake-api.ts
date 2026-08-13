@@ -28,7 +28,7 @@ export class FakeApi {
   schedules: ScheduleDTO[] = [];
   /** Run identities dismissed by the current principal, in action order. */
   dismissedRuns: string[] = [];
-  /** The exact wire state reviewed for each dismissed run. */
+  /** The exact opaque state revision reviewed for each dismissed run. */
   private dismissedRunStates: Record<string, string> = {};
   /**
    * The registry every response publishes. The API always carries at least the
@@ -281,13 +281,17 @@ export class FakeApi {
     const asked = JSON.parse(String(body ?? "{}")) as {
       kind?: string;
       itemId?: string;
+      stateRevision?: string;
     };
     const run = this.runs.find((candidate) => candidate.id === asked.itemId);
     if (asked.kind !== "run" || !run?.dismissible) {
       return this.problem(409, "not-dismissible", "only a finished item can be dismissed");
     }
+    if (asked.stateRevision !== run.stateRevision) {
+      return this.problem(409, "state-changed", "the item changed before dismissal");
+    }
     if (!this.dismissedRuns.includes(run.id)) this.dismissedRuns.push(run.id);
-    this.dismissedRunStates[run.id] = JSON.stringify(run);
+    this.dismissedRunStates[run.id] = run.stateRevision;
     return this.json({
       id: `run:${run.id}`,
       kind: "run",
@@ -489,7 +493,7 @@ export class FakeApi {
         return this.collection(this.fleets);
       case "/api/v1/runs":
         return this.collection(this.runs.filter((run) =>
-          this.dismissedRunStates[run.id] !== JSON.stringify(run)
+          this.dismissedRunStates[run.id] !== run.stateRevision
         ));
       case "/api/v1/schedules":
         return this.collection(this.schedules);
@@ -587,6 +591,7 @@ export function aFleet(overrides: Partial<FleetDTO> = {}): FleetDTO {
     startedAt: null,
     endedAt: null,
     dismissible: false,
+    stateRevision: "fleet-revision-1",
     ...overrides,
   };
 }
@@ -603,6 +608,7 @@ export function aRun(overrides: Partial<RunDTO> = {}): RunDTO {
     endedAt: null,
     iterations: 3,
     dismissible: false,
+    stateRevision: "run-revision-1",
     ...overrides,
   };
 }

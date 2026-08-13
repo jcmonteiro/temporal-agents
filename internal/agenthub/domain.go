@@ -243,7 +243,11 @@ func (f Fleet) StateRevision() string {
 		timeRevision(f.StartedAt), timeRevision(f.EndedAt), f.Location.ID(),
 	}
 	for _, node := range f.Nodes {
-		parts = append(parts, node.ID, string(node.Status), node.Location.ID())
+		parts = append(parts,
+			node.ID, node.Prompt, string(node.Status), node.Location.ID(),
+			strconv.Itoa(len(node.DependsOn)),
+		)
+		parts = append(parts, node.DependsOn...)
 		if node.Execution == nil {
 			parts = append(parts, "")
 			continue

@@ -5,8 +5,8 @@ import { postJSON } from "./http";
 
 /**
  * Acknowledges the exact terminal state currently published for one item. The
- * server owns both eligibility and the state revision; the browser only names
- * the item the operator acted on.
+ * server owns eligibility and validates the current state revision. The browser
+ * echoes the opaque revision that was published with the item.
  */
 export async function dismissWorkItem(
   item: WorkItem,
@@ -14,6 +14,7 @@ export async function dismissWorkItem(
   const result = await postJSON<DismissalDTO>("/dismissals", {
     kind: item.kind,
     itemId: item.id,
+    stateRevision: item.stateRevision,
   });
   return result.ok ? ok(undefined) : err(result.error);
 }

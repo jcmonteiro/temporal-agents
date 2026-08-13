@@ -72,9 +72,9 @@ func (r *Records) RecordedExecutions(ctx context.Context, q agenthub.RecordQuery
 	return out, nil
 }
 
-// RunChains implements agenthub.CollectionSource.
-func (r *Records) RunChains(ctx context.Context, query agenthub.ChainQuery) ([]agenthub.ExecutionChain, error) {
-	chains, err := r.overview.ListExecutionChains(ctx, execstore.ChainFilter{
+// RunChainPage implements agenthub.CollectionSource.
+func (r *Records) RunChainPage(ctx context.Context, query agenthub.ChainQuery) (agenthub.Page[agenthub.ExecutionChain], error) {
+	page, err := r.overview.ListExecutionChainPage(ctx, execstore.ChainFilter{
 		Kinds: []execstore.Kind{
 			execstore.KindRun, execstore.KindDevelop, execstore.KindReview,
 			execstore.KindPilot, execstore.KindFleetPlan,
@@ -83,34 +83,48 @@ func (r *Records) RunChains(ctx context.Context, query agenthub.ChainQuery) ([]a
 		RequiredWorkflowIDs: query.RequiredWorkflowIDs,
 		ExcludedWorkflowIDs: query.ExcludedWorkflowIDs,
 		Limit:               query.Limit,
+		Cursor:              query.Cursor,
 	})
 	if err != nil {
-		return nil, err
+		return agenthub.Page[agenthub.ExecutionChain]{}, err
 	}
-	return chainsFrom(chains), nil
+	return agenthub.Page[agenthub.ExecutionChain]{Items: chainsFrom(page.Items), Next: page.Next}, nil
 }
 
-// FleetTrees implements agenthub.CollectionSource.
-func (r *Records) FleetTrees(ctx context.Context, query agenthub.ChainQuery) ([]agenthub.FleetTree, error) {
-	trees, err := r.overview.ListExecutionTrees(ctx, execstore.ChainFilter{
+// RunChains returns the first page for detail-focused compatibility callers.
+func (r *Records) RunChains(ctx context.Context, query agenthub.ChainQuery) ([]agenthub.ExecutionChain, error) {
+	page, err := r.RunChainPage(ctx, query)
+	return page.Items, err
+}
+
+// FleetTreePage implements agenthub.CollectionSource.
+func (r *Records) FleetTreePage(ctx context.Context, query agenthub.ChainQuery) (agenthub.Page[agenthub.FleetTree], error) {
+	page, err := r.overview.ListExecutionTreePage(ctx, execstore.ChainFilter{
 		Kinds:               []execstore.Kind{execstore.KindFleet},
 		WorkflowID:          query.WorkflowID,
 		RequiredWorkflowIDs: query.RequiredWorkflowIDs,
 		ExcludedWorkflowIDs: query.ExcludedWorkflowIDs,
 		Limit:               query.Limit,
+		Cursor:              query.Cursor,
 	})
 	if err != nil {
-		return nil, err
+		return agenthub.Page[agenthub.FleetTree]{}, err
 	}
-	out := make([]agenthub.FleetTree, 0, len(trees))
-	for _, tree := range trees {
+	out := make([]agenthub.FleetTree, 0, len(page.Items))
+	for _, tree := range page.Items {
 		converted := agenthub.FleetTree{Chain: chainFrom(tree.Chain)}
 		for _, execution := range tree.Executions {
 			converted.Executions = append(converted.Executions, executionFrom(execution))
 		}
 		out = append(out, converted)
 	}
-	return out, nil
+	return agenthub.Page[agenthub.FleetTree]{Items: out, Next: page.Next}, nil
+}
+
+// FleetTrees returns the first page for detail-focused compatibility callers.
+func (r *Records) FleetTrees(ctx context.Context, query agenthub.ChainQuery) ([]agenthub.FleetTree, error) {
+	page, err := r.FleetTreePage(ctx, query)
+	return page.Items, err
 }
 
 // ScheduleActionChains implements agenthub.CollectionSource.

@@ -637,7 +637,7 @@ func TestADismissedRunReappearsWhenItsChainChanges(t *testing.T) {
 	source := agenthubtest.New().WithRecorded(first)
 	service := newService(t, source)
 
-	if _, err := service.Dismiss(context.Background(), agenthub.KindRun, id); err != nil {
+	if _, err := service.Dismiss(context.Background(), agenthub.KindRun, id, runRevision(t, service, id)); err != nil {
 		t.Fatalf("Dismiss: %v", err)
 	}
 	second := agenthubtest.Run(id, "review this", agenthub.OutcomeRunning, ago(time.Minute))
@@ -653,6 +653,33 @@ func TestADismissedRunReappearsWhenItsChainChanges(t *testing.T) {
 	}
 }
 
+func TestDismissRefusesARevisionTheOperatorDidNotReview(t *testing.T) {
+	id := "run-" + uuidLike("race")
+	first := agenthubtest.Run(id, "review this", agenthub.OutcomeSucceeded, ago(2*time.Hour))
+	first.RunID = "iteration-1"
+	first.EndedAt = ago(time.Hour)
+	source := agenthubtest.New().WithRecorded(first)
+	service := newService(t, source)
+	reviewedRevision := runRevision(t, service, id)
+
+	second := agenthubtest.Run(id, "review this", agenthub.OutcomeSucceeded, ago(time.Minute))
+	second.RunID = "iteration-2"
+	second.EndedAt = now
+	source.WithRecorded(second)
+
+	_, err := service.Dismiss(context.Background(), agenthub.KindRun, id, reviewedRevision)
+	if !errors.Is(err, agenthub.ErrStateChanged) {
+		t.Fatalf("Dismiss(stale revision) = %v, want ErrStateChanged", err)
+	}
+	dismissals, err := service.Dismissals(context.Background())
+	if err != nil {
+		t.Fatalf("Dismissals: %v", err)
+	}
+	if len(dismissals) != 0 {
+		t.Fatalf("dismissals = %+v, want no acknowledgement of the unreviewed state", dismissals)
+	}
+}
+
 // TestDismissRefusesWorkThatIsStillActive pins that the "only finished work can be
 // hidden" rule is the server's: a client that offers the affordance anyway cannot
 // hide a running run.
@@ -663,13 +690,13 @@ func TestDismissRefusesWorkThatIsStillActive(t *testing.T) {
 		WithRunning(agenthubtest.Run(id, "still going", agenthub.OutcomeRunning, ago(time.Minute)))
 	service := newService(t, source)
 
-	if _, err := service.Dismiss(context.Background(), agenthub.KindRun, id); !errors.Is(err, agenthub.ErrNotDismissible) {
+	if _, err := service.Dismiss(context.Background(), agenthub.KindRun, id, runRevision(t, service, id)); !errors.Is(err, agenthub.ErrNotDismissible) {
 		t.Fatalf("Dismiss(running) = %v, want ErrNotDismissible", err)
 	}
-	if _, err := service.Dismiss(context.Background(), agenthub.KindRun, "run-nope"); !errors.Is(err, agenthub.ErrNotFound) {
+	if _, err := service.Dismiss(context.Background(), agenthub.KindRun, "run-nope", "reviewed"); !errors.Is(err, agenthub.ErrNotFound) {
 		t.Fatalf("Dismiss(unknown) = %v, want ErrNotFound", err)
 	}
-	if _, err := service.Dismiss(context.Background(), agenthub.KindSchedule, "schedule-1"); err == nil {
+	if _, err := service.Dismiss(context.Background(), agenthub.KindSchedule, "schedule-1", "reviewed"); err == nil {
 		t.Fatal("Dismiss(schedule) = nil, want a refusal")
 	}
 }
@@ -690,8 +717,9 @@ func TestDismissIsIdempotentAndUndoable(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 	ctx := context.Background()
+	revision := runRevision(t, service, id)
 
-	first, err := service.Dismiss(ctx, agenthub.KindRun, id)
+	first, err := service.Dismiss(ctx, agenthub.KindRun, id, revision)
 	if err != nil {
 		t.Fatalf("Dismiss: %v", err)
 	}
@@ -699,7 +727,7 @@ func TestDismissIsIdempotentAndUndoable(t *testing.T) {
 		t.Errorf("dismissedAt = %v, want the injected clock %v", first.DismissedAt, now)
 	}
 	clock = now.Add(time.Hour)
-	second, err := service.Dismiss(ctx, agenthub.KindRun, id)
+	second, err := service.Dismiss(ctx, agenthub.KindRun, id, revision)
 	if err != nil {
 		t.Fatalf("a repeated Dismiss must succeed: %v", err)
 	}
@@ -733,7 +761,7 @@ func TestDismissalIsPrivateToTheViewer(t *testing.T) {
 	alice := agenthub.ViewerID("issuer|alice")
 	bob := agenthub.ViewerID("issuer|bob")
 
-	if _, err := service.DismissFor(context.Background(), alice, agenthub.KindRun, id); err != nil {
+	if _, err := service.DismissFor(context.Background(), alice, agenthub.KindRun, id, runRevision(t, service, id)); err != nil {
 		t.Fatalf("DismissFor(alice): %v", err)
 	}
 	aliceRuns, err := service.RunsFor(context.Background(), alice, 0)
@@ -931,6 +959,39 @@ func TestDismissedFleetsAreExcludedBeforeTheLimit(t *testing.T) {
 	}
 }
 
+type observedCollection struct {
+	agenthub.CollectionSource
+	fleetLimits []int
+}
+
+func (c *observedCollection) FleetTreePage(ctx context.Context, query agenthub.ChainQuery) (agenthub.Page[agenthub.FleetTree], error) {
+	c.fleetLimits = append(c.fleetLimits, query.Limit)
+	return c.CollectionSource.FleetTreePage(ctx, query)
+}
+
+func TestRunDismissalsDoNotIncreaseFleetReads(t *testing.T) {
+	source := agenthubtest.New().WithRecorded(
+		agenthubtest.Fleet("fleet-"+uuidLike("read"), agenthub.OutcomeSucceeded, ago(time.Hour)),
+	)
+	for i := 0; i < 900; i++ {
+		source.WithDismissal(agenthub.KindRun, fmt.Sprintf("run-dismissed-%03d", i), "reviewed")
+	}
+	observed := &observedCollection{CollectionSource: source}
+	deps := source.Dependencies(now)
+	deps.Collections = observed
+	service, err := agenthub.NewService(deps)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	if _, err := service.Fleets(context.Background(), 0); err != nil {
+		t.Fatalf("Fleets: %v", err)
+	}
+	if len(observed.fleetLimits) != 1 || observed.fleetLimits[0] != agenthub.DefaultLimit {
+		t.Fatalf("fleet page limits = %v, want one bounded default page", observed.fleetLimits)
+	}
+}
+
 // TestFleetsRespectTheLimit pins the cap: the API is an overview, not a history
 // browser, so a page is a page.
 func TestFleetsRespectTheLimit(t *testing.T) {
@@ -950,6 +1011,15 @@ func TestFleetsRespectTheLimit(t *testing.T) {
 	if !fleets[0].StartedAt.After(fleets[1].StartedAt) {
 		t.Errorf("fleets are not newest-first: %v then %v", fleets[0].StartedAt, fleets[1].StartedAt)
 	}
+}
+
+func runRevision(t *testing.T, service *agenthub.Service, id string) string {
+	t.Helper()
+	run, err := service.Run(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Run(%s): %v", id, err)
+	}
+	return run.StateRevision()
 }
 
 // uuidLike builds a canonical-looking UUID from a short seed, so a test ID is

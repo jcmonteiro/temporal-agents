@@ -413,6 +413,8 @@ type ChainFilter struct {
 	RequiredWorkflowIDs []string
 	ExcludedWorkflowIDs []string
 	Limit               int
+	// Cursor is the opaque stable position returned by the previous page.
+	Cursor []byte
 }
 
 // ExecutionChain is one fully aggregated continue-as-new chain.
@@ -429,11 +431,23 @@ type ExecutionTree struct {
 	Executions []Execution
 }
 
+// ExecutionChainPage is one stable page of fully aggregated chain resources.
+type ExecutionChainPage struct {
+	Items []ExecutionChain
+	Next  []byte
+}
+
+// ExecutionTreePage is one stable page of fleet roots and their direct children.
+type ExecutionTreePage struct {
+	Items []ExecutionTree
+	Next  []byte
+}
+
 // OverviewReader is the purpose-built read port for resource collections. It
 // prevents a limit on execution rows from being mistaken for a limit on chains.
 type OverviewReader interface {
-	ListExecutionChains(ctx context.Context, filter ChainFilter) ([]ExecutionChain, error)
-	ListExecutionTrees(ctx context.Context, filter ChainFilter) ([]ExecutionTree, error)
+	ListExecutionChainPage(ctx context.Context, filter ChainFilter) (ExecutionChainPage, error)
+	ListExecutionTreePage(ctx context.Context, filter ChainFilter) (ExecutionTreePage, error)
 	ListScheduleActionChains(ctx context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]ExecutionChain, error)
 }
 

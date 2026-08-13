@@ -2,6 +2,7 @@ package hubrecords
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -9,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"temporal-agents/internal/agenthub"
+	"temporal-agents/internal/agenthub/agenthubtest"
+	"temporal-agents/internal/agenthub/hubpg"
 	"temporal-agents/internal/execstore"
 	"temporal-agents/internal/execstore/execpg"
 	"temporal-agents/internal/pgtest"
@@ -87,6 +90,60 @@ func TestRecordedRunsProjectIntoARegistryClosedUnderAncestry(t *testing.T) {
 		require.True(t, registry.Contains(parent.ID()),
 			"%q hangs under a place the registry does not publish", location.ID())
 	}
+}
+
+func TestMoreThanOneThousandDismissalsDoNotHideOlderVisibleWork(t *testing.T) {
+	ctx := context.Background()
+	dsn := pgtest.NewDatabase(t)
+	executions, err := execpg.Open(ctx, dsn)
+	require.NoError(t, err)
+	t.Cleanup(executions.Close)
+	require.NoError(t, executions.Migrate(ctx))
+	dismissals, err := hubpg.Open(ctx, dsn)
+	require.NoError(t, err)
+	t.Cleanup(dismissals.Close)
+	require.NoError(t, dismissals.Migrate(ctx))
+
+	const dismissedCount = 1000
+	for i := 0; i < dismissedCount; i++ {
+		workflowID := fmt.Sprintf("run-dismissed-%04d", i)
+		startedAt := recordedAt.Add(-time.Duration(i) * time.Second)
+		endedAt := startedAt.Add(time.Second)
+		require.NoError(t, executions.SaveExecution(ctx, execstore.Execution{
+			WorkflowID: workflowID, RunID: workflowID + "-iteration", Kind: execstore.KindRun,
+			Prompt: "already reviewed", StartedAt: startedAt, EndedAt: endedAt,
+			Status: execstore.StatusSucceeded,
+		}))
+		run := agenthub.Run{
+			ID: workflowID, Type: agenthub.RunTypePrompt, Label: "already reviewed",
+			Status: agenthub.StatusDone, StartedAt: startedAt, EndedAt: endedAt, Iterations: 1,
+		}
+		_, err := dismissals.Dismiss(ctx, agenthub.Dismissal{
+			Viewer: agenthub.LocalViewerID, Kind: agenthub.KindRun, ItemID: workflowID,
+			StateRevision: run.StateRevision(), DismissedAt: recordedAt,
+		})
+		require.NoError(t, err)
+	}
+	visibleID := "run-visible"
+	require.NoError(t, executions.SaveExecution(ctx, execstore.Execution{
+		WorkflowID: visibleID, RunID: visibleID + "-iteration", Kind: execstore.KindRun,
+		Prompt: "still visible", StartedAt: recordedAt.Add(-2 * time.Hour),
+		EndedAt: recordedAt.Add(-2*time.Hour + time.Second), Status: execstore.StatusSucceeded,
+	}))
+
+	records, err := New(executions, executions)
+	require.NoError(t, err)
+	otherPorts := agenthubtest.New()
+	deps := otherPorts.Dependencies(recordedAt)
+	deps.Collections = records
+	deps.Dismissals = dismissals
+	service, err := agenthub.NewService(deps)
+	require.NoError(t, err)
+
+	runs, err := service.Runs(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	require.Equal(t, visibleID, runs[0].ID)
 }
 
 func TestAnIterationThatRecordedNoPlaceDoesNotEraseTheChainsPlace(t *testing.T) {

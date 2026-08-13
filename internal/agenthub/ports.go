@@ -199,6 +199,8 @@ type ChainQuery struct {
 	RequiredWorkflowIDs []string
 	ExcludedWorkflowIDs []string
 	Limit               int
+	// Cursor is the opaque stable position returned by the previous source page.
+	Cursor []byte
 }
 
 // ExecutionChain is one fully aggregated continue-as-new chain.
@@ -219,8 +221,8 @@ type FleetTree struct {
 // adapter selects resource identities before limits and aggregates every row that
 // belongs to those resources.
 type CollectionSource interface {
-	RunChains(ctx context.Context, query ChainQuery) ([]ExecutionChain, error)
-	FleetTrees(ctx context.Context, query ChainQuery) ([]FleetTree, error)
+	RunChainPage(ctx context.Context, query ChainQuery) (Page[ExecutionChain], error)
+	FleetTreePage(ctx context.Context, query ChainQuery) (Page[FleetTree], error)
 	ScheduleActionChains(ctx context.Context, scheduleIDs []string, perScheduleLimit int) (map[string][]ExecutionChain, error)
 }
 
