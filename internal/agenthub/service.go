@@ -17,11 +17,6 @@ import (
 // back in a moment" without parsing messages.
 var ErrUnavailable = errors.New("a dependency of the read path is unavailable")
 
-// ErrNotDismissible is returned when a dismissal is asked for an item that is
-// still active. Dismissing is view state over *finished* work, so the rule is
-// enforced here rather than trusted to the client that offers the affordance.
-var ErrNotDismissible = errors.New("only a finished item can be dismissed")
-
 // ErrStateChanged is returned when the item no longer has the state revision the
 // operator reviewed. The client-supplied revision is only a precondition: the
 // service always calculates the current revision before it writes a dismissal.
@@ -132,10 +127,8 @@ func NewService(deps Dependencies) (*Service, error) {
 	return &Service{deps: deps}, nil
 }
 
-// Fleets returns the fleet satellites, newest first: every running fleet plus
-// every finished fleet the operator has not dismissed. There is no time window —
-// a finished fleet stays until it is dismissed, so nothing disappears from the
-// overview on its own.
+// Fleets returns the visible fleet satellites, newest first. There is no time
+// window: a fleet stays visible until its current state is dismissed.
 func (s *Service) Fleets(ctx context.Context, limit int) ([]Fleet, error) {
 	return s.FleetsFor(ctx, LocalViewerID, limit)
 }
@@ -402,8 +395,8 @@ func (s *Service) Fleet(ctx context.Context, id string) (Fleet, error) {
 	return s.buildFleet(ctx, parents[0], tree, live, plans[id])
 }
 
-// Runs returns the independently represented run satellites, newest first: every
-// running chain plus every finished chain the operator has not dismissed.
+// Runs returns the visible independently represented run satellites, newest
+// first. A dismissed chain appears again when its state changes.
 //
 // A chain that has continued as new any number of times is one satellite, keyed by
 // its workflow ID and showing its latest iteration's status. A run fired by a
@@ -697,12 +690,9 @@ func (s *Service) DismissalsFor(ctx context.Context, viewer ViewerID) ([]Dismiss
 	return dismissals, nil
 }
 
-// Dismiss hides a finished item from the overview and returns the dismissal it
-// recorded. It refuses an unknown item (ErrNotFound) and an item that is still
-// active (ErrNotDismissible): the rule that only finished work can be hidden is
-// the server's to enforce, not the client's to remember.
-//
-// Dismissing an already-dismissed item succeeds and reports the dismissal, so a
+// Dismiss hides one exact fleet or run state from the overview and returns the
+// dismissal it recorded. It refuses unknown work and stale state revisions.
+// Dismissing an already-dismissed state succeeds and reports the dismissal, so a
 // client that retries a lost response is not punished for it.
 func (s *Service) Dismiss(ctx context.Context, kind ItemKind, itemID, expectedRevision string) (Dismissal, error) {
 	return s.DismissFor(ctx, LocalViewerID, kind, itemID, expectedRevision)
@@ -716,15 +706,12 @@ func (s *Service) DismissFor(ctx context.Context, viewer ViewerID, kind ItemKind
 	if expectedRevision == "" {
 		return Dismissal{}, fmt.Errorf("%w: stateRevision is required", ErrInvalid)
 	}
-	dismissible, revision, err := s.dismissible(ctx, kind, itemID)
+	revision, err := s.currentStateRevision(ctx, kind, itemID)
 	if err != nil {
 		return Dismissal{}, err
 	}
 	if revision != expectedRevision {
 		return Dismissal{}, ErrStateChanged
-	}
-	if !dismissible {
-		return Dismissal{}, ErrNotDismissible
 	}
 	dismissal := Dismissal{
 		Viewer: viewer, Kind: kind, ItemID: itemID, StateRevision: revision,
@@ -758,26 +745,24 @@ func (s *Service) UndismissFor(ctx context.Context, viewer ViewerID, kind ItemKi
 	return nil
 }
 
-// dismissible reports whether the item exists and has finished. A dismissed item
-// is still dismissible: the check reads the item's own status, which dismissal
-// does not change.
-func (s *Service) dismissible(ctx context.Context, kind ItemKind, itemID string) (bool, string, error) {
+// currentStateRevision resolves the exact observable state a dismissal will hide.
+func (s *Service) currentStateRevision(ctx context.Context, kind ItemKind, itemID string) (string, error) {
 	switch kind {
 	case KindFleet:
 		fleet, err := s.Fleet(ctx, itemID)
 		if err != nil {
-			return false, "", err
+			return "", err
 		}
-		return fleet.Dismissible(), fleet.StateRevision(), nil
+		return fleet.StateRevision(), nil
 	case KindRun:
 		run, err := s.Run(ctx, itemID)
 		if err != nil {
-			return false, "", err
+			return "", err
 		}
-		return run.Dismissible(), run.StateRevision(), nil
+		return run.StateRevision(), nil
 	default:
 		// ValidateDismissalTarget has already refused every other kind.
-		return false, "", ErrNotDismissible
+		return "", fmt.Errorf("%w: item kind %q cannot be dismissed", ErrInvalid, kind)
 	}
 }
 

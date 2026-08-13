@@ -3,6 +3,7 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import { fireEvent } from "@testing-library/dom";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { SettingsPage } from "./SettingsPage";
+import { ThemeProvider } from "../../platform/theme";
 import { aDirectoryPlace, FakeApi } from "../../test/fake-api";
 
 // Registering a place is the operator's way of saying "you may work here" before
@@ -19,6 +20,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   api.restore();
+  document.documentElement.removeAttribute("data-theme");
 });
 
 /** Opens the places category and waits for the first read to land. */
@@ -53,6 +55,25 @@ it("shows one selected settings category at a time", () => {
   expect(screen.getByRole("heading", { name: "Instructions" })).toBeTruthy();
   expect(screen.queryByRole("heading", { name: "Places" })).toBeNull();
   expect(screen.queryByText("Reading the places…")).toBeNull();
+});
+
+it("lets the operator choose the interface color theme", () => {
+  render(
+    <ThemeProvider>
+      <SettingsPage category="appearance" />
+    </ThemeProvider>,
+  );
+
+  expect((screen.getByRole("radio", { name: "System" }) as HTMLInputElement).checked).toBe(
+    true,
+  );
+
+  fireEvent.click(screen.getByRole("radio", { name: "Dark" }));
+
+  expect(document.documentElement.dataset.theme).toBe("dark");
+  expect((screen.getByRole("radio", { name: "Dark" }) as HTMLInputElement).checked).toBe(
+    true,
+  );
 });
 
 it("says no place is known, and offers to register one", async () => {

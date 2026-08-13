@@ -246,9 +246,10 @@ run, and a start into a place something is already running in is refused naming 
 work in the way, because two loops in one working tree commit over each other.
 
 The server joins live Temporal state with the durable execution and plan record.
-Finished items remain visible until dismissed. A dismissal is Postgres-backed,
-user-specific view state and never changes workflow state. It acknowledges only the
-state the user reviewed: any later change makes the item visible again. Continue-as-new
+Fleet and run items remain visible until their current state is dismissed. A dismissal
+is Postgres-backed, user-specific view state and never changes workflow state.
+Schedules cannot be dismissed. A dismissal acknowledges only the state the user
+reviewed: any later change makes the item visible again. Continue-as-new
 iterations are one run resource identified by workflow ID, and a new iteration changes
 that resource's state.
 
@@ -317,7 +318,7 @@ every node it depends on has been both developed and reviewed.
 ## Tests
 
 ```sh
-make test   # every test, integration suites included
+make test   # web unit, Storybook browser, and Go integration suites
 ```
 
 The `execstore` and Agent Hub dismissal adapters are tested against a real
@@ -330,8 +331,11 @@ so it needs a running Docker daemon but no setup and no environment variable —
 it never touches the `temporal_agents` database you work in. Each test gets a fresh
 database inside the container, so no test can see another's rows.
 
-The target runs `go test -race -shuffle=on ./...`, which is exactly what CI runs, so
-a green run locally means what a green run in CI means.
+The target installs the locked web dependencies, runs the shuffled web unit
+suite and browser-based Storybook suite, then runs
+`go test -race -shuffle=on ./...`. It is the same complete test command used by
+CI and the versioned pre-push hook, so a green run locally means what a green
+run in CI means. Enable versioned hooks once with `make setup`.
 
 ## Docker
 

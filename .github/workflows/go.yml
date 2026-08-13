@@ -29,6 +29,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The Go HTTP API browser test builds and loads the web application.
+      # Set up its package manager and browser before the all-suite test target.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: web/package.json
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -56,4 +70,6 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test -race -shuffle=on ./...
+        env:
+          PLAYWRIGHT_INSTALL_ARGS: --with-deps chromium
+        run: make test

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Run the complete CI test suite before publishing commits.
+set -eu
+
+make test

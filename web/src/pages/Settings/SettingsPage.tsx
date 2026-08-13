@@ -7,12 +7,15 @@ import {
 } from "../../clients/places";
 import { ApiError } from "../../clients/http";
 import { PlaceMark } from "../../components/PlaceMark";
+import { type ThemePreference } from "../../domain/theme";
 import {
   addressOf,
   SETTINGS,
+  SETTINGS_APPEARANCE,
   SETTINGS_PLACES,
   type SettingsCategory,
 } from "../../platform/route";
+import { useTheme } from "../../platform/theme";
 import { PromptConfiguration } from "./PromptConfiguration";
 import "./settings.css";
 
@@ -29,8 +32,8 @@ export function SettingsPage({
           <p className="ui-eyebrow">Hub configuration</p>
           <h1>Settings</h1>
           <p>
-            Control where this hub can work and how its agents receive governed
-            instructions.
+            Control where this hub can work, how its agents receive governed
+            instructions, and how the interface appears.
           </p>
         </header>
 
@@ -42,6 +45,12 @@ export function SettingsPage({
             Instructions
           </a>
           <a
+            href={addressOf(SETTINGS_APPEARANCE)}
+            aria-current={category === "appearance" ? "page" : undefined}
+          >
+            Appearance
+          </a>
+          <a
             href={addressOf(SETTINGS_PLACES)}
             aria-current={category === "places" ? "page" : undefined}
           >
@@ -49,9 +58,92 @@ export function SettingsPage({
           </a>
         </nav>
 
-        {category === "instructions" ? <PromptConfiguration /> : <Places />}
+        {category === "instructions" ? (
+          <PromptConfiguration />
+        ) : category === "appearance" ? (
+          <Appearance />
+        ) : (
+          <Places />
+        )}
       </div>
     </main>
+  );
+}
+
+/** Selects the source of the color theme applied to this browser. */
+export function Appearance(): ReactNode {
+  const { preference, setPreference } = useTheme();
+  return (
+    <section className="settings-section ui-surface" aria-labelledby="appearance-heading">
+      <header className="settings-section__header">
+        <div>
+          <p className="ui-kicker">Interface preference</p>
+          <h2 id="appearance-heading">Appearance</h2>
+          <p>Choose a fixed theme or keep the hub synchronized with this device.</p>
+        </div>
+      </header>
+      <div className="settings-section__body">
+        <fieldset className="settings-theme">
+          <legend>Color theme</legend>
+          <p>The system option changes when the operating system preference changes.</p>
+          <div className="settings-theme__options">
+            <ThemeOption
+              preference={preference}
+              value="system"
+              label="System"
+              description="Match the operating system preference."
+              onChange={setPreference}
+            />
+            <ThemeOption
+              preference={preference}
+              value="light"
+              label="Light"
+              description="Always use the light interface."
+              onChange={setPreference}
+            />
+            <ThemeOption
+              preference={preference}
+              value="dark"
+              label="Dark"
+              description="Always use the dark interface."
+              onChange={setPreference}
+            />
+          </div>
+        </fieldset>
+      </div>
+    </section>
+  );
+}
+
+function ThemeOption({
+  preference,
+  value,
+  label,
+  description,
+  onChange,
+}: {
+  preference: ThemePreference;
+  value: ThemePreference;
+  label: string;
+  description: string;
+  onChange: (preference: ThemePreference) => void;
+}): ReactNode {
+  return (
+    <label className="settings-theme__option" data-selected={preference === value || undefined}>
+      <input
+        type="radio"
+        name="theme"
+        value={value}
+        checked={preference === value}
+        aria-label={label}
+        aria-describedby={`theme-${value}-description`}
+        onChange={() => onChange(value)}
+      />
+      <span>
+        <strong>{label}</strong>
+        <small id={`theme-${value}-description`}>{description}</small>
+      </span>
+    </label>
   );
 }
 

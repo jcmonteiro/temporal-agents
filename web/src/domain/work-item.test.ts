@@ -27,7 +27,7 @@ describe("dismissible work items", () => {
     id: "work-1",
     kind: "run",
     label: "Reviewed work",
-    status: "done",
+    status: "in-progress",
     icon: "document",
     placeId: "unknown",
     dismissible: true,
@@ -39,7 +39,7 @@ describe("dismissible work items", () => {
     expect(isDismissibleWorkItem({ ...item, kind: "fleet" })).toBe(true);
   });
 
-  it("refuses schedules, missing revisions, and ineligible items", () => {
+  it("refuses schedules, missing revisions, and items the API excludes", () => {
     expect(isDismissibleWorkItem({ ...item, kind: "schedule" })).toBe(false);
     expect(isDismissibleWorkItem({ ...item, stateRevision: undefined })).toBe(false);
     expect(isDismissibleWorkItem({ ...item, dismissible: false })).toBe(false);

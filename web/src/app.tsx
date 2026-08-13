@@ -5,12 +5,15 @@ import { SessionUnavailablePage, SignInPage } from "./pages/SignIn/SignInPage";
 import { Router } from "./router";
 import { SessionProvider, useSession } from "./platform/session";
 import { SteeringProvider } from "./platform/steering";
+import { ThemeProvider } from "./platform/theme";
 
 export function App(): ReactNode {
   return (
-    <SessionProvider>
-      <Shell />
-    </SessionProvider>
+    <ThemeProvider>
+      <SessionProvider>
+        <Shell />
+      </SessionProvider>
+    </ThemeProvider>
   );
 }
 

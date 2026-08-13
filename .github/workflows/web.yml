@@ -49,14 +49,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Test
-        run: pnpm test
-
-      - name: Install Storybook browser
-        run: pnpm exec playwright install --with-deps chromium
-
-      - name: Test Storybook
-        run: pnpm test:storybook
+      # Tests run centrally through `make test` in the Go workflow, including
+      # the browser-based Storybook suite and the Go HTTP API browser test.
 
       - name: Build
         run: pnpm build

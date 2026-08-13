@@ -5,7 +5,6 @@ import "./styles/global.css";
 import "./styles/foundations.css";
 import { App } from "./app";
 
-document.documentElement.setAttribute("data-theme", "light");
 
 const container = document.getElementById("root");
 if (!container) throw new Error("Root container missing");

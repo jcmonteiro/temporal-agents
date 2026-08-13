@@ -1,6 +1,8 @@
 #!/bin/sh
-# Format staged Go files with gofmt before committing.
-set -e
+# Check staged TypeScript and TSX files, then format staged Go files.
+set -eu
+
+pnpm --dir web exec lint-staged
 
 # Collect staged Go files (added/copied/modified), skipping deletions.
 files=$(git diff --cached --name-only --diff-filter=ACM -- '*.go')

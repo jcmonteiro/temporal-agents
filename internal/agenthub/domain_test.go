@@ -343,14 +343,19 @@ func TestValidateLimit(t *testing.T) {
 	}
 }
 
-// TestTerminalStatuses pins which statuses end an item's life, since that is what
-// decides whether it can be dismissed.
+// TestTerminalStatuses pins which statuses end an item's life.
 func TestTerminalStatuses(t *testing.T) {
 	terminal := map[WorkStatus]bool{StatusDone: true, StatusFailed: true}
 	for _, status := range WorkStatuses() {
 		if got := status.Terminal(); got != terminal[status] {
 			t.Errorf("%q.Terminal() = %v, want %v", status, got, terminal[status])
 		}
+	}
+	if !(Fleet{Running: true, Status: StatusInProgress}).Dismissible() {
+		t.Error("an active fleet must be dismissible at its current state")
+	}
+	if !(Run{Running: true, Status: StatusInProgress}).Dismissible() {
+		t.Error("an active run must be dismissible at its current state")
 	}
 	if (Schedule{Status: StatusDone}).Dismissible() {
 		t.Error("a schedule must never be dismissible")

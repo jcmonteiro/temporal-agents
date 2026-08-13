@@ -338,15 +338,14 @@ type scheduleResource struct {
 	// NextRunAt is when it fires next, or null when it is paused or has no further
 	// action.
 	NextRunAt *string `json:"nextRunAt"`
-	// Dismissible is always false: a schedule has no finished state, so hiding it
-	// would hide live configuration.
+	// Dismissible is always false: schedules are excluded from dismissal.
 	Dismissible bool `json:"dismissible"`
 	// LocationID references the place the runs it fires run.
 	LocationID string `json:"locationId"`
 }
 
-// dismissalResource is one dismissal: the operator's view state over a finished
-// item.
+// dismissalResource is one dismissal: the operator's view state over an exact
+// item state.
 type dismissalResource struct {
 	// ID is the dismissal's own identifier, "<kind>:<itemId>", and the last path
 	// segment of its resource.
