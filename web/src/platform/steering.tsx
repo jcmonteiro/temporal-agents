@@ -1,3 +1,5 @@
+import DOMPurify from "dompurify";
+import { marked } from "marked";
 import {
   createContext,
   useContext,
@@ -110,6 +112,14 @@ export function SteeringProvider({ children }: { children: ReactNode }): ReactNo
 
 export function useSteering(): SteeringContextValue {
   return useContext(SteeringContext);
+}
+
+function AgentResponse({ text }: { text: string }): ReactNode {
+  const html = useMemo(
+    () => DOMPurify.sanitize(marked.parse(text, { async: false })),
+    [text],
+  );
+  return <div className="steering-message__markdown" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 function SteeringModal({
@@ -403,9 +413,11 @@ function SteeringModal({
                         {messages.map((message) => (
                           <li className={`steering-message steering-message--${message.role}`} key={message.sequence}>
                             <span className="steering-message__author">
-                              {message.role === "agent" ? "Questioning agent" : message.author ?? "Operator"}
+                              {message.role === "agent" ? "Questioning agent" : "Operator"}
                             </span>
-                            <p>{message.text}</p>
+                            {message.role === "agent"
+                              ? <AgentResponse text={message.text} />
+                              : <p>{message.text}</p>}
                             {message.role === "agent" && (
                               <button
                                 className="steering-message__use"
@@ -424,7 +436,9 @@ function SteeringModal({
                     )}
                     <div className="steering-conversation__meta">
                       <span>{session.tokens ?? 0} questioning tokens</span>
-                      <span>Contributors: {(session.contributors ?? []).join(", ") || "none yet"}</span>
+                      <span>
+                        Contributors: {session.contributors?.length ?? 0}
+                      </span>
                     </div>
                   </section>
 
@@ -440,6 +454,11 @@ function SteeringModal({
                           value={answer}
                           placeholder="Ask for one detail…"
                           onChange={(event) => setAnswer(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+                            event.preventDefault();
+                            void question();
+                          }}
                         />
                       </label>
                       <button

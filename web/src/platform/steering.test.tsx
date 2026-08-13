@@ -232,3 +232,60 @@ it("records clarification turns and can use an answer as draft guidance", async 
     .toBe("Which callers need the cause?");
   expect(api.steeringDecisions).toBe(0);
 });
+
+it("sends a clarification question when Enter is pressed", async () => {
+  const dialog = await openModal();
+  fireEvent.click(within(dialog).getByRole("button", { name: "Build with guidance" }));
+  const question = within(dialog).getByLabelText("Question for the questioning agent");
+  fireEvent.change(question, { target: { value: "Which callers need the cause?" } });
+
+  await act(async () => {
+    fireEvent.keyDown(question, { key: "Enter", code: "Enter" });
+  });
+
+  const conversation = within(dialog).getByRole("region", { name: "Questioning conversation" });
+  expect(conversation.textContent).toContain("Which callers need the cause?");
+  expect((question as HTMLInputElement).value).toBe("");
+});
+
+it("labels operator turns without exposing the principal identifier", async () => {
+  api.steeringSessions["steering-review-1"] = aSteeringSession({
+    contributors: [
+      "http://localhost:15556/dex|CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjYSBWxvY2Fs",
+    ],
+    messages: [{
+      sequence: 1,
+      role: "operator",
+      author: "http://localhost:15556/dex|CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjYSBWxvY2Fs",
+      text: "Is point 4 really necessary?",
+      at: "2026-08-06T12:00:00Z",
+    }],
+  });
+  const dialog = await openModal();
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Build with guidance" }));
+
+  const conversation = within(dialog).getByRole("region", { name: "Questioning conversation" });
+  expect(conversation.textContent).toContain("Operator");
+  expect(conversation.textContent).toContain("Is point 4 really necessary?");
+  expect(conversation.textContent).not.toContain("http://localhost:15556/dex");
+});
+
+it("renders agent clarification responses as Markdown", async () => {
+  api.steeringSessions["steering-review-1"] = aSteeringSession({
+    messages: [{
+      sequence: 1,
+      role: "agent",
+      text: "**Affected callers:**\n\n- Checkout API\n- Audit log\n\n<a href=\"javascript:alert('unsafe')\">Unsafe link</a>",
+      at: "2026-08-06T12:00:01Z",
+    }],
+  });
+  const dialog = await openModal();
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Build with guidance" }));
+
+  const conversation = within(dialog).getByRole("region", { name: "Questioning conversation" });
+  expect(within(conversation).getByText("Affected callers:").tagName).toBe("STRONG");
+  expect(within(conversation).getByText("Checkout API").closest("ul")?.children).toHaveLength(2);
+  expect(within(conversation).getByText("Unsafe link").getAttribute("href")).toBeNull();
+});
