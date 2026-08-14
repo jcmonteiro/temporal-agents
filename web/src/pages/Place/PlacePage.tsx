@@ -69,13 +69,7 @@ export function PlacePage({
 
   return (
     <main className="place-page">
-      <div
-        className={
-          category === "overview"
-            ? "place-page__frame"
-            : "place-page__frame place-page__frame--wide"
-        }
-      >
+      <div className="place-page__frame">
         <PlaceBreadcrumb view={view} />
 
         <div className="place-page__primary">
@@ -119,38 +113,41 @@ export function PlacePage({
               placesHere={view.children}
               items={view.items}
               selected={selectedId}
+              selectedItem={selected}
               onSelect={(item) => setSelectedId({ kind: item.kind, id: item.id })}
             />
           )}
         </div>
-
-        {category === "overview" && (
-          <aside
-            className="place-selection ui-surface"
-            aria-labelledby="place-selection-heading"
-          >
-            <header className="place-selection__header">
-              <div>
-                <p className="ui-kicker">Inspection rail</p>
-                <h2 id="place-selection-heading">Selected</h2>
-              </div>
-              {selected !== null && <span className="place-selection__active">Active</span>}
-            </header>
-            <div className="place-selection__body">
-              {selected ? (
-                <WorkItemDetail item={selected} />
-              ) : (
-                <div className="place-selection__empty">
-                  <span className="place-selection__orbit" aria-hidden="true" />
-                  <strong>No work selected</strong>
-                  <span>Select a piece of work to see its details.</span>
-                </div>
-              )}
-            </div>
-          </aside>
-        )}
       </div>
     </main>
+  );
+}
+
+function InspectionRail({ selected }: { selected: WorkItem | null }): ReactNode {
+  return (
+    <aside
+      className="place-selection ui-surface"
+      aria-labelledby="place-selection-heading"
+    >
+      <header className="place-selection__header">
+        <div>
+          <p className="ui-kicker">Inspection rail</p>
+          <h2 id="place-selection-heading">Selected</h2>
+        </div>
+        {selected !== null && <span className="place-selection__active">Active</span>}
+      </header>
+      <div className="place-selection__body">
+        {selected ? (
+          <WorkItemDetail item={selected} />
+        ) : (
+          <div className="place-selection__empty">
+            <span className="place-selection__orbit" aria-hidden="true" />
+            <strong>No work selected</strong>
+            <span>Select a piece of work to see its details.</span>
+          </div>
+        )}
+      </div>
+    </aside>
   );
 }
 
@@ -221,6 +218,7 @@ function PlaceReport({
   placesHere,
   items,
   selected,
+  selectedItem,
   onSelect,
 }: {
   place: Place;
@@ -228,6 +226,7 @@ function PlaceReport({
   placesHere: Place[];
   items: WorkItem[];
   selected: WorkItemId | null;
+  selectedItem: WorkItem | null;
   onSelect: (item: WorkItem) => void;
 }): ReactNode {
   const location = place.directory ?? place.ref ?? "Where this work ran was not recorded";
@@ -285,82 +284,85 @@ function PlaceReport({
       </nav>
 
       {category === "overview" && (
-        <div className="place-report__overview">
-          <section
-            className="place-section place-section--hierarchy ui-surface"
-            aria-labelledby="places-here-heading"
-          >
-            <header className="place-section__header">
-              <div>
-                <p className="ui-kicker">Hierarchy</p>
-                <h2 id="places-here-heading">Places here</h2>
-              </div>
-              <span className="place-section__count">{placesHere.length}</span>
-            </header>
-            <div className="place-section__body">
-              {placesHere.length === 0 ? (
-                <div className="place-empty">
-                  <strong>No nested places</strong>
-                  <span>This is the last known place in this branch.</span>
+        <div className="place-report__overview-layout">
+          <div className="place-report__overview">
+            <section
+              className="place-section place-section--hierarchy ui-surface"
+              aria-labelledby="places-here-heading"
+            >
+              <header className="place-section__header">
+                <div>
+                  <p className="ui-kicker">Hierarchy</p>
+                  <h2 id="places-here-heading">Places here</h2>
                 </div>
-              ) : (
-                <ul className="place-children">
-                  {placesHere.map((child) => (
-                    <li key={child.id}>
-                      <a
-                        href={addressOf({
-                          name: "place",
-                          placeId: child.id,
-                          category: "overview",
-                        })}
-                        aria-label={child.label}
-                      >
-                        <span className="place-children__mark" aria-hidden="true" />
-                        <span>
-                          <strong>{child.label}</strong>
-                          <small>{child.directory ?? child.ref ?? child.kind}</small>
-                        </span>
-                        <span aria-hidden="true">→</span>
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </section>
+                <span className="place-section__count">{placesHere.length}</span>
+              </header>
+              <div className="place-section__body">
+                {placesHere.length === 0 ? (
+                  <div className="place-empty">
+                    <strong>No nested places</strong>
+                    <span>This is the last known place in this branch.</span>
+                  </div>
+                ) : (
+                  <ul className="place-children">
+                    {placesHere.map((child) => (
+                      <li key={child.id}>
+                        <a
+                          href={addressOf({
+                            name: "place",
+                            placeId: child.id,
+                            category: "overview",
+                          })}
+                          aria-label={child.label}
+                        >
+                          <span className="place-children__mark" aria-hidden="true" />
+                          <span>
+                            <strong>{child.label}</strong>
+                            <small>{child.directory ?? child.ref ?? child.kind}</small>
+                          </span>
+                          <span aria-hidden="true">→</span>
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </section>
 
-          <section
-            className="place-section place-section--work ui-surface"
-            aria-labelledby="work-here-heading"
-          >
-            <header className="place-section__header">
-              <div>
-                <p className="ui-kicker">Current activity</p>
-                <h2 id="work-here-heading">Work here</h2>
-              </div>
-              <span className="place-section__count">{items.length}</span>
-            </header>
-            <div className="place-section__body place-work">
-              {items.length === 0 ? (
-                <div className="place-empty">
-                  <strong>This place is idle</strong>
-                  <span>Nothing runs here at the moment.</span>
+            <section
+              className="place-section place-section--work ui-surface"
+              aria-labelledby="work-here-heading"
+            >
+              <header className="place-section__header">
+                <div>
+                  <p className="ui-kicker">Current activity</p>
+                  <h2 id="work-here-heading">Work here</h2>
                 </div>
-              ) : (
-                STATUS_ORDER.filter((status) =>
-                  items.some((item) => item.status === status),
-                ).map((status) => (
-                  <WorkOfStatus
-                    key={status}
-                    status={status}
-                    items={items.filter((item) => item.status === status)}
-                    selected={selected}
-                    onSelect={onSelect}
-                  />
-                ))
-              )}
-            </div>
-          </section>
+                <span className="place-section__count">{items.length}</span>
+              </header>
+              <div className="place-section__body place-work">
+                {items.length === 0 ? (
+                  <div className="place-empty">
+                    <strong>This place is idle</strong>
+                    <span>Nothing runs here at the moment.</span>
+                  </div>
+                ) : (
+                  STATUS_ORDER.filter((status) =>
+                    items.some((item) => item.status === status),
+                  ).map((status) => (
+                    <WorkOfStatus
+                      key={status}
+                      status={status}
+                      items={items.filter((item) => item.status === status)}
+                      selected={selected}
+                      onSelect={onSelect}
+                    />
+                  ))
+                )}
+              </div>
+            </section>
+          </div>
+          <InspectionRail selected={selectedItem} />
         </div>
       )}
 

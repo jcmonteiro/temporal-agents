@@ -197,8 +197,28 @@ const activeStory = {
 } satisfies Pick<Story, "play">;
 
 export const ActiveWideLight: Story = {
-  ...activeStory,
   globals: { theme: "light" },
+  play: async ({ canvasElement }) => {
+    await showsActivePlace(canvasElement);
+
+    const page = canvasElement.querySelector<HTMLElement>(".place-page");
+    const hero = canvasElement.querySelector<HTMLElement>(".place-hero");
+    const categories = within(canvasElement).getByRole("navigation", {
+      name: "Place categories",
+    });
+    const inspection = within(canvasElement).getByRole("complementary");
+    if (page === null || hero === null) throw new Error("Place layout missing");
+
+    const heroBounds = hero.getBoundingClientRect();
+    const categoryBounds = categories.getBoundingClientRect();
+    const inspectionBounds = inspection.getBoundingClientRect();
+    await expect(getComputedStyle(page).backgroundImage).toBe("none");
+    await expect(getComputedStyle(categories).position).toBe("sticky");
+    await expect(Math.abs(categoryBounds.left - heroBounds.left)).toBeLessThanOrEqual(1);
+    await expect(Math.abs(categoryBounds.right - heroBounds.right)).toBeLessThanOrEqual(1);
+    await expect(inspectionBounds.top).toBeGreaterThanOrEqual(categoryBounds.bottom);
+    await expect(Math.abs(inspectionBounds.right - heroBounds.right)).toBeLessThanOrEqual(1);
+  },
 };
 
 export const ActiveWideDark: Story = {

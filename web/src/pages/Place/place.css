@@ -5,24 +5,17 @@
   overflow-x: hidden;
   overflow-y: auto;
   color: var(--color-text);
-  background:
-    radial-gradient(circle at 92% 3%, var(--color-accent-soft), transparent 30rem),
-    var(--color-bg);
+  background: var(--color-bg);
 }
 
 .place-page__frame {
   display: grid;
   width: min(100%, calc(var(--content-width-wide) + 300px));
   min-width: 0;
-  grid-template-columns: minmax(0, 1fr) 280px;
   align-items: start;
   gap: var(--space-5);
   margin-inline: auto;
   padding: clamp(var(--space-5), 4vw, var(--space-7));
-}
-
-.place-page__frame--wide {
-  grid-template-columns: minmax(0, 1fr);
 }
 
 .place-page__breadcrumb {
@@ -68,13 +61,14 @@
 
 .place-page__primary,
 .place-report {
-  display: contents;
+  display: grid;
+  min-width: 0;
+  gap: var(--space-5);
 }
 
 .place-page__primary > *,
 .place-report > * {
   min-width: 0;
-  grid-column: 1;
 }
 
 .place-page__feedback {
@@ -230,6 +224,14 @@
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
   text-transform: capitalize;
+}
+
+.place-report__overview-layout {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  align-items: start;
+  gap: var(--space-5);
 }
 
 .place-report__overview {
@@ -412,10 +414,8 @@
 
 .place-selection {
   position: sticky;
-  top: var(--space-5);
+  top: calc(48px + var(--space-5));
   min-width: 0;
-  grid-column: 2;
-  grid-row: 2 / span 6;
   overflow: hidden;
 }
 
@@ -741,35 +741,12 @@
 }
 
 @container (max-width: 980px) {
-  .place-page__frame {
+  .place-report__overview-layout {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .place-selection {
     position: static;
-    grid-column: 1;
-    grid-row: auto;
-    order: 5;
-  }
-
-  .place-hero,
-  .place-state,
-  .place-page__feedback {
-    order: 1;
-  }
-
-  .place-guidance {
-    order: 2;
-  }
-
-  .place-report > .ui-category-nav {
-    order: 3;
-  }
-
-  .place-report__overview,
-  .place-launcher,
-  .place-report > .prompt-configuration {
-    order: 4;
   }
 
   .place-selection__body {
