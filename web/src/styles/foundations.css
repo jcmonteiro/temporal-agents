@@ -36,8 +36,11 @@
   top: 0;
   display: flex;
   min-width: 0;
-  overflow: hidden;
+  min-height: 48px;
   border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg);
+  box-shadow: 0 0 0 100vmax var(--color-bg);
+  clip-path: inset(0 -100vmax);
 }
 
 .ui-category-nav a {
@@ -59,9 +62,10 @@
 .ui-category-nav a::after {
   position: absolute;
   right: var(--space-4);
-  bottom: -1px;
+  bottom: 5px;
   left: var(--space-4);
-  height: 2px;
+  height: 3px;
+  border-radius: var(--radius-full);
   background: transparent;
   content: "";
 }
@@ -77,6 +81,19 @@
 
 .ui-category-nav a[aria-current="page"]::after {
   background: var(--color-accent);
+}
+
+@media (max-width: 600px) {
+  .ui-category-nav {
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+  }
+
+  .ui-category-nav::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 .ui-button {

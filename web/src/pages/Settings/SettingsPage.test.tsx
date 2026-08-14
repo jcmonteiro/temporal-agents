@@ -55,6 +55,7 @@ it("shows one selected settings category at a time", () => {
   expect(screen.getByRole("heading", { name: "Instructions" })).toBeTruthy();
   expect(screen.queryByRole("heading", { name: "Places" })).toBeNull();
   expect(screen.queryByText("Reading the places…")).toBeNull();
+  expect(screen.queryByLabelText("Sticky navigation style")).toBeNull();
 });
 
 it("lets the operator choose the interface color theme", () => {

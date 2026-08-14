@@ -5,9 +5,7 @@
   overflow-x: hidden;
   overflow-y: auto;
   color: var(--color-text);
-  background:
-    radial-gradient(circle at 92% 0%, var(--color-accent-soft), transparent 28rem),
-    var(--color-bg);
+  background: var(--color-bg);
 }
 
 .settings-page__content {
@@ -262,7 +260,7 @@
 
 .prompt-navigation {
   position: sticky;
-  top: 0;
+  top: calc(48px + var(--space-4));
   min-width: 0;
 }
 

@@ -144,8 +144,19 @@ const configuredStory = {
 } satisfies Pick<Story, "play">;
 
 export const WideLight: Story = {
-  ...configuredStory,
   globals: { theme: "light" },
+  play: async ({ canvasElement }) => {
+    await showsConfiguredInteraction(canvasElement);
+
+    const page = canvasElement.querySelector<HTMLElement>(".settings-page");
+    if (page === null) throw new Error("Settings page missing");
+    await expect(getComputedStyle(page).backgroundImage).toBe("none");
+    await expect(
+      getComputedStyle(
+        within(canvasElement).getByRole("navigation", { name: "Settings categories" }),
+      ).position,
+    ).toBe("sticky");
+  },
 };
 
 export const WideDark: Story = {
