@@ -12,6 +12,7 @@ type Scenario =
   | "pending"
   | "error"
   | "long"
+  | "markdown"
   | "pass-limit";
 
 function OpenWaitingRound(): ReactNode {
@@ -73,6 +74,7 @@ function configureApi(api: FakeApi, scenario: Scenario): void {
   const initial = scenario === "initial";
   const passLimit = scenario === "pass-limit";
   const long = scenario === "long";
+  const markdown = scenario === "markdown";
   const session = aSteeringSession({
     itemId: "review-4fe4171d-485d-5f31-914e-d7d3d8938304",
     round: passLimit ? "pass-limit" : "local-review",
@@ -81,7 +83,27 @@ function configureApi(api: FakeApi, scenario: Scenario): void {
       ? "The review loop used its pass budget. Accumulated token cost: 12,480."
       : long
         ? "The retry path hides the first provider refusal when several transports fail. The decision must preserve the original cause for the checkout API, audit log, delayed callback reconciler, and support diagnostics while retaining the bounded retry policy."
-        : "The retry hides the original error and drops the cause returned by the payment provider.",
+        : markdown
+          ? [
+              "Result: Review completed against `origin/main` (`80cc3eb`).",
+              "",
+              "🔴 Critical issues",
+              "",
+              "1. **Model provenance is resolved but discarded from durable execution history**",
+              "",
+              "   **References:** `internal/instruction/resolve.go:63–77`, `internal/codereview/recording.go:455–469`",
+              "",
+              "   ModelValue contains the model selector's scope, version, and hash, but instruction uses persist only the prompt version. A review or pilot run cannot answer which configured model produced it.",
+              "",
+              "   **Suggested solution:** Persist model provenance with each instruction use and project it through hub records and the API.",
+              "",
+              "   ```go",
+              "   type InstructionUse struct {",
+              "       Key string `json:\"key\"`",
+              "   }",
+              "   ```",
+            ].join("\n")
+          : "The retry hides the original error and drops the cause returned by the payment provider.",
     guidance: initial || passLimit ? "" : "Keep the retry, but preserve the original cause.",
     tokens: passLimit ? 12_480 : long ? 4_892 : initial ? 0 : 640,
     contributors: initial || passLimit
@@ -144,6 +166,16 @@ export const InitialWideLight: Story = {
     await expect(modal.findByRole("button", { name: "Build with guidance" })).resolves.toBeEnabled();
     await expect(modal.getByRole("button", { name: "Maximize review outcome" })).toBeEnabled();
     await expect(modal.queryByText("No questions asked yet.")).not.toBeInTheDocument();
+  },
+};
+
+export const MarkdownReviewMaterial: Story = {
+  globals: { theme: "light" },
+  parameters: { steeringScenario: "markdown" },
+  play: async ({ canvasElement }) => {
+    const dialog = await findDialog(canvasElement);
+    const material = await within(dialog).findByText("Model provenance is resolved but discarded from durable execution history");
+    await expect(material.tagName).toBe("STRONG");
   },
 };
 

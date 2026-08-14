@@ -20,10 +20,12 @@ export function SafeMarkdown({
   text,
   className,
   id,
+  tabIndex,
 }: {
   text: string;
   className?: string;
   id?: string;
+  tabIndex?: number;
 }): ReactNode {
   const html = useMemo(
     () => DOMPurify.sanitize(marked.parse(text, { async: false }), {
@@ -34,5 +36,5 @@ export function SafeMarkdown({
     }),
     [text],
   );
-  return <div id={id} className={className} dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div id={id} className={className} tabIndex={tabIndex} dangerouslySetInnerHTML={{ __html: html }} />;
 }

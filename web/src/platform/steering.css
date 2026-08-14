@@ -315,7 +315,7 @@
   font-size: var(--font-size-sm);
   line-height: var(--line-height-body);
   overflow-wrap: anywhere;
-  white-space: pre-wrap;
+  white-space: normal;
 }
 
 .steering-modal__body--material-expanded {
@@ -473,7 +473,7 @@
   font-size: var(--font-size-sm);
   line-height: var(--line-height-body);
   overflow-wrap: anywhere;
-  white-space: pre-wrap;
+  white-space: normal;
 }
 
 .steering-conversation__empty {
@@ -557,6 +557,18 @@
 .steering-markdown ul,
 .steering-markdown ol {
   padding-left: var(--space-5);
+}
+
+.steering-markdown li + li {
+  margin-top: var(--space-2);
+}
+
+.steering-markdown li > * {
+  margin-block: 0;
+}
+
+.steering-markdown li > * + * {
+  margin-top: var(--space-2);
 }
 
 .steering-markdown pre {

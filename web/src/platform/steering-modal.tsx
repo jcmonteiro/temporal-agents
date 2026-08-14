@@ -280,6 +280,7 @@ export default function SteeringModal({
                     <SafeMarkdown
                       id="steering-review-outcome"
                       className="steering-markdown steering-decision__material"
+                      tabIndex={0}
                       text={session.material || "No review material was supplied for this round."}
                     />
                   </section>

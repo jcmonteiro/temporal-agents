@@ -119,6 +119,7 @@ export function DecisionMaterialDisclosure({
       <summary>Review the decision material</summary>
       <SafeMarkdown
         className="steering-markdown steering-material-disclosure__content"
+        tabIndex={0}
         text={material || "No review material was supplied for this round."}
       />
     </details>
