@@ -313,6 +313,14 @@ type instructionUseResource struct {
 	// Hash is the content hash of the text that was used, so the naming is
 	// verifiable.
 	Hash string `json:"hash,omitempty"`
+	// ModelScope is where the Pi model selector paired with this instruction came
+	// from. It is empty for records written before model provenance was stored.
+	ModelScope string `json:"modelScope"`
+	// ModelVersion is which version of that selector answered, or 0 when the build
+	// ships the selector because storage held none.
+	ModelVersion int `json:"modelVersion"`
+	// ModelHash is the content hash of the selector that was used.
+	ModelHash string `json:"modelHash,omitempty"`
 }
 
 // scheduleResource is one schedule. It carries no progress: a schedule is
@@ -477,7 +485,13 @@ func runFrom(run agenthub.Run, withRegistry bool) runResource {
 		resource.StartedBy = run.StartedBy
 		for _, use := range run.Instructions {
 			resource.Instructions = append(resource.Instructions, instructionUseResource{
-				Key: use.Key, Scope: use.Scope, Version: use.Version, Hash: use.Hash,
+				Key:          use.Key,
+				Scope:        use.Scope,
+				Version:      use.Version,
+				Hash:         use.Hash,
+				ModelScope:   use.ModelScope,
+				ModelVersion: use.ModelVersion,
+				ModelHash:    use.ModelHash,
 			})
 		}
 		resource.Locations = locationsFrom(agenthub.NewLocationRegistry(run.Location))

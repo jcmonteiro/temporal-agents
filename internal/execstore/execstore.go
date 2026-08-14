@@ -279,6 +279,14 @@ type InstructionUse struct {
 	Version int `json:"version,omitempty"`
 	// Hash is the content hash of the instruction text that was used.
 	Hash string `json:"hash,omitempty"`
+	// ModelScope is where the Pi model selector paired with this instruction came
+	// from. It is empty for records written before model provenance was stored.
+	ModelScope string `json:"modelScope"`
+	// ModelVersion is which version of that model selector was used. It is 0 when
+	// the build's selector answered because storage held none.
+	ModelVersion int `json:"modelVersion,omitempty"`
+	// ModelHash is the content hash of the Pi model selector that was used.
+	ModelHash string `json:"modelHash,omitempty"`
 }
 
 // NodeOutcome is one fleet node's outcome inside a fleet parent's Detail.

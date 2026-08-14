@@ -113,13 +113,13 @@ func TestAPassWhoseInstructionsCannotBeResolvedFailsBeforeTheAgentRuns(t *testin
 	env.AssertNotCalled(t, activityName(a.RunReviewAgent), mock.Anything, mock.Anything)
 }
 
-// "Which instruction produced this?" is answered from the durable record: the key,
-// where the value came from, which version it was, and the hash of the text. The
-// text itself is not copied into the row — it stays in the version record those
-// three fields name.
-func TestASettledReviewPassRecordsWhichInstructionVersionItUsed(t *testing.T) {
+// "Which prompt and model produced this?" is answered from the durable record:
+// each has its scope, version, and content hash. Their text is not copied into the
+// row — it stays in the version record those fields name.
+func TestASettledReviewPassRecordsWhichInstructionAndModelVersionsItUsed(t *testing.T) {
 	instructions := scopedtest.New()
 	stored := instructions.Store(instruction.KeyReviewPerform, instruction.GlobalScope, "Review only the public API")
+	storedModel := instructions.Store(instruction.ModelKey(instruction.KeyReviewPerform), instruction.GlobalScope, "anthropic/claude-sonnet-4-5")
 	records := execstoretest.New()
 	env := newLoopEnv(t, instructions, records)
 	env.OnActivity(a.RunReviewAgent, mock.Anything, mock.Anything).Return(AgentResult{Output: "feedback"}, nil)
@@ -130,10 +130,13 @@ func TestASettledReviewPassRecordsWhichInstructionVersionItUsed(t *testing.T) {
 	require.NoError(t, env.GetWorkflowError())
 	used := records.Last(t).Detail.Instructions
 	require.Contains(t, used, execstore.InstructionUse{
-		Key:     string(instruction.KeyReviewPerform),
-		Scope:   string(instruction.GlobalScope),
-		Version: stored.Version,
-		Hash:    stored.Hash,
+		Key:          string(instruction.KeyReviewPerform),
+		Scope:        string(instruction.GlobalScope),
+		Version:      stored.Version,
+		Hash:         stored.Hash,
+		ModelScope:   string(instruction.GlobalScope),
+		ModelVersion: storedModel.Version,
+		ModelHash:    storedModel.Hash,
 	})
 	for _, use := range used {
 		require.NotContains(t, use.Hash, "Review only", "the instruction text was copied into the row")
@@ -141,9 +144,10 @@ func TestASettledReviewPassRecordsWhichInstructionVersionItUsed(t *testing.T) {
 }
 
 // The pilot loop is governed the same way, and its record answers the same question.
-func TestASettledPilotPassRecordsWhichInstructionVersionItUsed(t *testing.T) {
+func TestASettledPilotPassRecordsWhichInstructionAndModelVersionsItUsed(t *testing.T) {
 	instructions := scopedtest.New()
 	stored := instructions.Store(instruction.KeyPilotAddress, instruction.GlobalScope, "Address the test comments first")
+	storedModel := instructions.Store(instruction.ModelKey(instruction.KeyPilotAddress), instruction.GlobalScope, "openai/gpt-5")
 	records := execstoretest.New()
 	env := newLoopEnv(t, instructions, records)
 	env.OnActivity(a.DeterminePR, mock.Anything, mock.Anything).
@@ -157,10 +161,13 @@ func TestASettledPilotPassRecordsWhichInstructionVersionItUsed(t *testing.T) {
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
 	require.Contains(t, records.Last(t).Detail.Instructions, execstore.InstructionUse{
-		Key:     string(instruction.KeyPilotAddress),
-		Scope:   string(instruction.GlobalScope),
-		Version: stored.Version,
-		Hash:    stored.Hash,
+		Key:          string(instruction.KeyPilotAddress),
+		Scope:        string(instruction.GlobalScope),
+		Version:      stored.Version,
+		Hash:         stored.Hash,
+		ModelScope:   string(instruction.GlobalScope),
+		ModelVersion: storedModel.Version,
+		ModelHash:    storedModel.Hash,
 	})
 }
 

@@ -3473,7 +3473,9 @@
         "required": [
           "key",
           "scope",
-          "version"
+          "version",
+          "modelScope",
+          "modelVersion"
         ],
         "properties": {
           "key": {
@@ -3492,6 +3494,19 @@
           "hash": {
             "type": "string",
             "description": "The content hash of the text that was used, so the naming is verifiable. The text itself is deliberately not published here."
+          },
+          "modelScope": {
+            "type": "string",
+            "description": "Where the paired Pi model selector came from. It is empty for records written before model provenance was stored."
+          },
+          "modelVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Which version of the paired Pi model selector answered, or 0 when the build's selector did."
+          },
+          "modelHash": {
+            "type": "string",
+            "description": "The content hash of the paired Pi model selector that was used."
           }
         }
       },

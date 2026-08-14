@@ -120,6 +120,14 @@ type InstructionUse struct {
 	Version int
 	// Hash is the content hash of the instruction text that was used.
 	Hash string
+	// ModelScope is where the Pi model selector paired with this instruction came
+	// from. It is empty for records written before model provenance was stored.
+	ModelScope string
+	// ModelVersion is which version of that model selector was used, or 0 when the
+	// build's selector answered because storage held none.
+	ModelVersion int
+	// ModelHash is the content hash of the Pi model selector that was used.
+	ModelHash string
 }
 
 // Running reports whether the execution has not settled.

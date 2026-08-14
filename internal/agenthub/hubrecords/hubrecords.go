@@ -305,10 +305,13 @@ func executionFrom(record execstore.Execution) agenthub.Execution {
 	}
 	for _, use := range record.Detail.Instructions {
 		e.Instructions = append(e.Instructions, agenthub.InstructionUse{
-			Key:     use.Key,
-			Scope:   use.Scope,
-			Version: use.Version,
-			Hash:    use.Hash,
+			Key:          use.Key,
+			Scope:        use.Scope,
+			Version:      use.Version,
+			Hash:         use.Hash,
+			ModelScope:   use.ModelScope,
+			ModelVersion: use.ModelVersion,
+			ModelHash:    use.ModelHash,
 		})
 	}
 	return e

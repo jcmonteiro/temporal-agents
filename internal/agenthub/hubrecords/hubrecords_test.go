@@ -42,7 +42,20 @@ func TestRecordedExecutionsTranslatesARecord(t *testing.T) {
 		WorkflowID: "develop-1", RunID: "r1", Kind: execstore.KindDevelop,
 		Prompt: "add the endpoint", StartedAt: started, EndedAt: ended,
 		Status: execstore.StatusSucceeded, Tokens: 1234, ParentWorkflowID: "develop-parent",
-		Detail: execstore.Detail{Detached: true, Branch: "feature", PlanID: "plan-1"},
+		Detail: execstore.Detail{
+			Detached: true,
+			Branch:   "feature",
+			PlanID:   "plan-1",
+			Instructions: []execstore.InstructionUse{{
+				Key:          "review.perform",
+				Scope:        "directory:/srv/checkout",
+				Version:      3,
+				Hash:         "instruction-hash",
+				ModelScope:   "global",
+				ModelVersion: 4,
+				ModelHash:    "model-hash",
+			}},
+		},
 	})
 
 	got := recordedExecutions(t, store, agenthub.RecordQuery{})
@@ -68,6 +81,16 @@ func TestRecordedExecutionsTranslatesARecord(t *testing.T) {
 			e.ParentWorkflowID, e.Detached)
 	case !e.StartedAt.Equal(started) || !e.EndedAt.Equal(ended):
 		t.Errorf("times = %v/%v, want %v/%v", e.StartedAt, e.EndedAt, started, ended)
+	case len(e.Instructions) != 1 || e.Instructions[0] != (agenthub.InstructionUse{
+		Key:          "review.perform",
+		Scope:        "directory:/srv/checkout",
+		Version:      3,
+		Hash:         "instruction-hash",
+		ModelScope:   "global",
+		ModelVersion: 4,
+		ModelHash:    "model-hash",
+	}):
+		t.Errorf("instructions = %+v, want the stored instruction and model provenance", e.Instructions)
 	}
 }
 

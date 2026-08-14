@@ -101,9 +101,27 @@ function configureApi(api: FakeApi, scenario: Scenario): void {
     api.startedBy[runId] =
       "https://identity.agent-hub.example.test/operators/platform-reliability/on-call-operator-1";
     api.instructionsUsed[runId] = [
-      { key: "review.perform", scope: "directory:/srv/worktrees/commerce-platform/overcaffeinated-gecko-2026-aug-11", version: 14 },
-      { key: "review.implement", scope: "global", version: 8 },
-      { key: "pilot.address-one-actionable-review-comment", scope: "factory", version: 3 },
+      {
+        key: "review.perform",
+        scope: "directory:/srv/worktrees/commerce-platform/overcaffeinated-gecko-2026-aug-11",
+        version: 14,
+        modelScope: "global",
+        modelVersion: 5,
+      },
+      {
+        key: "review.implement",
+        scope: "global",
+        version: 8,
+        modelScope: "global",
+        modelVersion: 5,
+      },
+      {
+        key: "pilot.address-one-actionable-review-comment",
+        scope: "factory",
+        version: 3,
+        modelScope: "factory",
+        modelVersion: 1,
+      },
     ];
     return;
   }
@@ -121,7 +139,13 @@ function configureApi(api: FakeApi, scenario: Scenario): void {
     ];
     api.startedBy[runId] = "https://issuer.test|operator-1";
     api.instructionsUsed[runId] = [
-      { key: "review.perform", scope: `directory:${place.directory ?? ""}`, version: 14 },
+      {
+        key: "review.perform",
+        scope: `directory:${place.directory ?? ""}`,
+        version: 14,
+        modelScope: "global",
+        modelVersion: 5,
+      },
     ];
     const session = aSteeringSession({
       id: "steering-review-4",
@@ -149,7 +173,13 @@ function configureApi(api: FakeApi, scenario: Scenario): void {
     ];
     api.startedBy[runId] = "https://issuer.test|operator-1";
     api.instructionsUsed[runId] = [
-      { key: "review.perform", scope: "global", version: 8 },
+      {
+        key: "review.perform",
+        scope: "global",
+        version: 8,
+        modelScope: "global",
+        modelVersion: 5,
+      },
     ];
     return;
   }

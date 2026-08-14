@@ -105,10 +105,13 @@ func TestPostgres_RoundTripsAnExecutionIncludingItsDetail(t *testing.T) {
 			// Provenance is stored as values, so a row keeps explaining which
 			// instruction produced it without reaching into another context's tables.
 			Instructions: []execstore.InstructionUse{{
-				Key:     "review.perform",
-				Scope:   "directory:/src/agents",
-				Version: 3,
-				Hash:    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+				Key:          "review.perform",
+				Scope:        "directory:/src/agents",
+				Version:      3,
+				Hash:         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+				ModelScope:   "global",
+				ModelVersion: 5,
+				ModelHash:    "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7c64f0d5f21e9e8",
 			}},
 		},
 	}

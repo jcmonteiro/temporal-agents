@@ -80,6 +80,12 @@ export interface InstructionUseDTO {
   scope: string;
   version: number;
   hash?: string;
+  /** Scope that resolved the paired Pi model selector. */
+  modelScope: string;
+  /** Version of the paired Pi model selector; 0 means the build default. */
+  modelVersion: number;
+  /** Content hash of the paired Pi model selector. */
+  modelHash?: string;
 }
 
 export interface RunDTO {

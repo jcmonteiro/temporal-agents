@@ -144,7 +144,13 @@ it("says who started it and which instruction it ran under", async () => {
   api.runs = [aRun({ id: "develop-1", label: "Fix the flaky test", locationId: "repo" })];
   api.startedBy["develop-1"] = "https://issuer.test|operator-1";
   api.instructionsUsed["develop-1"] = [
-    { key: "review.perform", scope: "directory:/srv/checkout", version: 3 },
+    {
+      key: "review.perform",
+      scope: "directory:/srv/checkout",
+      version: 3,
+      modelScope: "global",
+      modelVersion: 4,
+    },
   ];
 
   await showRun("develop-1");

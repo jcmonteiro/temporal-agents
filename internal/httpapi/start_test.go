@@ -242,9 +242,15 @@ func TestOneRunExplainsItselfWithItsProvenance(t *testing.T) {
 	view := &viewStub{runs: []agenthub.Run{{
 		ID: "develop-1", Type: agenthub.RunTypeDevelop, Label: "make the flaky test pass",
 		Status: agenthub.StatusDone, Iterations: 2, StartedBy: "https://issuer.test|operator-1",
-		Instructions: []agenthub.InstructionUse{
-			{Key: "review.perform", Scope: "directory:/srv/repos/pricing", Version: 3, Hash: "abc123"},
-		},
+		Instructions: []agenthub.InstructionUse{{
+			Key:          "review.perform",
+			Scope:        "directory:/srv/repos/pricing",
+			Version:      3,
+			Hash:         "abc123",
+			ModelScope:   "global",
+			ModelVersion: 4,
+			ModelHash:    "def456",
+		}},
 	}}}
 	server := newTestServer(t, view)
 
@@ -261,7 +267,12 @@ func TestOneRunExplainsItselfWithItsProvenance(t *testing.T) {
 	}
 	used, _ := instructions[0].(map[string]any)
 	for key, want := range map[string]any{
-		"key": "review.perform", "scope": "directory:/srv/repos/pricing", "version": float64(3),
+		"key":          "review.perform",
+		"scope":        "directory:/srv/repos/pricing",
+		"version":      float64(3),
+		"modelScope":   "global",
+		"modelVersion": float64(4),
+		"modelHash":    "def456",
 	} {
 		if used[key] != want {
 			t.Errorf("instruction %s = %v, want %v", key, used[key], want)

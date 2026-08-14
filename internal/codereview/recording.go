@@ -459,10 +459,13 @@ func instructionUses(resolved instruction.Resolution) []execstore.InstructionUse
 	uses := make([]execstore.InstructionUse, 0, len(resolved))
 	for _, value := range resolved {
 		uses = append(uses, execstore.InstructionUse{
-			Key:     string(value.Key),
-			Scope:   string(value.Scope),
-			Version: value.Version,
-			Hash:    value.Hash,
+			Key:          string(value.Key),
+			Scope:        string(value.Scope),
+			Version:      value.Version,
+			Hash:         value.Hash,
+			ModelScope:   string(value.Model.Scope),
+			ModelVersion: value.Model.Version,
+			ModelHash:    value.Model.Hash,
 		})
 	}
 	return uses

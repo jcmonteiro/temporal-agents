@@ -121,8 +121,20 @@ function configureReviewApi(api: FakeApi): void {
   ];
   api.startedBy[runId] = "https://issuer.test|operator-1";
   api.instructionsUsed[runId] = [
-    { key: "review.perform", scope: `directory:${worktree.directory ?? ""}`, version: 14 },
-    { key: "review.implement", scope: "global", version: 8 },
+    {
+      key: "review.perform",
+      scope: `directory:${worktree.directory ?? ""}`,
+      version: 14,
+      modelScope: "global",
+      modelVersion: 5,
+    },
+    {
+      key: "review.implement",
+      scope: "global",
+      version: 8,
+      modelScope: "global",
+      modelVersion: 5,
+    },
   ];
   const steering = aSteeringSession({
     id: "steering-checkout-review",
