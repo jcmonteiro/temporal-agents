@@ -150,6 +150,69 @@ it("saves a model override and retains Pi's default as an explicit empty choice"
   expect(api.promptCatalogues.global[0]?.model).toBe("anthropic/claude-sonnet-4-5");
 });
 
+it("retains an unsaved model draft when the instruction is saved", async () => {
+  api.promptCatalogues.global = [aPrompt({ model: "", inheritedModel: "" })];
+  await openConfiguration();
+
+  fireEvent.change(screen.getByLabelText("Pi model"), {
+    target: { value: "anthropic/claude-sonnet-4-5" },
+  });
+  fireEvent.change(screen.getByLabelText("Instruction text"), {
+    target: { value: "Review the branch and its tests" },
+  });
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Save instruction override" }));
+  });
+
+  expect((screen.getByLabelText("Pi model") as HTMLInputElement).value).toBe(
+    "anthropic/claude-sonnet-4-5",
+  );
+  expect(api.promptCatalogues.global[0]?.model).toBe("");
+});
+
+it("saves Pi's default as an explicit empty override when the inherited selector is set", async () => {
+  api.promptCatalogues.global = [
+    aPrompt({
+      model: "anthropic/claude-sonnet-4-5",
+      inheritedModel: "anthropic/claude-sonnet-4-5",
+    }),
+  ];
+  await openConfiguration();
+
+  fireEvent.change(screen.getByLabelText("Pi model"), { target: { value: "" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Save model override" }));
+  });
+
+  expect(api.promptCatalogues.global[0]).toMatchObject({
+    model: "",
+    modelOverridden: true,
+  });
+});
+
+it("resets a directory model override to its inherited selector", async () => {
+  api.promptCatalogues["place-1"] = [
+    aPrompt({
+      model: "openai/gpt-5",
+      inheritedModel: "anthropic/claude-sonnet-4-5",
+      modelSource: "directory",
+      inheritedModelSource: "global",
+      modelOverridden: true,
+    }),
+  ];
+  await openConfiguration({ id: "place-1", label: "feature" });
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Return model to inherited" }));
+  });
+
+  expect(api.promptModelResets).toContainEqual({ locationId: "place-1", key: "review.perform" });
+  expect((screen.getByLabelText("Pi model") as HTMLInputElement).value).toBe(
+    "anthropic/claude-sonnet-4-5",
+  );
+});
+
 it("resets a place to inherited configuration with confirmation", async () => {
   api.promptCatalogues["place-1"] = [aPrompt({ overridden: true })];
   await openConfiguration({ id: "place-1", label: "feature" });

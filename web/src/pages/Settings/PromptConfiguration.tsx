@@ -151,7 +151,7 @@ export function PromptConfiguration({ fixedLocation }: Props): ReactNode {
             />
             {selected !== null && (
               <PromptEditor
-                key={`${locationId}:${selected.key}:${selected.version}:${selected.overridden}`}
+                key={`${locationId}:${selected.key}`}
                 prompt={selected}
                 locationId={locationId}
                 onEditing={() => setConfirmation(null)}
@@ -253,6 +253,7 @@ function PromptEditor({
     setRefusal(null);
     const result = await resetPrompt(prompt.key, locationId);
     if (result.ok) {
+      setDraft(prompt.inherited);
       await onChanged(`${prompt.key} returned to ${destination}.`);
     } else {
       setRefusal(messageOf(result.error));
@@ -280,6 +281,7 @@ function PromptEditor({
     setModelRefusal(null);
     const result = await resetPromptModel(prompt.key, locationId);
     if (result.ok) {
+      setModelDraft(prompt.inheritedModel);
       await onChanged(`${prompt.key}'s model returned to ${destination}.`);
     } else {
       setModelRefusal(messageOf(result.error));
