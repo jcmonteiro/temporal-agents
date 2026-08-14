@@ -144,6 +144,8 @@ type PromptConfiguration interface {
 	Catalogue(ctx context.Context, locationID string) (instruction.Catalogue, error)
 	Set(ctx context.Context, locationID string, key instruction.Key, text, savedBy string) (instruction.Record, error)
 	Reset(ctx context.Context, locationID string, key instruction.Key) error
+	SetModel(ctx context.Context, locationID string, key instruction.Key, model, savedBy string) (instruction.Record, error)
+	ResetModel(ctx context.Context, locationID string, key instruction.Key) error
 }
 
 // HealthCheck is one dependency the health resource reports on. The wiring supplies
@@ -447,6 +449,13 @@ func (s *Server) resources() []resource {
 				methods: map[string]http.HandlerFunc{
 					http.MethodPut:    s.handleSetPrompt,
 					http.MethodDelete: s.handleResetPrompt,
+				},
+			},
+			resource{
+				pattern: s.basePath + "/prompts/{key}/model",
+				methods: map[string]http.HandlerFunc{
+					http.MethodPut:    s.handleSetPromptModel,
+					http.MethodDelete: s.handleResetPromptModel,
 				},
 			},
 		)
@@ -893,6 +902,38 @@ func (s *Server) handleResetPrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.prompts.Reset(r.Context(), locationID, instruction.Key(r.PathValue("key"))); err != nil {
+		s.writePromptProblem(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleSetPromptModel(w http.ResponseWriter, r *http.Request) {
+	locationID, ok := s.promptLocationID(w, r)
+	if !ok {
+		return
+	}
+	var request promptModelRequest
+	if !s.decodeJSONBody(w, r, &request) {
+		return
+	}
+	savedBy := ""
+	if principal, authenticated := PrincipalFrom(r.Context()); authenticated {
+		savedBy = principal.ID()
+	}
+	if _, err := s.prompts.SetModel(r.Context(), locationID, instruction.Key(r.PathValue("key")), request.Model, savedBy); err != nil {
+		s.writePromptProblem(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleResetPromptModel(w http.ResponseWriter, r *http.Request) {
+	locationID, ok := s.promptLocationID(w, r)
+	if !ok {
+		return
+	}
+	if err := s.prompts.ResetModel(r.Context(), locationID, instruction.Key(r.PathValue("key"))); err != nil {
 		s.writePromptProblem(w, r, err)
 		return
 	}

@@ -562,19 +562,27 @@ func settingFrom(value setting.Value) settingResource {
 
 // promptResource is one governed instruction at the selected scope.
 type promptResource struct {
-	Key              string                 `json:"key"`
-	Purpose          string                 `json:"purpose"`
-	Effective        string                 `json:"effective"`
-	Inherited        string                 `json:"inherited"`
-	Source           string                 `json:"source"`
-	InheritedFrom    string                 `json:"inheritedFrom"`
-	Version          int                    `json:"version"`
-	InheritedVersion int                    `json:"inheritedVersion"`
-	Overridden       bool                   `json:"overridden"`
-	SystemBlock      string                 `json:"systemBlock"`
-	RequiredInserts  []promptInsertResource `json:"requiredInserts"`
-	Advanced         bool                   `json:"advanced"`
-	MaxLength        int                    `json:"maxLength"`
+	Key                   string                 `json:"key"`
+	Purpose               string                 `json:"purpose"`
+	Effective             string                 `json:"effective"`
+	Inherited             string                 `json:"inherited"`
+	Source                string                 `json:"source"`
+	InheritedFrom         string                 `json:"inheritedFrom"`
+	Version               int                    `json:"version"`
+	InheritedVersion      int                    `json:"inheritedVersion"`
+	Overridden            bool                   `json:"overridden"`
+	Model                 string                 `json:"model"`
+	InheritedModel        string                 `json:"inheritedModel"`
+	ModelSource           string                 `json:"modelSource"`
+	InheritedModelSource  string                 `json:"inheritedModelSource"`
+	ModelVersion          int                    `json:"modelVersion"`
+	InheritedModelVersion int                    `json:"inheritedModelVersion"`
+	ModelOverridden       bool                   `json:"modelOverridden"`
+	SystemBlock           string                 `json:"systemBlock"`
+	RequiredInserts       []promptInsertResource `json:"requiredInserts"`
+	Advanced              bool                   `json:"advanced"`
+	MaxLength             int                    `json:"maxLength"`
+	ModelMaxLength        int                    `json:"modelMaxLength"`
 }
 
 type promptInsertResource struct {
@@ -585,6 +593,10 @@ type promptInsertResource struct {
 
 type promptRequest struct {
 	Text string `json:"text"`
+}
+
+type promptModelRequest struct {
+	Model string `json:"model"`
 }
 
 func promptFrom(configured instruction.Configured) promptResource {
@@ -598,19 +610,27 @@ func promptFrom(configured instruction.Configured) promptResource {
 		})
 	}
 	return promptResource{
-		Key:              string(configured.Spec.Key),
-		Purpose:          configured.Spec.Purpose,
-		Effective:        configured.Effective.Text,
-		Inherited:        configured.Inherited.Text,
-		Source:           configured.Effective.Scope.Kind(),
-		InheritedFrom:    configured.Inherited.Scope.Kind(),
-		Version:          configured.Effective.Version,
-		InheritedVersion: configured.Inherited.Version,
-		Overridden:       configured.Overridden,
-		SystemBlock:      configured.Spec.System,
-		RequiredInserts:  required,
-		Advanced:         configured.Spec.Advanced,
-		MaxLength:        instruction.MaxTextLength,
+		Key:                   string(configured.Spec.Key),
+		Purpose:               configured.Spec.Purpose,
+		Effective:             configured.Effective.Text,
+		Inherited:             configured.Inherited.Text,
+		Source:                configured.Effective.Scope.Kind(),
+		InheritedFrom:         configured.Inherited.Scope.Kind(),
+		Version:               configured.Effective.Version,
+		InheritedVersion:      configured.Inherited.Version,
+		Overridden:            configured.Overridden,
+		Model:                 configured.EffectiveModel.Text,
+		InheritedModel:        configured.InheritedModel.Text,
+		ModelSource:           configured.EffectiveModel.Scope.Kind(),
+		InheritedModelSource:  configured.InheritedModel.Scope.Kind(),
+		ModelVersion:          configured.EffectiveModel.Version,
+		InheritedModelVersion: configured.InheritedModel.Version,
+		ModelOverridden:       configured.ModelOverridden,
+		SystemBlock:           configured.Spec.System,
+		RequiredInserts:       required,
+		Advanced:              configured.Spec.Advanced,
+		MaxLength:             instruction.MaxTextLength,
+		ModelMaxLength:        instruction.MaxModelLength,
 	}
 }
 

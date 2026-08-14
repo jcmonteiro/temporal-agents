@@ -66,6 +66,10 @@ const (
 // record.
 const MaxTextLength = 16 << 10 // 16 KiB
 
+// MaxModelLength bounds a Pi model pattern. Pi accepts provider-qualified model IDs
+// and fuzzy patterns; a model selector is short configuration, never a prompt.
+const MaxModelLength = 256
+
 // Insert is a value the system supplies to an instruction when it renders it,
 // written as a Go template action ("{{.Review}}").
 //
@@ -86,6 +90,11 @@ type Insert struct {
 // Action renders the insert as it is written in an instruction.
 func (i Insert) Action() string { return "{{." + i.Name + "}}" }
 
+// ModelKey names the independently versioned Pi model selector paired with an
+// instruction. The suffix keeps it in the shared scoped key space without letting a
+// prompt and its agent model overwrite each other.
+func ModelKey(key Key) Key { return Key(string(key) + ".model") }
+
 // Spec is everything the tool knows about one governed instruction: what it is for,
 // what it ships as, what may be inserted into it, and which part of it the system
 // keeps for itself.
@@ -98,6 +107,9 @@ type Spec struct {
 	// upgrade improves every place that has not overridden it (it is published into
 	// storage at startup; see PublishDefaults).
 	Factory string
+	// FactoryModel is the shipped Pi model selector. The empty selector deliberately
+	// means Pi's current system default and therefore produces no Pi CLI argument.
+	FactoryModel string
 	// Inserts are the values the system supplies when the instruction renders.
 	Inserts []Insert
 	// System is the block the system always appends after the operator's text. It is
@@ -220,6 +232,23 @@ func SpecFor(key Key) (Spec, bool) {
 }
 
 // Insert resolves one declared insert of the spec by name.
+// ValidateModel reports whether a Pi model selector may be saved. An empty value is
+// valid: it explicitly selects Pi's system default at this scope, even when a parent
+// scope selected a model. Pi owns pattern interpretation; this boundary protects its
+// command line from control characters and unbounded values.
+func (s Spec) ValidateModel(model string) error {
+	if !utf8.ValidString(model) || len(model) > MaxModelLength {
+		return fmt.Errorf("%w: the %s model must be valid text up to %d bytes", ErrInvalidText, s.Key, MaxModelLength)
+	}
+	if strings.ContainsAny(model, "\r\n\x00") {
+		return fmt.Errorf("%w: the %s model must be one Pi model pattern", ErrInvalidText, s.Key)
+	}
+	if model != strings.TrimSpace(model) {
+		return fmt.Errorf("%w: the %s model must not start or end with whitespace", ErrInvalidText, s.Key)
+	}
+	return nil
+}
+
 func (s Spec) Insert(name string) (Insert, bool) {
 	for _, insert := range s.Inserts {
 		if insert.Name == name {

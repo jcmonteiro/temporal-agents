@@ -34,3 +34,24 @@ export function resetPrompt(
     "DELETE",
   );
 }
+
+export function savePromptModel(
+  key: string,
+  model: string,
+  locationId = "",
+): Promise<Result<void, Error>> {
+  return putJSON(
+    `/prompts/${encodeURIComponent(key)}/model${scopeQuery(locationId)}`,
+    { model },
+  );
+}
+
+export function resetPromptModel(
+  key: string,
+  locationId = "",
+): Promise<Result<void, Error>> {
+  return send(
+    `/prompts/${encodeURIComponent(key)}/model${scopeQuery(locationId)}`,
+    "DELETE",
+  );
+}

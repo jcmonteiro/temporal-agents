@@ -58,6 +58,19 @@ type Value struct {
 	Scope   Scope
 	Version int
 	Hash    string
+	// Model is the Pi model selector paired with this instruction. Empty means use
+	// Pi's system model without sending a --model argument.
+	Model ModelValue
+}
+
+// ModelValue is one resolved Pi model selector and its provenance. It is separate
+// from Value's instruction provenance because an operator can change either side of
+// the prompt/agent pair without changing the other.
+type ModelValue struct {
+	Text    string
+	Scope   Scope
+	Version int
+	Hash    string
 }
 
 // Resolution is what one unit of work resolved: one Value per key it asked for, in
@@ -92,6 +105,15 @@ func (r Resolution) Text(key Key) string {
 	return ""
 }
 
+// Model is the Pi selector to use for key. An absent resolution is an execution
+// from before model configuration; it keeps Pi's system default exactly as before.
+func (r Resolution) Model(key Key) string {
+	if value, ok := r.Value(key); ok {
+		return value.Model.Text
+	}
+	return ""
+}
+
 // Render builds the prompt for key: the resolved instruction (or the shipped
 // default, see Text) rendered from data, with the system's own block appended.
 func Render(resolution Resolution, key Key, data Data) (string, error) {
@@ -117,7 +139,13 @@ func PublishDefaults(ctx context.Context, publisher Publisher) error {
 		if err := spec.Validate(spec.Factory); err != nil {
 			return fmt.Errorf("the shipped default for %s is not usable: %w", spec.Key, err)
 		}
+		if err := spec.ValidateModel(spec.FactoryModel); err != nil {
+			return fmt.Errorf("the shipped model default for %s is not usable: %w", spec.Key, err)
+		}
 		if err := scoped.PublishDefault(ctx, publisher, spec.Key, spec.Factory); err != nil {
+			return err
+		}
+		if err := scoped.PublishDefault(ctx, publisher, ModelKey(spec.Key), spec.FactoryModel); err != nil {
 			return err
 		}
 	}
@@ -163,13 +191,19 @@ func (a *Activity) ResolveInstructions(ctx context.Context, req Request) (Resolu
 		// installation's value.
 		scopes = Chain("", "")
 	}
-	records, err := a.Store.Current(ctx, req.Keys, scopes)
+	keys := make([]Key, 0, len(req.Keys)*2)
+	for _, key := range req.Keys {
+		keys = append(keys, key, ModelKey(key))
+	}
+	records, err := a.Store.Current(ctx, keys, scopes)
 	if err != nil {
 		return nil, fmt.Errorf("read the stored instructions: %w", err)
 	}
 	resolution := make(Resolution, 0, len(specs))
 	for _, spec := range specs {
-		resolution = append(resolution, resolve(spec, scopes, records))
+		value := resolve(spec, scopes, records)
+		value.Model = resolveModel(spec, scopes, records)
+		resolution = append(resolution, value)
 	}
 	return resolution, nil
 }
@@ -197,4 +231,11 @@ func resolve(spec Spec, scopes []Scope, records []Record) Value {
 		Version: 0,
 		Hash:    Hash(spec.Factory),
 	}
+}
+
+func resolveModel(spec Spec, scopes []Scope, records []Record) ModelValue {
+	if record, ok := scoped.Winner(records, ModelKey(spec.Key), scopes); ok {
+		return ModelValue{Text: record.Text, Scope: record.Scope, Version: record.Version, Hash: record.Hash}
+	}
+	return ModelValue{Text: spec.FactoryModel, Scope: FactoryScope, Hash: Hash(spec.FactoryModel)}
 }

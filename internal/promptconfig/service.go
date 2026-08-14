@@ -64,6 +64,37 @@ func (s *Service) Set(ctx context.Context, locationID string, key instruction.Ke
 	return record, nil
 }
 
+// SetModel saves the Pi model selector paired with one governed instruction.
+func (s *Service) SetModel(ctx context.Context, locationID string, key instruction.Key, model, savedBy string) (instruction.Record, error) {
+	target, err := s.target(ctx, locationID)
+	if err != nil {
+		return instruction.Record{}, err
+	}
+	record, err := s.Configuration.SetModel(ctx, target, key, model, savedBy)
+	if err != nil {
+		if errors.Is(err, instruction.ErrInvalidText) || errors.Is(err, instruction.ErrUnknownKey) {
+			return instruction.Record{}, err
+		}
+		return instruction.Record{}, unavailable(err)
+	}
+	return record, nil
+}
+
+// ResetModel returns one agent model selector to its inherited value.
+func (s *Service) ResetModel(ctx context.Context, locationID string, key instruction.Key) error {
+	target, err := s.target(ctx, locationID)
+	if err != nil {
+		return err
+	}
+	if err := s.Configuration.ResetModel(ctx, target, key); err != nil {
+		if errors.Is(err, instruction.ErrUnknownKey) {
+			return err
+		}
+		return unavailable(err)
+	}
+	return nil
+}
+
 func (s *Service) Reset(ctx context.Context, locationID string, key instruction.Key) error {
 	target, err := s.target(ctx, locationID)
 	if err != nil {

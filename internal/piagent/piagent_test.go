@@ -165,14 +165,25 @@ func TestFormatTokenTotal_GroupsThousands(t *testing.T) {
 }
 
 func TestPiArgs_RunsNonInteractiveJSONForSession(t *testing.T) {
-	args := piArgs("session-123", false)
+	args := piArgs("session-123", false, "")
 	if want := []string{"-p", "--mode", "json", "--session-id", "session-123"}; strings.Join(args, " ") != strings.Join(want, " ") {
 		t.Fatalf("piArgs = %v, want %v", args, want)
 	}
 }
 
+func TestPiArgs_AddsAModelOnlyWhenConfigured(t *testing.T) {
+	configured := piArgs("session-123", false, "anthropic/claude-sonnet-4-5")
+	if got, want := strings.Join(configured, " "), "-p --mode json --session-id session-123 --model anthropic/claude-sonnet-4-5"; got != want {
+		t.Fatalf("configured piArgs = %v, want %s", configured, want)
+	}
+	defaulted := piArgs("session-123", false, "")
+	if strings.Contains(strings.Join(defaulted, " "), "--model") {
+		t.Fatalf("system-default piArgs unexpectedly select a model: %v", defaulted)
+	}
+}
+
 func TestPiArgs_QuestioningDeniesEveryToolThatCanWrite(t *testing.T) {
-	args := piArgsQuestioning("steering-123")
+	args := piArgsQuestioning("steering-123", "")
 	want := []string{"-p", "--mode", "json", "--session-id", "steering-123", "--exclude-tools", "edit,write,bash"}
 	if strings.Join(args, " ") != strings.Join(want, " ") {
 		t.Fatalf("piArgsQuestioning = %v, want %v", args, want)
@@ -180,7 +191,7 @@ func TestPiArgs_QuestioningDeniesEveryToolThatCanWrite(t *testing.T) {
 }
 
 func TestPiArgs_ReadOnlyDeniesMutatingTools(t *testing.T) {
-	args := piArgs("session-123", true)
+	args := piArgs("session-123", true, "")
 	want := []string{"-p", "--mode", "json", "--session-id", "session-123", "--exclude-tools", "edit,write"}
 	if strings.Join(args, " ") != strings.Join(want, " ") {
 		t.Fatalf("piArgs(readOnly) = %v, want %v", args, want)

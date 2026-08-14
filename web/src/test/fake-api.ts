@@ -107,6 +107,7 @@ export class FakeApi {
   /** Optional validation refusal for the next prompt save. */
   promptRefusal: string | null = null;
   promptResets: Array<{ locationId: string; key: string }> = [];
+  promptModelResets: Array<{ locationId: string; key: string }> = [];
 
   private original: typeof globalThis.fetch | undefined;
 
@@ -187,6 +188,15 @@ export class FakeApi {
       }
       if (path === "/api/v1/prompts" && method === "GET") {
         return Promise.resolve(this.prompts(url.searchParams.get("locationId") ?? ""));
+      }
+      if (path.startsWith("/api/v1/prompts/") && path.endsWith("/model")) {
+        const key = decodeURIComponent(path.slice("/api/v1/prompts/".length, -"/model".length));
+        return Promise.resolve(this.changePromptModel(
+          method,
+          key,
+          url.searchParams.get("locationId") ?? "",
+          init?.body,
+        ));
       }
       if (path.startsWith("/api/v1/prompts/")) {
         const key = decodeURIComponent(path.slice("/api/v1/prompts/".length));
@@ -441,6 +451,42 @@ export class FakeApi {
     return this.problem(405, "method-not-allowed", "method not allowed");
   }
 
+  private changePromptModel(
+    method: string,
+    key: string,
+    locationId: string,
+    body: BodyInit | null | undefined,
+  ): Response {
+    const catalogueKey = locationId || "global";
+    const items = this.promptCatalogues[catalogueKey] ?? [];
+    const index = items.findIndex((item) => item.key === key);
+    if (index < 0) return this.problem(404, "not-found", "no such prompt");
+    if (method === "PUT") {
+      const model = String((JSON.parse(String(body ?? "{}")) as { model?: unknown }).model ?? "");
+      items[index] = {
+        ...items[index],
+        model,
+        modelSource: locationId === "" ? "global" : "directory",
+        modelOverridden: true,
+      };
+      this.promptCatalogues[catalogueKey] = [...items];
+      return new Response(null, { status: 204 });
+    }
+    if (method === "DELETE") {
+      this.promptModelResets.push({ locationId, key });
+      items[index] = {
+        ...items[index],
+        model: items[index].inheritedModel,
+        modelSource: items[index].inheritedModelSource,
+        modelVersion: items[index].inheritedModelVersion,
+        modelOverridden: false,
+      };
+      this.promptCatalogues[catalogueKey] = [...items];
+      return new Response(null, { status: 204 });
+    }
+    return this.problem(405, "method-not-allowed", "method not allowed");
+  }
+
   /** Every registered or observed place, with registration provenance when present. */
   private knownPlaces(): LocatedCollection<PlaceDTO> {
     const referenced = new Set(this.registered.map((place) => place.locationId));
@@ -588,6 +634,14 @@ export function aPrompt(overrides: Partial<PromptDTO> = {}): PromptDTO {
     version: 2,
     inheritedVersion: 1,
     overridden: false,
+    model: "",
+    inheritedModel: "",
+    modelSource: "global",
+    inheritedModelSource: "factory",
+    modelVersion: 2,
+    inheritedModelVersion: 1,
+    modelOverridden: false,
+    modelMaxLength: 256,
     systemBlock: "",
     requiredInserts: [],
     advanced: false,

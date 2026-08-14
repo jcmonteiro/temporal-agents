@@ -18,6 +18,7 @@ type promptConfigurationStub struct {
 	locationID string
 	key        instruction.Key
 	text       string
+	model      string
 	savedBy    string
 	setErr     error
 	resetErr   error
@@ -34,6 +35,16 @@ func (p *promptConfigurationStub) Set(_ context.Context, locationID string, key 
 }
 
 func (p *promptConfigurationStub) Reset(_ context.Context, locationID string, key instruction.Key) error {
+	p.locationID, p.key = locationID, key
+	return p.resetErr
+}
+
+func (p *promptConfigurationStub) SetModel(_ context.Context, locationID string, key instruction.Key, model, savedBy string) (instruction.Record, error) {
+	p.locationID, p.key, p.model, p.savedBy = locationID, key, model, savedBy
+	return instruction.Record{}, p.setErr
+}
+
+func (p *promptConfigurationStub) ResetModel(_ context.Context, locationID string, key instruction.Key) error {
 	p.locationID, p.key = locationID, key
 	return p.resetErr
 }
@@ -122,8 +133,9 @@ func TestPromptResourcesKeepTheFieldNamesTheWebClientReads(t *testing.T) {
 	item := items[0].(map[string]any)
 	for _, key := range []string{
 		"key", "purpose", "effective", "inherited", "source", "inheritedFrom",
-		"version", "inheritedVersion", "overridden", "systemBlock",
-		"requiredInserts", "advanced", "maxLength",
+		"version", "inheritedVersion", "overridden", "model", "inheritedModel",
+		"modelSource", "inheritedModelSource", "modelVersion", "inheritedModelVersion",
+		"modelOverridden", "modelMaxLength", "systemBlock", "requiredInserts", "advanced", "maxLength",
 	} {
 		if _, ok := item[key]; !ok {
 			t.Errorf("prompt has no %q, which the web client reads", key)
@@ -156,6 +168,29 @@ func TestSavingAPromptAttributesTheAuthenticatedPrincipalAndPlace(t *testing.T) 
 	wantPrincipal := identity.LocalIssuer + "|" + identity.StaticTokenSubject
 	if prompts.savedBy != wantPrincipal {
 		t.Fatalf("savedBy = %q, want %q", prompts.savedBy, wantPrincipal)
+	}
+}
+
+func TestSavingAModelAttributesTheAuthenticatedPrincipalAndPlace(t *testing.T) {
+	prompts := &promptConfigurationStub{}
+	server := newTestServer(t, &viewStub{}, func(options *Options) {
+		options.AllowUnauthenticated = false
+		options.AuthToken = "correct horse battery staple"
+		options.Prompts = prompts
+	})
+	req := newRequest(http.MethodPut, BasePath+"/prompts/review.perform/model?locationId=place-1", strings.NewReader(`{"model":"anthropic/claude-sonnet-4-5"}`))
+	req.Header.Set("Authorization", "Bearer correct horse battery staple")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	response := httptest.NewRecorder()
+
+	server.ServeHTTP(response, req)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+	}
+	if prompts.locationID != "place-1" || prompts.key != instruction.KeyReviewPerform || prompts.model != "anthropic/claude-sonnet-4-5" {
+		t.Fatalf("saved model location=%q key=%q model=%q", prompts.locationID, prompts.key, prompts.model)
 	}
 }
 

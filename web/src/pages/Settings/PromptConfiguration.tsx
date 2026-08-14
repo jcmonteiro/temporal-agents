@@ -8,7 +8,13 @@ import {
 import type { PromptDTO } from "../../clients/api";
 import { ApiError } from "../../clients/http";
 import { loadKnownPlaces, type KnownPlace } from "../../clients/places";
-import { loadPrompts, resetPrompt, savePrompt } from "../../clients/prompts";
+import {
+  loadPrompts,
+  resetPrompt,
+  resetPromptModel,
+  savePrompt,
+  savePromptModel,
+} from "../../clients/prompts";
 import "./settings.css";
 
 interface FixedLocation {
@@ -219,9 +225,12 @@ function PromptEditor({
   onChanged: (message: string) => Promise<void>;
 }): ReactNode {
   const [draft, setDraft] = useState(prompt.effective);
-  const [operation, setOperation] = useState<"save" | "reset" | null>(null);
+  const [modelDraft, setModelDraft] = useState(prompt.model);
+  const [operation, setOperation] = useState<"save" | "reset" | "save-model" | "reset-model" | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [modelRefusal, setModelRefusal] = useState<string | null>(null);
   const changed = draft !== prompt.effective;
+  const modelChanged = modelDraft !== prompt.model;
   const diff = useMemo(
     () => (draft === prompt.inherited ? null : { before: prompt.inherited, after: draft }),
     [draft, prompt.inherited],
@@ -247,6 +256,33 @@ function PromptEditor({
       await onChanged(`${prompt.key} returned to ${destination}.`);
     } else {
       setRefusal(messageOf(result.error));
+    }
+    setOperation(null);
+  };
+
+  const saveModel = async (): Promise<void> => {
+    if (!modelChanged || operation !== null) return;
+    setOperation("save-model");
+    setModelRefusal(null);
+    const result = await savePromptModel(prompt.key, modelDraft, locationId);
+    if (result.ok) {
+      await onChanged(`Model override saved for ${prompt.key}.`);
+    } else {
+      setModelRefusal(messageOf(result.error));
+    }
+    setOperation(null);
+  };
+
+  const resetModel = async (): Promise<void> => {
+    const destination = locationId === "" ? "Pi's system model" : "the inherited model";
+    if (!window.confirm(`Return ${prompt.key}'s model to ${destination}?`)) return;
+    setOperation("reset-model");
+    setModelRefusal(null);
+    const result = await resetPromptModel(prompt.key, locationId);
+    if (result.ok) {
+      await onChanged(`${prompt.key}'s model returned to ${destination}.`);
+    } else {
+      setModelRefusal(messageOf(result.error));
     }
     setOperation(null);
   };
@@ -313,8 +349,40 @@ function PromptEditor({
         </div>
       )}
 
+      <div className="ui-field prompt-editor__model">
+        <label htmlFor={`model-${prompt.key}`}>Pi model</label>
+        <input
+          id={`model-${prompt.key}`}
+          value={modelDraft}
+          onChange={(event) => {
+            setModelDraft(event.target.value);
+            setModelRefusal(null);
+            onEditing();
+          }}
+          maxLength={prompt.modelMaxLength}
+          aria-invalid={modelRefusal !== null}
+          aria-describedby={modelRefusal === null ? `model-help-${prompt.key}` : `model-refusal-${prompt.key}`}
+          placeholder="Pi system default"
+        />
+        <small id={`model-help-${prompt.key}`}>
+          {modelDraft === "" ? "No model argument is sent to Pi; it uses its current system model." : "Use a Pi model pattern, for example anthropic/claude-sonnet-4-5."}
+          {` ${prompt.modelOverridden ? `Overridden here · ${prompt.modelSource}` : `Inherited · ${prompt.modelSource}`}.`}
+        </small>
+      </div>
+
+      {modelRefusal !== null && (
+        <div id={`model-refusal-${prompt.key}`} className="ui-feedback ui-feedback--error" role="alert">
+          <strong>Model override not saved</strong>
+          <span>{modelRefusal}</span>
+        </div>
+      )}
+
       <div className="prompt-editor__references">
         <ReadOnlyBlock title={`Inherited from ${prompt.inheritedFrom}`} text={prompt.inherited} />
+        <ReadOnlyBlock
+          title={`Inherited model from ${prompt.inheritedModelSource}`}
+          text={prompt.inheritedModel || "Pi system default"}
+        />
         <ReadOnlyBlock title="Read-only system block" text={prompt.systemBlock || "None"} />
       </div>
 
@@ -360,7 +428,7 @@ function PromptEditor({
             type="submit"
             disabled={!changed || operation !== null}
           >
-            {operation === "save" ? "Saving…" : "Save override"}
+            {operation === "save" ? "Saving…" : "Save instruction override"}
           </button>
           {prompt.overridden && (
             <button
@@ -374,6 +442,28 @@ function PromptEditor({
                 : locationId === ""
                   ? "Return to shipped default"
                   : "Return to inherited"}
+            </button>
+          )}
+          <button
+            className="ui-button ui-button--secondary"
+            type="button"
+            disabled={!modelChanged || operation !== null}
+            onClick={() => void saveModel()}
+          >
+            {operation === "save-model" ? "Saving…" : "Save model override"}
+          </button>
+          {prompt.modelOverridden && (
+            <button
+              className="ui-button ui-button--secondary"
+              type="button"
+              disabled={operation !== null}
+              onClick={() => void resetModel()}
+            >
+              {operation === "reset-model"
+                ? "Resetting…"
+                : locationId === ""
+                  ? "Return model to Pi default"
+                  : "Return model to inherited"}
             </button>
           )}
         </div>

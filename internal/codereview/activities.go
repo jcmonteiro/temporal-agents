@@ -445,7 +445,7 @@ func (a *Activities) createWorktree(ctx context.Context, req CreateBranchRequest
 // freshly created branch, committing its work so the workflow's HEAD-advanced
 // check can confirm the change landed.
 func (a *Activities) RunDevelopAgent(ctx context.Context, req RunDevelopRequest) (AgentResult, error) {
-	out, tokens, err := a.Agent.Run(ctx, BuildDevelopPrompt(req.Prompt), req.WorkDir)
+	out, tokens, err := a.Agent.Run(ctx, BuildDevelopPrompt(req.Prompt), req.WorkDir, "")
 	if err != nil {
 		return AgentResult{}, err
 	}
@@ -523,7 +523,7 @@ func (a *Activities) MergeDependency(ctx context.Context, req MergeDependencyReq
 // conflict-resolution conversation, giving the develop agent context on how the
 // dependency branches were merged.
 func (a *Activities) ResolveMergeConflict(ctx context.Context, req ResolveMergeConflictRequest) (ResolveMergeConflictResult, error) {
-	_, tokens, err := a.Agent.Run(ctx, BuildMergeConflictPrompt(req.Branch), req.WorkDir)
+	_, tokens, err := a.Agent.Run(ctx, BuildMergeConflictPrompt(req.Branch), req.WorkDir, "")
 	if err != nil {
 		return ResolveMergeConflictResult{}, fmt.Errorf("run conflict-resolution agent: %w", err)
 	}
@@ -670,7 +670,7 @@ func (a *Activities) RunAgent(ctx context.Context, req RunAgentRequest) (AgentRe
 	if err != nil {
 		return AgentResult{}, err
 	}
-	out, tokens, err := a.Agent.Run(ctx, prompt, req.Input.WorkDir)
+	out, tokens, err := a.Agent.Run(ctx, prompt, req.Input.WorkDir, req.Input.Instructions.Model(instruction.KeyPilotAddress))
 	if err != nil {
 		return AgentResult{}, err
 	}
@@ -740,7 +740,7 @@ func (a *Activities) RunReviewAgent(ctx context.Context, in ReviewInput) (AgentR
 	if err != nil {
 		return AgentResult{}, err
 	}
-	out, tokens, err := a.Agent.Run(ctx, prompt, in.WorkDir)
+	out, tokens, err := a.Agent.Run(ctx, prompt, in.WorkDir, in.Instructions.Model(instruction.KeyReviewPerform))
 	if err != nil {
 		return AgentResult{}, err
 	}
@@ -759,7 +759,7 @@ func (a *Activities) RunImplementAgent(ctx context.Context, req RunImplementRequ
 	if err != nil {
 		return AgentResult{}, err
 	}
-	out, tokens, err := a.Agent.Run(ctx, prompt, req.WorkDir)
+	out, tokens, err := a.Agent.Run(ctx, prompt, req.WorkDir, req.Instructions.Model(instruction.KeyReviewImplement))
 	if err != nil {
 		return AgentResult{}, err
 	}
@@ -777,7 +777,7 @@ func (a *Activities) RunImplementAgent(ctx context.Context, req RunImplementRequ
 // folded into the run's reported total, as this is a meta-step over an already
 // finished (or failed) run rather than part of the work itself.
 func (a *Activities) SummarizeLastRun(ctx context.Context, req SummarizeRequest) (string, error) {
-	out, _, err := a.Agent.Run(ctx, SummarizePrompt, req.WorkDir)
+	out, _, err := a.Agent.Run(ctx, SummarizePrompt, req.WorkDir, "")
 	if err != nil {
 		return "", err
 	}

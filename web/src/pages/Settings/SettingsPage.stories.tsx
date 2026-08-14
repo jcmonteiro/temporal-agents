@@ -119,7 +119,7 @@ async function showsConfiguredInteraction(canvasElement: HTMLElement): Promise<v
   ).toHaveAttribute("aria-current", "page");
   await expect(canvas.queryByRole("heading", { name: "Places" })).not.toBeInTheDocument();
   const instruction = await canvas.findByLabelText("Instruction text");
-  const save = canvas.getByRole("button", { name: "Save override" });
+  const save = canvas.getByRole("button", { name: "Save instruction override" });
   await expect(save).toBeDisabled();
   await expect(
     canvas.getByRole("button", { name: "Return to shipped default" }),
@@ -271,7 +271,7 @@ export const ValidationFailure: Story = {
     const instruction = await canvas.findByLabelText("Instruction text");
     await userEvent.clear(instruction);
     await userEvent.type(instruction, "Review it.");
-    await userEvent.click(canvas.getByRole("button", { name: "Save override" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Save instruction override" }));
     await expect(canvas.findByRole("alert")).resolves.toHaveTextContent(
       "The instruction must keep the required repository context.",
     );

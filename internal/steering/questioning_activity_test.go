@@ -20,6 +20,7 @@ type questioningAgentFake struct {
 	prompts     []string
 	directories []string
 	sessions    []string
+	models      []string
 	output      string
 	tokens      int
 	err         error
@@ -30,10 +31,12 @@ func (a *questioningAgentFake) RunQuestioningTurn(
 	prompt string,
 	directory string,
 	sessionID string,
+	model string,
 ) (string, int, error) {
 	a.prompts = append(a.prompts, prompt)
 	a.directories = append(a.directories, directory)
 	a.sessions = append(a.sessions, sessionID)
+	a.models = append(a.models, model)
 	return a.output, a.tokens, a.err
 }
 

@@ -104,7 +104,7 @@ it("confirms that an instruction override was saved", async () => {
   });
 
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Save override" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save instruction override" }));
   });
 
   expect(screen.getByRole("status").textContent).toMatch(/override saved/i);
@@ -128,11 +128,26 @@ it("shows a validation refusal against the instruction field", async () => {
   });
 
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Save override" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save instruction override" }));
   });
 
   expect(screen.getByRole("alert").textContent).toContain("{{.Review}}");
   expect(screen.getByLabelText("Instruction text").getAttribute("aria-invalid")).toBe("true");
+});
+
+it("saves a model override and retains Pi's default as an explicit empty choice", async () => {
+  api.promptCatalogues.global = [aPrompt({ model: "", inheritedModel: "" })];
+  await openConfiguration();
+
+  fireEvent.change(screen.getByLabelText("Pi model"), {
+    target: { value: "anthropic/claude-sonnet-4-5" },
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Save model override" }));
+  });
+
+  expect(screen.getByRole("status").textContent).toMatch(/model override saved/i);
+  expect(api.promptCatalogues.global[0]?.model).toBe("anthropic/claude-sonnet-4-5");
 });
 
 it("resets a place to inherited configuration with confirmation", async () => {

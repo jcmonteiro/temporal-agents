@@ -21,6 +21,7 @@ type QuestioningAgent interface {
 		prompt string,
 		directory string,
 		sessionID string,
+		model string,
 	) (output string, tokens int, err error)
 }
 
@@ -108,19 +109,19 @@ func (a *Activities) RunQuestioningTurn(ctx context.Context, turn QuestionTurn) 
 		return err
 	}
 
+	if a.Instructions == nil {
+		return instruction.ErrNotConfigured
+	}
+	resolution, err := (&instruction.Activity{Store: a.Instructions}).ResolveInstructions(ctx,
+		instruction.Request{
+			Keys:   []instruction.Key{instruction.KeySteeringQuestion},
+			Scopes: instruction.Chain(session.Place.Directory, session.Place.Repository),
+		})
+	if err != nil {
+		return fmt.Errorf("resolve the questioning instruction: %w", err)
+	}
 	prompt := operator.Text
 	if firstAgentTurn {
-		if a.Instructions == nil {
-			return instruction.ErrNotConfigured
-		}
-		resolution, err := (&instruction.Activity{Store: a.Instructions}).ResolveInstructions(ctx,
-			instruction.Request{
-				Keys:   []instruction.Key{instruction.KeySteeringQuestion},
-				Scopes: instruction.Chain(session.Place.Directory, session.Place.Repository),
-			})
-		if err != nil {
-			return fmt.Errorf("resolve the questioning instruction: %w", err)
-		}
 		governed, err := instruction.Render(resolution, instruction.KeySteeringQuestion,
 			instruction.Data{"Material": session.Material})
 		if err != nil {
@@ -134,6 +135,7 @@ func (a *Activities) RunQuestioningTurn(ctx context.Context, turn QuestionTurn) 
 
 	output, tokens, err := a.QuestioningAgent.RunQuestioningTurn(
 		ctx, prompt, session.Place.Directory, turn.SessionID,
+		resolution.Model(instruction.KeySteeringQuestion),
 	)
 	if err != nil {
 		return fmt.Errorf("run the questioning agent: %w", err)

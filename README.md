@@ -167,9 +167,12 @@ resolves the instructions it needs **once**, at its start:
   to a default, because a silent substitution would change agent behaviour with
   nothing in the record to say so.
 
-Configuring an instruction from the hub arrives with the prompt configuration
-surface; today the shipped defaults are what every place resolves to, so behaviour
-is unchanged for anyone who configures nothing.
+Configuring an instruction and its Pi model from the hub uses the same surface and
+inheritance chain. A model override is independent of its instruction text, so a
+place can change either one without copying the other. The shipped model selector is
+empty: it sends no `--model` argument and therefore keeps using Pi's current system
+model. Today the shipped instruction and model defaults are what every place resolves
+to, so behaviour is unchanged for anyone who configures nothing.
 
 ### Steering a review round
 

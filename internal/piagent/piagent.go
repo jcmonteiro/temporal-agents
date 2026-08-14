@@ -27,8 +27,11 @@ import (
 // a run contracted to only read the repository cannot persist changes through
 // them even if the agent tries; exploration tools (read, bash) stay enabled and
 // any bash-driven mutation is contained by the caller's disposable sandbox.
-func piArgs(sessionID string, readOnly bool) []string {
+func piArgs(sessionID string, readOnly bool, model string) []string {
 	args := []string{"-p", "--mode", "json", "--session-id", sessionID}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
 	if readOnly {
 		args = append(args, "--exclude-tools", "edit,write")
 	}
@@ -38,9 +41,8 @@ func piArgs(sessionID string, readOnly bool) []string {
 // piArgsQuestioning denies every built-in tool that can modify the real working
 // tree. The questioning agent can inspect files through read, but cannot use edit,
 // write, or a shell command to change them.
-func piArgsQuestioning(sessionID string) []string {
-	return append([]string{"-p", "--mode", "json", "--session-id", sessionID},
-		"--exclude-tools", "edit,write,bash")
+func piArgsQuestioning(sessionID, model string) []string {
+	return append(piArgs(sessionID, false, model), "--exclude-tools", "edit,write,bash")
 }
 
 // maxResumes bounds how many times Run resumes the session after a threshold
@@ -288,8 +290,8 @@ type Agent struct{}
 
 // Run runs the Pi agent for prompt in workDir and returns its final message
 // and the session's total token usage. See the package-level Run.
-func (Agent) Run(ctx context.Context, prompt, workDir string) (output string, tokens int, err error) {
-	r, err := Run(ctx, prompt, workDir)
+func (Agent) Run(ctx context.Context, prompt, workDir, model string) (output string, tokens int, err error) {
+	r, err := runAgent(ctx, prompt, workDir, false, model)
 	return r.Output, r.Tokens, err
 }
 
@@ -298,7 +300,7 @@ func (Agent) Run(ctx context.Context, prompt, workDir string) (output string, to
 // even when instructed to. Used by callers such as fleet planning whose
 // contract is to read the repository without changing it.
 func (Agent) RunReadOnly(ctx context.Context, prompt, workDir string) (output string, tokens int, err error) {
-	r, err := runAgent(ctx, prompt, workDir, true)
+	r, err := runAgent(ctx, prompt, workDir, true, "")
 	return r.Output, r.Tokens, err
 }
 
@@ -310,12 +312,13 @@ func (Agent) RunQuestioningTurn(
 	prompt string,
 	workDir string,
 	sessionID string,
+	model string,
 ) (output string, tokens int, err error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return "", 0, errors.New("a Pi session identity is required")
 	}
 	go warmContextWindows()
-	r, err := runLoop(ctx, runOnce, piArgsQuestioning(sessionID), workDir, prompt)
+	r, err := runLoop(ctx, runOnce, piArgsQuestioning(sessionID, model), workDir, prompt)
 	return r.Output, r.Tokens, err
 }
 
@@ -329,19 +332,19 @@ func (Agent) RunQuestioningTurn(
 // constant across activity retries but changes on continue-as-new, so each
 // chained iteration still gets its own fresh session.
 func Run(ctx context.Context, prompt, workDir string) (Result, error) {
-	return runAgent(ctx, prompt, workDir, false)
+	return runAgent(ctx, prompt, workDir, false, "")
 }
 
 // runAgent is the shared body of Run and the read-only variant: it resolves the
 // session id, warms the context-window cache, builds the CLI arguments (with the
 // read-only tool policy when requested), and drives the resume loop.
-func runAgent(ctx context.Context, prompt, workDir string, readOnly bool) (Result, error) {
-	return runAgentInSession(ctx, prompt, workDir, activity.GetInfo(ctx).WorkflowExecution.RunID, readOnly)
+func runAgent(ctx context.Context, prompt, workDir string, readOnly bool, model string) (Result, error) {
+	return runAgentInSession(ctx, prompt, workDir, activity.GetInfo(ctx).WorkflowExecution.RunID, readOnly, model)
 }
 
 // runAgentInSession is runAgent with an explicit identity for callers whose
 // conversation spans more than one activity.
-func runAgentInSession(ctx context.Context, prompt, workDir, sessionID string, readOnly bool) (Result, error) {
+func runAgentInSession(ctx context.Context, prompt, workDir, sessionID string, readOnly bool, model string) (Result, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return Result{}, errors.New("a Pi session identity is required")
 	}
@@ -351,7 +354,7 @@ func runAgentInSession(ctx context.Context, prompt, workDir, sessionID string, r
 	// percentage without blocking the stream loop on the catalog subprocess.
 	go warmContextWindows()
 
-	args := piArgs(sessionID, readOnly)
+	args := piArgs(sessionID, readOnly, model)
 	return runLoop(ctx, runOnce, args, workDir, prompt)
 }
 

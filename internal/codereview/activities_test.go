@@ -98,10 +98,12 @@ type fakeAgent struct {
 	tokens     int
 	err        error
 	lastPrompt string
+	lastModel  string
 }
 
-func (f *fakeAgent) Run(_ context.Context, prompt, _ string) (string, int, error) {
+func (f *fakeAgent) Run(_ context.Context, prompt, _, model string) (string, int, error) {
 	f.lastPrompt = prompt
+	f.lastModel = model
 	return f.output, f.tokens, f.err
 }
 

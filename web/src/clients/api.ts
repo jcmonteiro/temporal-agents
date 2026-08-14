@@ -151,6 +151,15 @@ export interface PromptDTO {
   version: number;
   inheritedVersion: number;
   overridden: boolean;
+  /** Pi model pattern; empty uses Pi's current system model. */
+  model: string;
+  inheritedModel: string;
+  modelSource: PromptSource;
+  inheritedModelSource: PromptSource;
+  modelVersion: number;
+  inheritedModelVersion: number;
+  modelOverridden: boolean;
+  modelMaxLength: number;
   systemBlock: string;
   requiredInserts: PromptInsertDTO[];
   advanced: boolean;

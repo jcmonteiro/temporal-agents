@@ -38,10 +38,13 @@ func (t Target) Scope() Scope { return t.scope }
 
 // Configured is one catalogue item as it applies at a target.
 type Configured struct {
-	Spec       Spec
-	Effective  Value
-	Inherited  Value
-	Overridden bool
+	Spec            Spec
+	Effective       Value
+	Inherited       Value
+	Overridden      bool
+	EffectiveModel  ModelValue
+	InheritedModel  ModelValue
+	ModelOverridden bool
 }
 
 // Catalogue is every governed instruction in stable catalogue order.
@@ -74,7 +77,11 @@ func (c *Configuration) Catalogue(ctx context.Context, target Target) (Catalogue
 		return nil, err
 	}
 	keys := Keys()
-	records, err := c.Store.Current(ctx, keys, target.scopes)
+	recordKeys := make([]Key, 0, len(keys)*2)
+	for _, key := range keys {
+		recordKeys = append(recordKeys, key, ModelKey(key))
+	}
+	records, err := c.Store.Current(ctx, recordKeys, target.scopes)
 	if err != nil {
 		return nil, fmt.Errorf("read instruction configuration: %w", err)
 	}
@@ -83,11 +90,16 @@ func (c *Configuration) Catalogue(ctx context.Context, target Target) (Catalogue
 	for _, spec := range Specs() {
 		effective := resolve(spec, target.scopes, records)
 		inherited := resolve(spec, inheritedScopes, records)
+		effectiveModel := resolveModel(spec, target.scopes, records)
+		inheritedModel := resolveModel(spec, inheritedScopes, records)
 		catalogue = append(catalogue, Configured{
-			Spec:       spec,
-			Effective:  effective,
-			Inherited:  inherited,
-			Overridden: effective.Scope == target.scope,
+			Spec:            spec,
+			Effective:       effective,
+			Inherited:       inherited,
+			Overridden:      effective.Scope == target.scope,
+			EffectiveModel:  effectiveModel,
+			InheritedModel:  inheritedModel,
+			ModelOverridden: effectiveModel.Scope == target.scope,
 		})
 	}
 	return catalogue, nil
@@ -115,8 +127,49 @@ func (c *Configuration) Set(ctx context.Context, target Target, key Key, text, s
 	return record, nil
 }
 
-// Reset clears one override pointer. It is idempotent: resetting an already
-// inherited key has the same successful result and creates no version.
+// SetModel validates and appends one Pi model selector independently of the paired
+// instruction. An empty selector explicitly returns this scope to Pi's system
+// default while leaving parent prompt and model values untouched.
+func (c *Configuration) SetModel(ctx context.Context, target Target, key Key, model, savedBy string) (Record, error) {
+	if c == nil || c.Store == nil {
+		return Record{}, ErrNotConfigured
+	}
+	if err := validateTarget(target); err != nil {
+		return Record{}, err
+	}
+	spec, ok := SpecFor(key)
+	if !ok {
+		return Record{}, fmt.Errorf("%w: %s", ErrUnknownKey, key)
+	}
+	if err := spec.ValidateModel(model); err != nil {
+		return Record{}, err
+	}
+	record, err := c.Store.Set(ctx, ModelKey(key), target.scope, model, savedBy)
+	if err != nil {
+		return Record{}, fmt.Errorf("save the %s model: %w", key, err)
+	}
+	return record, nil
+}
+
+// ResetModel clears one model selector override without changing the paired prompt.
+func (c *Configuration) ResetModel(ctx context.Context, target Target, key Key) error {
+	if c == nil || c.Store == nil {
+		return ErrNotConfigured
+	}
+	if err := validateTarget(target); err != nil {
+		return err
+	}
+	if _, ok := SpecFor(key); !ok {
+		return fmt.Errorf("%w: %s", ErrUnknownKey, key)
+	}
+	if err := c.Store.Reset(ctx, ModelKey(key), target.scope); err != nil {
+		return fmt.Errorf("reset the %s model: %w", key, err)
+	}
+	return nil
+}
+
+// Reset clears one instruction override pointer. It is idempotent: resetting an
+// already inherited key has the same successful result and creates no version.
 func (c *Configuration) Reset(ctx context.Context, target Target, key Key) error {
 	if c == nil || c.Store == nil {
 		return ErrNotConfigured

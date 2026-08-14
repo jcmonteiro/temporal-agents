@@ -1908,6 +1908,71 @@
           }
         }
       }
+    },
+    "/api/v1/prompts/{key}/model": {
+      "parameters": [
+        {
+          "name": "key",
+          "in": "path",
+          "required": true,
+          "description": "The governed prompt key whose agent model is configured.",
+          "schema": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      ],
+      "put": {
+        "tags": ["Prompts"],
+        "summary": "Set an agent model override",
+        "description": "Sets the Pi model selector paired with a prompt. An empty selector uses Pi's system model.",
+        "operationId": "setPromptModel",
+        "parameters": [
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": false,
+            "description": "The opaque registered location to configure. Omit it for the installation-wide scope.",
+            "schema": { "type": "string", "minLength": 1 }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PromptModelRequest" } } }
+        },
+        "responses": {
+          "204": { "description": "The model override was saved." },
+          "400": { "$ref": "#/components/responses/InvalidRequest" },
+          "401": { "$ref": "#/components/responses/AuthenticationRequired" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "413": { "$ref": "#/components/responses/RequestTooLarge" },
+          "415": { "$ref": "#/components/responses/UnsupportedMediaType" },
+          "422": { "$ref": "#/components/responses/InvalidPrompt" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "503": { "$ref": "#/components/responses/DependencyUnavailable" },
+          "default": { "$ref": "#/components/responses/InternalError" }
+        }
+      },
+      "delete": {
+        "tags": ["Prompts"],
+        "summary": "Reset an agent model override",
+        "operationId": "resetPromptModel",
+        "parameters": [
+          {
+            "name": "locationId",
+            "in": "query",
+            "required": false,
+            "description": "The opaque registered location to configure. Omit it for the installation-wide scope.",
+            "schema": { "type": "string", "minLength": 1 }
+          }
+        ],
+        "responses": {
+          "204": { "description": "The model override was reset, or was already inherited." },
+          "400": { "$ref": "#/components/responses/InvalidRequest" },
+          "401": { "$ref": "#/components/responses/AuthenticationRequired" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "503": { "$ref": "#/components/responses/DependencyUnavailable" },
+          "default": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
     }
   },
   "components": {
@@ -3733,10 +3798,18 @@
           "version",
           "inheritedVersion",
           "overridden",
+          "model",
+          "inheritedModel",
+          "modelSource",
+          "inheritedModelSource",
+          "modelVersion",
+          "inheritedModelVersion",
+          "modelOverridden",
           "systemBlock",
           "requiredInserts",
           "advanced",
-          "maxLength"
+          "maxLength",
+          "modelMaxLength"
         ],
         "properties": {
           "key": {
@@ -3768,6 +3841,29 @@
           "overridden": {
             "type": "boolean"
           },
+          "model": {
+            "type": "string"
+          },
+          "inheritedModel": {
+            "type": "string"
+          },
+          "modelSource": {
+            "$ref": "#/components/schemas/PromptSource"
+          },
+          "inheritedModelSource": {
+            "$ref": "#/components/schemas/PromptSource"
+          },
+          "modelVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "inheritedModelVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "modelOverridden": {
+            "type": "boolean"
+          },
           "systemBlock": {
             "type": "string",
             "description": "Read-only text appended by the server."
@@ -3782,6 +3878,10 @@
             "type": "boolean"
           },
           "maxLength": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "modelMaxLength": {
             "type": "integer",
             "minimum": 1
           }
@@ -3809,6 +3909,17 @@
           "limit": {
             "type": "integer",
             "minimum": 0
+          }
+        }
+      },
+      "PromptModelRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["model"],
+        "properties": {
+          "model": {
+            "type": "string",
+            "maxLength": 256
           }
         }
       },

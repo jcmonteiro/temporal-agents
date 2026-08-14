@@ -37,6 +37,51 @@ func TestConfigurationShowsTheEffectiveAndInheritedInstructionForAPlace(t *testi
 	}
 }
 
+func TestModelConfigurationInheritsAndCanBeOverriddenIndependentlyOfItsInstruction(t *testing.T) {
+	store := scopedtest.New()
+	ctx := context.Background()
+	requirePublishedInstructions(t, ctx, store)
+	store.Store(instruction.ModelKey(instruction.KeyReviewPerform), instruction.GlobalScope, "anthropic/claude-sonnet-4-5")
+	configuration := &instruction.Configuration{Store: store}
+	target := instruction.PlaceTarget("/src/agents", "")
+
+	catalogue, err := configuration.Catalogue(ctx, target)
+	if err != nil {
+		t.Fatalf("Catalogue: %v", err)
+	}
+	item := configuredInstruction(t, catalogue, instruction.KeyReviewPerform)
+	if item.EffectiveModel.Text != "anthropic/claude-sonnet-4-5" || item.ModelOverridden {
+		t.Fatalf("inherited model = %+v", item)
+	}
+
+	if _, err := configuration.SetModel(ctx, target, instruction.KeyReviewPerform, "openai/gpt-5", "operator-1"); err != nil {
+		t.Fatalf("SetModel: %v", err)
+	}
+	catalogue, err = configuration.Catalogue(ctx, target)
+	if err != nil {
+		t.Fatalf("Catalogue after model save: %v", err)
+	}
+	item = configuredInstruction(t, catalogue, instruction.KeyReviewPerform)
+	if item.EffectiveModel.Text != "openai/gpt-5" || item.InheritedModel.Text != "anthropic/claude-sonnet-4-5" || !item.ModelOverridden {
+		t.Fatalf("overridden model = %+v", item)
+	}
+	if item.Effective.Text != factoryOf(t, instruction.KeyReviewPerform) || item.Overridden {
+		t.Fatalf("model save changed the instruction: %+v", item)
+	}
+
+	if err := configuration.ResetModel(ctx, target, instruction.KeyReviewPerform); err != nil {
+		t.Fatalf("ResetModel: %v", err)
+	}
+	catalogue, err = configuration.Catalogue(ctx, target)
+	if err != nil {
+		t.Fatalf("Catalogue after model reset: %v", err)
+	}
+	item = configuredInstruction(t, catalogue, instruction.KeyReviewPerform)
+	if item.EffectiveModel.Text != "anthropic/claude-sonnet-4-5" || item.ModelOverridden {
+		t.Fatalf("model after reset = %+v", item)
+	}
+}
+
 func TestSavingAndResettingAPlaceOverrideChangesOnlyThatKey(t *testing.T) {
 	store := scopedtest.New()
 	ctx := context.Background()

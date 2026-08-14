@@ -167,6 +167,26 @@ func TestASettledPilotPassRecordsWhichInstructionVersionItUsed(t *testing.T) {
 // The activities are where an instruction becomes a prompt, so this is where the
 // promise "nothing configured behaves exactly as before" is kept: the agent is
 // handed the shipped text, with the review inserted where the instruction says.
+func TestTheAgentRunsUnderTheModelResolvedWithItsInstruction(t *testing.T) {
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestActivityEnvironment()
+	agent := &fakeAgent{output: "feedback"}
+	act := &Activities{Agent: agent}
+	env.RegisterActivity(act)
+
+	_, err := env.ExecuteActivity(act.RunReviewAgent, ReviewInput{
+		WorkDir: "/repo",
+		Instructions: instruction.Resolution{{
+			Key:   instruction.KeyReviewPerform,
+			Text:  "Review this branch",
+			Model: instruction.ModelValue{Text: "anthropic/claude-sonnet-4-5"},
+		}},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "anthropic/claude-sonnet-4-5", agent.lastModel)
+}
+
 func TestTheAgentIsHandedTheResolvedInstructionWithItsMaterialInserted(t *testing.T) {
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestActivityEnvironment()

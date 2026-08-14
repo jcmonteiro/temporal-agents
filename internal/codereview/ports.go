@@ -92,5 +92,5 @@ type PullRequests interface {
 type Agent interface {
 	// Run executes the agent for prompt in workDir and returns its final message
 	// and the total token usage of the session.
-	Run(ctx context.Context, prompt, workDir string) (output string, tokens int, err error)
+	Run(ctx context.Context, prompt, workDir, model string) (output string, tokens int, err error)
 }
