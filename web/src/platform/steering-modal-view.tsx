@@ -1,4 +1,5 @@
 import type { ReactNode, Ref } from "react";
+import { SafeMarkdown } from "./markdown";
 
 export type SteeringDecision = "guide" | "skip" | "stop" | "continue" | "accept";
 export type SteeringStep = "outcome" | "clarify" | "guidance" | "review";
@@ -116,7 +117,10 @@ export function DecisionMaterialDisclosure({
   return (
     <details className="steering-material-disclosure">
       <summary>Review the decision material</summary>
-      <pre>{material || "No review material was supplied for this round."}</pre>
+      <SafeMarkdown
+        className="steering-markdown steering-material-disclosure__content"
+        text={material || "No review material was supplied for this round."}
+      />
     </details>
   );
 }

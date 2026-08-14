@@ -302,7 +302,7 @@
   line-height: 1;
 }
 
-.steering-decision pre {
+.steering-decision__material {
   max-height: 220px;
   margin: 0;
   padding: var(--space-5);
@@ -336,7 +336,7 @@
   flex: 0 0 auto;
 }
 
-.steering-decision--expanded pre {
+.steering-decision--expanded .steering-decision__material {
   max-height: none;
   flex: 1 1 auto;
   padding: var(--space-6);
@@ -461,7 +461,7 @@
   font-weight: var(--font-weight-semibold);
 }
 
-.steering-material-disclosure pre {
+.steering-material-disclosure__content {
   max-height: 180px;
   margin: 0;
   padding: var(--space-4);
@@ -530,7 +530,7 @@
   line-height: var(--line-height-body);
 }
 
-.steering-message__markdown {
+.steering-markdown {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--color-text);
@@ -538,28 +538,28 @@
   line-height: var(--line-height-body);
 }
 
-.steering-message__markdown > :first-child {
+.steering-markdown > :first-child {
   margin-top: 0;
 }
 
-.steering-message__markdown > :last-child {
+.steering-markdown > :last-child {
   margin-bottom: 0;
 }
 
-.steering-message__markdown > p,
-.steering-message__markdown > ul,
-.steering-message__markdown > ol,
-.steering-message__markdown > pre,
-.steering-message__markdown > blockquote {
+.steering-markdown > p,
+.steering-markdown > ul,
+.steering-markdown > ol,
+.steering-markdown > pre,
+.steering-markdown > blockquote {
   margin-block: 0 var(--space-2);
 }
 
-.steering-message__markdown ul,
-.steering-message__markdown ol {
+.steering-markdown ul,
+.steering-markdown ol {
   padding-left: var(--space-5);
 }
 
-.steering-message__markdown pre {
+.steering-markdown pre {
   max-width: 100%;
   padding: var(--space-3);
   overflow-x: auto;
@@ -569,24 +569,24 @@
   white-space: pre-wrap;
 }
 
-.steering-message__markdown code {
+.steering-markdown code {
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
   font-size: 0.92em;
 }
 
-.steering-message__markdown :not(pre) > code {
+.steering-markdown :not(pre) > code {
   padding: 0.1em 0.3em;
   border-radius: 3px;
   background: var(--color-surface);
 }
 
-.steering-message__markdown blockquote {
+.steering-markdown blockquote {
   padding-left: var(--space-3);
   border-left: 3px solid var(--color-accent);
   color: var(--color-text-muted);
 }
 
-.steering-message__markdown a {
+.steering-markdown a {
   color: var(--color-accent);
   text-decoration: underline;
   text-underline-offset: 2px;

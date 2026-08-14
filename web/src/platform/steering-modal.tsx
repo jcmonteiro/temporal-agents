@@ -1,8 +1,5 @@
-import DOMPurify from "dompurify";
-import { marked } from "marked";
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -28,35 +25,11 @@ import {
   type SteeringDecision,
   type SteeringStep,
 } from "./steering-modal-view";
+import { SafeMarkdown } from "./markdown";
 import { waitingFor } from "./waiting-time";
 import "./steering.css";
 
 const GUIDANCE_LIMIT = 8 * 1024;
-
-function AgentResponse({ text }: { text: string }): ReactNode {
-  const html = useMemo(
-    () => DOMPurify.sanitize(marked.parse(text, { async: false }), {
-      ALLOWED_TAGS: [
-        "p",
-        "br",
-        "strong",
-        "em",
-        "code",
-        "pre",
-        "blockquote",
-        "ul",
-        "ol",
-        "li",
-        "a",
-      ],
-      ALLOWED_ATTR: ["href", "title"],
-      ALLOW_ARIA_ATTR: false,
-      ALLOW_DATA_ATTR: false,
-    }),
-    [text],
-  );
-  return <div className="steering-message__markdown" dangerouslySetInnerHTML={{ __html: html }} />;
-}
 
 export default function SteeringModal({
   sessionId,
@@ -304,7 +277,11 @@ export default function SteeringModal({
                         </button>
                       </div>
                     </div>
-                    <pre id="steering-review-outcome">{session.material || "No review material was supplied for this round."}</pre>
+                    <SafeMarkdown
+                      id="steering-review-outcome"
+                      className="steering-markdown steering-decision__material"
+                      text={session.material || "No review material was supplied for this round."}
+                    />
                   </section>
 
                   {!materialExpanded && (
@@ -354,7 +331,7 @@ export default function SteeringModal({
                               {message.role === "agent" ? "Clarification agent" : "Operator"}
                             </span>
                             {message.role === "agent"
-                              ? <AgentResponse text={message.text} />
+                              ? <SafeMarkdown className="steering-markdown steering-message__markdown" text={message.text} />
                               : <p>{message.text}</p>}
                             {message.role === "agent" && (
                               <button

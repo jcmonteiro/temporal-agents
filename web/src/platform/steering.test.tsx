@@ -78,6 +78,25 @@ it("reviews guidance before the build decision is submitted", async () => {
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
+it("renders review material as safe Markdown", async () => {
+  api.steeringSessions["steering-review-1"] = aSteeringSession({
+    material: [
+      "**Affected callers:**",
+      "",
+      "- Checkout API",
+      "- Audit log",
+      "",
+      '<img src="https://attacker.example/pixel" alt="tracking pixel">',
+    ].join("\n"),
+  });
+  const dialog = await openModal();
+  const material = dialog.querySelector("#steering-review-outcome");
+
+  expect(within(material as HTMLElement).getByText("Affected callers:").tagName).toBe("STRONG");
+  expect(within(material as HTMLElement).getByText("Checkout API").closest("ul")?.children).toHaveLength(2);
+  expect(material?.querySelector("img")).toBeNull();
+});
+
 it("maximizes and restores the review outcome inside the steering surface", async () => {
   const dialog = await openModal();
 
